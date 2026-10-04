@@ -1858,6 +1858,12 @@ export const NODE_DEFINITION_ENTRIES: ReadonlyArray<readonly [string, NodeDefini
         }
       }
     }],
+    ['animAnimNode_GraphSlotInput', {
+      description: 'Graph slot input (reads parent slot pose)'
+    }],
+    ['animAnimNode_SetRequiredDistanceCategoryByBone', {
+      description: 'Set required distance category from bone'
+    }],
     ['animAnimNode_AddIkRequest', {
       description: 'Adds an IK request to the pose',
       dataTemplate: {

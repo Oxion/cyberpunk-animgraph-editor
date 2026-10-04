@@ -103,6 +103,8 @@ export const TYPED_DATA_BODY_DIAGRAM_NODE_TYPES_SET = new Set([
   'animAnimNode_ParentTransform',
   'animAnimNode_GraphSlot',
   'animAnimNode_GraphSlot_Test',
+  'animAnimNode_GraphSlotInput',
+  'animAnimNode_SetRequiredDistanceCategoryByBone',
   'animAnimNode_AddIkRequest',
   'animAnimNode_ReadIkRequest',
   'animAnimNode_Ik2',
