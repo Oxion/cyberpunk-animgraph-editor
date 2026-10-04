@@ -56,6 +56,21 @@ export function readBool(value: unknown): boolean {
   return false
 }
 
+/** Vector4 JSON (`X/Y/Z/W` or `x/y/z/w`). */
+export function readVector4(
+  value: unknown,
+  fallback: { x: number; y: number; z: number; w: number } = { x: 0, y: 0, z: 0, w: 0 }
+): { x: number; y: number; z: number; w: number } {
+  if (!value || typeof value !== 'object') return { ...fallback }
+  const o = value as Record<string, unknown>
+  return {
+    x: readNumber(o.X ?? o.x, fallback.x),
+    y: readNumber(o.Y ?? o.y, fallback.y),
+    z: readNumber(o.Z ?? o.z, fallback.z),
+    w: readNumber(o.W ?? o.w, fallback.w),
+  }
+}
+
 /** Resolve HandleId / HandleRefId / PoseLink|FloatLink.node to registry entry. */
 export function resolveHandle(
   handles: Map<string, AnimgraphNode>,

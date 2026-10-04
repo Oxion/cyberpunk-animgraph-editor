@@ -222,6 +222,8 @@
                 :discovered="simDiscovered"
                 :event-draft="simEventDraft"
                 :feature-drafts="simFeatureDrafts"
+                :vector-feature-drafts="simVectorFeatureDrafts"
+                :bool-feature-drafts="simBoolFeatureDrafts"
                 :float-vars="simFloatVarDrafts"
                 :bool-vars="simBoolVarDrafts"
                 :int-vars="simIntVarDrafts"
@@ -242,12 +244,16 @@
                 :update-setup-entry="simUpdateSetupEntry"
                 :remove-setup-entry="simRemoveSetupEntry"
                 :apply-feature="simSetFeature"
+                :apply-bool-feature="simSetBoolFeature"
+                :apply-vector-feature-axis="simSetVectorFeatureAxis"
                 :apply-float-var="simSetFloatVar"
                 :apply-bool-var="simSetBoolVar"
                 :apply-int-var="simSetIntVar"
                 :apply-tag-value="simSetTagValue"
                 :apply-wrapper-weight="simSetWrapperWeight"
                 :resolve-feature-value="simDraftFeatureValue"
+                :resolve-bool-feature-value="simDraftBoolFeatureValue"
+                :resolve-vector-feature-value="simDraftVectorFeatureValue"
                 @update:event-draft="simEventDraft = $event"
                 @toggle="simToggle"
                 @toggle-active="simToggleActive"
@@ -1026,6 +1032,8 @@ const {
   discovered: simDiscovered,
   eventDraft: simEventDraft,
   featureDrafts: simFeatureDrafts,
+  vectorFeatureDrafts: simVectorFeatureDrafts,
+  boolFeatureDrafts: simBoolFeatureDrafts,
   floatVarDrafts: simFloatVarDrafts,
   boolVarDrafts: simBoolVarDrafts,
   intVarDrafts: simIntVarDrafts,
@@ -1046,7 +1054,11 @@ const {
   setTagValue: simSetTagValue,
   setWrapperWeight: simSetWrapperWeight,
   setFeature: simSetFeature,
+  setBoolFeature: simSetBoolFeature,
+  setVectorFeatureAxis: simSetVectorFeatureAxis,
   draftFeatureValue: simDraftFeatureValue,
+  draftBoolFeatureValue: simDraftBoolFeatureValue,
+  draftVectorFeatureValue: simDraftVectorFeatureValue,
   clipStats: simClipStats,
   clipNames: simClipNames,
   setupEntries: simSetupEntries,

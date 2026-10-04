@@ -151,7 +151,7 @@
           <TabsList class="grid h-8 w-full shrink-0 grid-cols-4 rounded-sm bg-muted/60 p-0.5">
             <TabsTrigger value="features" class="h-7 rounded-sm px-1 text-[11px]">
               Features
-              <span v-if="discovered.features.length" class="ml-1 opacity-70">{{ discovered.features.length }}</span>
+              <span v-if="featuresTabCount" class="ml-1 opacity-70">{{ featuresTabCount }}</span>
             </TabsTrigger>
             <TabsTrigger value="vars" class="h-7 rounded-sm px-1 text-[11px]">
               Vars
@@ -169,12 +169,15 @@
 
           <TabsContent value="features" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
             <Input
-              v-if="discovered.features.length"
+              v-if="featuresTabCount"
               class="h-7 shrink-0 rounded-sm text-xs"
               placeholder="Filter features"
               v-model="featuresFilter"
             />
-            <div v-if="filteredFeatures.length" class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+            <div
+              v-if="filteredFeatures.length || filteredVectorFeatures.length || filteredBoolFeatures.length"
+              class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto"
+            >
               <PropertyNumberControl
                 v-for="f in filteredFeatures"
                 :key="`${f.feature}.${f.property}`.toLowerCase()"
@@ -183,8 +186,23 @@
                 :decimals="2"
                 @update:model-value="(v) => onFeatureValue(f.feature, f.property, v)"
               />
+              <PropertyBoolToggle
+                v-for="f in filteredBoolFeatures"
+                :key="`b-${f.feature}.${f.property}`.toLowerCase()"
+                :label="`${f.feature}.${f.property}`"
+                :model-value="boolFeatureValue(f.feature, f.property)"
+                @update:model-value="(v) => onBoolFeatureValue(f.feature, f.property, v)"
+              />
+              <PropertyVecBlock
+                v-for="f in filteredVectorFeatures"
+                :key="`v-${f.feature}.${f.property}`.toLowerCase()"
+                :label="`${f.feature}.${f.property}`"
+                :axes="vector4Axes"
+                :target="vectorFeatureTarget(f.feature, f.property)"
+                @change="(p) => onVectorFeatureAxis(f.feature, f.property, p.axis, p.value)"
+              />
             </div>
-            <p v-else-if="discovered.features.length" class="m-0 text-[11px] text-muted-foreground">No matching features</p>
+            <p v-else-if="featuresTabCount" class="m-0 text-[11px] text-muted-foreground">No matching features</p>
             <p v-else class="m-0 text-[11px] text-muted-foreground">No features</p>
           </TabsContent>
 
@@ -690,6 +708,7 @@ import {
   PropertyBoolToggle,
   PropertyNumberControl,
   PropertyNumberSlider,
+  PropertyVecBlock,
 } from '@/components/nodeDetails'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -702,6 +721,8 @@ const props = defineProps<{
   active: boolean
   discovered: {
     features: Array<{ feature: string; property: string }>
+    vectorFeatures?: Array<{ feature: string; property: string }>
+    boolFeatures?: Array<{ feature: string; property: string }>
     floatVars: string[]
     boolVars: string[]
     intVars: string[]
@@ -711,6 +732,8 @@ const props = defineProps<{
   }
   eventDraft: string
   featureDrafts: Record<string, number>
+  vectorFeatureDrafts?: Record<string, { x: number; y: number; z: number; w: number }>
+  boolFeatureDrafts?: Record<string, boolean>
   floatVars: Record<string, number>
   boolVars: Record<string, boolean>
   intVars: Record<string, number>
@@ -738,12 +761,24 @@ const props = defineProps<{
   ) => void
   removeSetupEntry: (id: string) => void
   applyFeature: (feature: string, property: string, value: number) => void
+  applyBoolFeature?: (feature: string, property: string, value: boolean) => void
+  applyVectorFeatureAxis?: (
+    feature: string,
+    property: string,
+    axis: 'x' | 'y' | 'z' | 'w',
+    value: number
+  ) => void
   applyFloatVar: (name: string, value: number) => void
   applyBoolVar: (name: string, value: boolean) => void
   applyIntVar: (name: string, value: number) => void
   applyTagValue: (name: string, value: number) => void
   applyWrapperWeight: (name: string, value: number) => void
   resolveFeatureValue: (feature: string, property: string) => number
+  resolveBoolFeatureValue?: (feature: string, property: string) => boolean
+  resolveVectorFeatureValue?: (
+    feature: string,
+    property: string
+  ) => { x: number; y: number; z: number; w: number }
 }>()
 
 const emit = defineEmits<{
@@ -802,8 +837,39 @@ const filteredEvents = computed(() =>
     .slice()
     .sort(localeCmp)
 )
+const vector4Axes = ['X', 'Y', 'Z', 'W'] as const
+
+const featuresTabCount = computed(
+  () =>
+    props.discovered.features.length +
+    (props.discovered.vectorFeatures?.length ?? 0) +
+    (props.discovered.boolFeatures?.length ?? 0)
+)
+
 const filteredFeatures = computed(() =>
   props.discovered.features
+    .filter((f) => matchesQuery(`${f.feature}.${f.property}`, featuresFilter.value))
+    .slice()
+    .sort((a, b) => {
+      const byFeat = localeCmp(a.feature, b.feature)
+      if (byFeat !== 0) return byFeat
+      return localeCmp(a.property, b.property)
+    })
+)
+
+const filteredBoolFeatures = computed(() =>
+  (props.discovered.boolFeatures ?? [])
+    .filter((f) => matchesQuery(`${f.feature}.${f.property}`, featuresFilter.value))
+    .slice()
+    .sort((a, b) => {
+      const byFeat = localeCmp(a.feature, b.feature)
+      if (byFeat !== 0) return byFeat
+      return localeCmp(a.property, b.property)
+    })
+)
+
+const filteredVectorFeatures = computed(() =>
+  (props.discovered.vectorFeatures ?? [])
     .filter((f) => matchesQuery(`${f.feature}.${f.property}`, featuresFilter.value))
     .slice()
     .sort((a, b) => {
@@ -1004,6 +1070,20 @@ const statusFoot = computed((): string[] => {
 const featureValue = (feature: string, property: string) =>
   props.resolveFeatureValue(feature, property)
 
+const boolFeatureValue = (feature: string, property: string) =>
+  props.resolveBoolFeatureValue?.(feature, property) === true
+
+const vectorFeatureTarget = (feature: string, property: string) => {
+  const v = props.resolveVectorFeatureValue?.(feature, property) ?? {
+    x: 0,
+    y: 0,
+    z: 0,
+    w: 0,
+  }
+  // PropertyVecBlock expects engine-style axis keys (X/Y/Z/W)
+  return { X: v.x, Y: v.y, Z: v.z, W: v.w }
+}
+
 const formatClipDur = (name: string) => {
   const c = props.lookupClip(name)
   return c ? `${c.duration.toFixed(2)}s` : '—'
@@ -1013,6 +1093,23 @@ const onFeatureValue = (feature: string, property: string, raw: string | number)
   const value = Number(raw)
   if (!Number.isFinite(value)) return
   props.applyFeature(feature, property, value)
+}
+
+const onBoolFeatureValue = (feature: string, property: string, value: boolean) => {
+  props.applyBoolFeature?.(feature, property, value === true)
+}
+
+const onVectorFeatureAxis = (
+  feature: string,
+  property: string,
+  axis: string,
+  raw: string | number
+) => {
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return
+  const key = axis.toLowerCase()
+  if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
+  props.applyVectorFeatureAxis?.(feature, property, key, value)
 }
 
 const onFloatValue = (name: string, raw: string | number) => {

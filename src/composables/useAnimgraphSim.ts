@@ -33,7 +33,8 @@ import {
   SimGraphRunner,
   type SimGraphSlotHost,
 } from '../utils/sim/SimGraphRunner'
-import { SimInputBoard } from '../utils/sim/SimInputBoard'
+import { SimInputBoard, type SimVec4 } from '../utils/sim/SimInputBoard'
+import { ZERO_VEC4 } from '../utils/sim/evalAnimMathExpressionVector'
 import { collectDiscoveredInputs } from '../utils/sim/SimStateMachine'
 import { emptySimSnapshot, type SimSnapshot } from '../utils/sim/simTypes'
 
@@ -70,6 +71,10 @@ export function useAnimgraphSim() {
   const active = ref(false)
   const eventDraft = ref('')
   const featureDrafts = ref<Record<string, number>>({})
+  /** Vector4 AnimFeature drafts: feature\\0property → {x,y,z,w} */
+  const vectorFeatureDrafts = ref<Record<string, SimVec4>>({})
+  /** Bool AnimFeature drafts: feature\\0property → boolean */
+  const boolFeatureDrafts = ref<Record<string, boolean>>({})
   const floatVarDrafts = ref<Record<string, number>>({})
   const boolVarDrafts = ref<Record<string, boolean>>({})
   const intVarDrafts = ref<Record<string, number>>({})
@@ -125,6 +130,8 @@ export function useAnimgraphSim() {
     void projectRef.value
     void clipLibraryRevision.value
     const features: { feature: string; property: string }[] = []
+    const vectorFeatures: { feature: string; property: string }[] = []
+    const boolFeatures: { feature: string; property: string }[] = []
     const floatVars: string[] = []
     const boolVars: string[] = []
     const intVars: string[] = []
@@ -132,6 +139,8 @@ export function useAnimgraphSim() {
     const events: string[] = []
     const tags: string[] = []
     const featSeen = new Set<string>()
+    const vecFeatSeen = new Set<string>()
+    const boolFeatSeen = new Set<string>()
     const mergeUnique = (into: string[], seen: Set<string>, names: string[]) => {
       for (const n of names) {
         const k = n.toLowerCase()
@@ -157,6 +166,18 @@ export function useAnimgraphSim() {
         featSeen.add(k)
         features.push(f)
       }
+      for (const f of fromGraph.vectorFeatures) {
+        const k = `${f.feature}\0${f.property}`.toLowerCase()
+        if (vecFeatSeen.has(k)) continue
+        vecFeatSeen.add(k)
+        vectorFeatures.push(f)
+      }
+      for (const f of fromGraph.boolFeatures) {
+        const k = `${f.feature}\0${f.property}`.toLowerCase()
+        if (boolFeatSeen.has(k)) continue
+        boolFeatSeen.add(k)
+        boolFeatures.push(f)
+      }
       mergeUnique(floatVars, floatSeen, fromGraph.floatVars)
       mergeUnique(boolVars, boolSeen, fromGraph.boolVars)
       mergeUnique(intVars, intSeen, fromGraph.intVars)
@@ -173,6 +194,12 @@ export function useAnimgraphSim() {
     features.sort((a, b) =>
       `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
     )
+    vectorFeatures.sort((a, b) =>
+      `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
+    )
+    boolFeatures.sort((a, b) =>
+      `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
+    )
     floatVars.sort((a, b) => a.localeCompare(b))
     boolVars.sort((a, b) => a.localeCompare(b))
     intVars.sort((a, b) => a.localeCompare(b))
@@ -180,7 +207,17 @@ export function useAnimgraphSim() {
     events.sort((a, b) => a.localeCompare(b))
     tags.sort((a, b) => a.localeCompare(b))
 
-    return { features, floatVars, boolVars, intVars, wrappers, events, tags }
+    return {
+      features,
+      vectorFeatures,
+      boolFeatures,
+      floatVars,
+      boolVars,
+      intVars,
+      wrappers,
+      events,
+      tags,
+    }
   })
 
   const clipStats = computed((): ClipLibraryStats => {
@@ -218,6 +255,16 @@ export function useAnimgraphSim() {
       const n = Number(val)
       if (!Number.isFinite(n)) continue
       board.value.setFeature(key.slice(0, sep), key.slice(sep + 1), n)
+    }
+    for (const [key, val] of Object.entries(vectorFeatureDrafts.value)) {
+      const sep = key.indexOf('\0')
+      if (sep < 0 || !val) continue
+      board.value.setVectorFeature(key.slice(0, sep), key.slice(sep + 1), val)
+    }
+    for (const [key, val] of Object.entries(boolFeatureDrafts.value)) {
+      const sep = key.indexOf('\0')
+      if (sep < 0) continue
+      board.value.setBoolFeature(key.slice(0, sep), key.slice(sep + 1), val === true)
     }
     for (const [name, val] of Object.entries(floatVarDrafts.value)) {
       const n = Number(val)
@@ -370,6 +417,16 @@ export function useAnimgraphSim() {
       drafts[featureKey(f.feature, f.property)] = 0
     }
     featureDrafts.value = drafts
+    const vecDrafts: Record<string, SimVec4> = {}
+    for (const f of discovered.value.vectorFeatures) {
+      vecDrafts[featureKey(f.feature, f.property)] = { ...ZERO_VEC4 }
+    }
+    vectorFeatureDrafts.value = vecDrafts
+    const boolDrafts: Record<string, boolean> = {}
+    for (const f of discovered.value.boolFeatures) {
+      boolDrafts[featureKey(f.feature, f.property)] = false
+    }
+    boolFeatureDrafts.value = boolDrafts
     floatVarDrafts.value = {}
     boolVarDrafts.value = {}
     intVarDrafts.value = {}
@@ -553,6 +610,87 @@ export function useAnimgraphSim() {
     return 0
   }
 
+  const draftVectorFeatureValue = (feature: string, property: string): SimVec4 => {
+    const key = featureKey(feature, property)
+    const direct = vectorFeatureDrafts.value[key]
+    if (direct) return { ...direct }
+    const want = `${feature}.${property}`.toLowerCase()
+    for (const [k, v] of Object.entries(vectorFeatureDrafts.value)) {
+      if (k.toLowerCase() === want) return { ...v }
+    }
+    return { ...ZERO_VEC4 }
+  }
+
+  const draftBoolFeatureValue = (feature: string, property: string): boolean => {
+    const key = featureKey(feature, property)
+    if (key in boolFeatureDrafts.value) return boolFeatureDrafts.value[key] === true
+    const want = `${feature}.${property}`.toLowerCase()
+    for (const [k, v] of Object.entries(boolFeatureDrafts.value)) {
+      if (k.toLowerCase() === want) return v === true
+    }
+    return false
+  }
+
+  const setBoolFeature = (feature: string, property: string, value: boolean) => {
+    if (!feature || !property) return
+    const key = featureKey(feature, property)
+    const next: Record<string, boolean> = { ...boolFeatureDrafts.value }
+    const want = `${feature}.${property}`.toLowerCase()
+    for (const k of Object.keys(next)) {
+      if (k === key) continue
+      if (k.includes('\0')) {
+        const sep = k.indexOf('\0')
+        const label = `${k.slice(0, sep)}.${k.slice(sep + 1)}`.toLowerCase()
+        if (label === want) delete next[k]
+      } else if (k.toLowerCase() === want) {
+        delete next[k]
+      }
+    }
+    next[key] = value === true
+    boolFeatureDrafts.value = next
+    board.value.setBoolFeature(feature, property, value === true)
+    publish(0)
+  }
+
+  const setVectorFeature = (feature: string, property: string, value: SimVec4) => {
+    if (!feature || !property) return
+    const key = featureKey(feature, property)
+    const next: Record<string, SimVec4> = { ...vectorFeatureDrafts.value }
+    const want = `${feature}.${property}`.toLowerCase()
+    for (const k of Object.keys(next)) {
+      if (k === key) continue
+      if (k.includes('\0')) {
+        const sep = k.indexOf('\0')
+        const label = `${k.slice(0, sep)}.${k.slice(sep + 1)}`.toLowerCase()
+        if (label === want) delete next[k]
+      } else if (k.toLowerCase() === want) {
+        delete next[k]
+      }
+    }
+    const v: SimVec4 = {
+      x: Number.isFinite(value.x) ? value.x : 0,
+      y: Number.isFinite(value.y) ? value.y : 0,
+      z: Number.isFinite(value.z) ? value.z : 0,
+      w: Number.isFinite(value.w) ? value.w : 0,
+    }
+    next[key] = v
+    vectorFeatureDrafts.value = next
+    board.value.setVectorFeature(feature, property, v)
+    publish(0)
+  }
+
+  const setVectorFeatureAxis = (
+    feature: string,
+    property: string,
+    axis: keyof SimVec4,
+    value: number
+  ) => {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return
+    const cur = draftVectorFeatureValue(feature, property)
+    setVectorFeature(feature, property, { ...cur, [axis]: n })
+  }
+
   const loadAnimsetJson = (
     json: unknown,
     sourceLabel?: string,
@@ -727,6 +865,8 @@ export function useAnimgraphSim() {
     discovered,
     eventDraft,
     featureDrafts,
+    vectorFeatureDrafts,
+    boolFeatureDrafts,
     floatVarDrafts,
     boolVarDrafts,
     intVarDrafts,
@@ -738,6 +878,8 @@ export function useAnimgraphSim() {
     animDbStats,
     animDatabases,
     draftFeatureValue,
+    draftVectorFeatureValue,
+    draftBoolFeatureValue,
     getClip,
     lookupClip,
     isClipActive,
@@ -773,6 +915,9 @@ export function useAnimgraphSim() {
     setTagValue,
     setWrapperWeight,
     setFeature,
+    setBoolFeature,
+    setVectorFeature,
+    setVectorFeatureAxis,
     rebind,
   }
 }

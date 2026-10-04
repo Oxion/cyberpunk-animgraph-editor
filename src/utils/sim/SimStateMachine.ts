@@ -359,6 +359,10 @@ export function findStateMachineHandles(
 
 export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   features: Array<{ feature: string; property: string }>
+  /** Vector4 AnimFeatures (VectorInput) — one entry per group.name */
+  vectorFeatures: Array<{ feature: string; property: string }>
+  /** Bool AnimFeatures (BoolInput / BoolFeature) — one entry per group.name */
+  boolFeatures: Array<{ feature: string; property: string }>
   floatVars: string[]
   boolVars: string[]
   intVars: string[]
@@ -368,7 +372,11 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   tags: string[]
 } {
   const features: Array<{ feature: string; property: string }> = []
+  const vectorFeatures: Array<{ feature: string; property: string }> = []
+  const boolFeatures: Array<{ feature: string; property: string }> = []
   const featureKeys = new Set<string>()
+  const vectorKeys = new Set<string>()
+  const boolKeys = new Set<string>()
   const floatVars = new Set<string>()
   const boolVars = new Set<string>()
   const intVars = new Set<string>()
@@ -390,6 +398,34 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
     features.push({ feature, property })
   }
 
+  const addVectorFeature = (feature: string, property: string, preferDisplay = false) => {
+    if (!feature || !property || feature === 'None' || property === 'None') return
+    const key = `${feature}.${property}`.toLowerCase()
+    const existing = vectorFeatures.findIndex(
+      (f) => `${f.feature}.${f.property}`.toLowerCase() === key
+    )
+    if (existing >= 0) {
+      if (preferDisplay) vectorFeatures[existing] = { feature, property }
+      return
+    }
+    vectorKeys.add(key)
+    vectorFeatures.push({ feature, property })
+  }
+
+  const addBoolFeature = (feature: string, property: string, preferDisplay = false) => {
+    if (!feature || !property || feature === 'None' || property === 'None') return
+    const key = `${feature}.${property}`.toLowerCase()
+    const existing = boolFeatures.findIndex(
+      (f) => `${f.feature}.${f.property}`.toLowerCase() === key
+    )
+    if (existing >= 0) {
+      if (preferDisplay) boolFeatures[existing] = { feature, property }
+      return
+    }
+    boolKeys.add(key)
+    boolFeatures.push({ feature, property })
+  }
+
   const addWrapper = (name: string) => {
     if (name && name !== 'None') wrappers.add(name)
   }
@@ -400,8 +436,6 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
     if (
       t === 'animAnimStateTransitionCondition_FloatFeature' ||
       t === 'animAnimStateTransitionCondition_IntFeature' ||
-      t === 'animAnimStateTransitionCondition_BoolFeature' ||
-      t === 'animAnimStateTransitionCondition_BoolEdgeFeature' ||
       t === 'animAnimStateTransitionCondition_IntEdgeFeature' ||
       t === 'animAnimStateTransitionCondition_IntEdgeFromToFeature' ||
       t === 'animAnimStateTransitionCondition_IntEdgeToFeature' ||
@@ -409,13 +443,22 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
     ) {
       addFeature(readCName(d.featureName), readCName(d.featurePropertyName))
     }
-    // External AnimFeature inputs — prefer their casing for UI labels
     if (
-      t === 'animAnimNode_FloatInput' ||
-      t === 'animAnimNode_IntInput' ||
-      t === 'animAnimNode_BoolInput'
+      t === 'animAnimStateTransitionCondition_BoolFeature' ||
+      t === 'animAnimStateTransitionCondition_BoolEdgeFeature'
     ) {
+      addBoolFeature(readCName(d.featureName), readCName(d.featurePropertyName))
+    }
+    // External AnimFeature inputs — prefer their casing for UI labels
+    if (t === 'animAnimNode_FloatInput' || t === 'animAnimNode_IntInput') {
       addFeature(readCName(d.group), readCName(d.name), true)
+    }
+    if (t === 'animAnimNode_BoolInput') {
+      addBoolFeature(readCName(d.group), readCName(d.name), true)
+    }
+    // Vector4 AnimFeature (engine VectorInputValue) — one Vector4 per group.name
+    if (t === 'animAnimNode_VectorInput') {
+      addVectorFeature(readCName(d.group), readCName(d.name), true)
     }
     if (
       t === 'animAnimStateTransitionCondition_FloatVariable' ||
@@ -454,7 +497,7 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
       for (const raw of inputs) {
         if (!raw || typeof raw !== 'object') continue
         const e = raw as Record<string, unknown>
-        addFeature(readCName(e.group), readCName(e.name))
+        addBoolFeature(readCName(e.group), readCName(e.name))
       }
     }
     if (
@@ -475,8 +518,17 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
     }
   }
 
+  vectorFeatures.sort((a, b) =>
+    `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
+  )
+  boolFeatures.sort((a, b) =>
+    `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
+  )
+
   return {
     features,
+    vectorFeatures,
+    boolFeatures,
     floatVars: [...floatVars].sort((a, b) => a.localeCompare(b)),
     boolVars: [...boolVars].sort((a, b) => a.localeCompare(b)),
     intVars: [...intVars].sort((a, b) => a.localeCompare(b)),

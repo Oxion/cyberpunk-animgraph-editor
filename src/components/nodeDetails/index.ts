@@ -4,6 +4,7 @@ export {
   PropertyBoolToggle,
   PropertyTextField,
   PropertyReadonlyRow,
+  PropertyVecBlock,
 } from './controls'
 export {
   detailsPanelsByDiagramType,

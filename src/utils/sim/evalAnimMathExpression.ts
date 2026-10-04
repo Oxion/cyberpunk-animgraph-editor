@@ -23,7 +23,26 @@ const BUILTINS: Record<string, (...args: number[]) => number> = {
   round: (x) => Math.round(x),
 }
 
-const BUILTIN_NAMES = new Set(Object.keys(BUILTINS).map((n) => n.toLowerCase()))
+/** Scalar builtins + vector-toolkit names so listMathExprIdents skips them. */
+const BUILTIN_NAMES = new Set([
+  ...Object.keys(BUILTINS).map((n) => n.toLowerCase()),
+  'vec',
+  'getx',
+  'gety',
+  'getz',
+  'setx',
+  'sety',
+  'setz',
+  'setxy',
+  'setyz',
+  'setxz',
+  'length',
+  'lengthsq',
+  'norm',
+  'cross',
+  'dot',
+  'lerp',
+])
 
 function isBuiltinIdent(name: string): boolean {
   return BUILTIN_NAMES.has(name.toLowerCase())

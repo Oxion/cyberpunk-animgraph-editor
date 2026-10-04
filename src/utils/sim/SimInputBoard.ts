@@ -9,13 +9,26 @@
  * - AnimEvent conditions read lastFrameAnimEvents
  * - AnimEnd / AnyAnimEnd read animEndEvents produced this frame (after SkAnim Update)
  * - EventValue reads lastFrameAnimEventValues (valued timeline events)
+ *
+ * Vector4 AnimFeatures (VectorInput) live in a separate map — not split into scalars.
+ * Bool AnimFeatures (BoolInput / BoolFeature) live in a separate map — not as float 0/1.
  */
+
+import type { SimVec4 } from './evalAnimMathExpressionVector'
+
+export type { SimVec4 }
 
 export class SimInputBoard {
   /** lowercase featureName -> lowercase propertyName -> number */
   private features = new Map<string, Map<string, number>>()
-  /** Snapshot of features at previous endFrame — Int/BoolEdge conditions */
+  /** Snapshot of features at previous endFrame — IntEdge conditions */
   private prevFeatures = new Map<string, Map<string, number>>()
+  /** lowercase featureName -> lowercase propertyName -> Vector4 (VectorInput) */
+  private vectorFeatures = new Map<string, Map<string, SimVec4>>()
+  /** lowercase featureName -> lowercase propertyName -> bool (BoolInput) */
+  private boolFeatures = new Map<string, Map<string, boolean>>()
+  /** Snapshot of bool features at previous endFrame — BoolEdge conditions */
+  private prevBoolFeatures = new Map<string, Map<string, boolean>>()
   /** variableName -> number (float vars / float variable conditions) */
   floatVars = new Map<string, number>()
   boolVars = new Map<string, boolean>()
@@ -79,10 +92,13 @@ export class SimInputBoard {
     this.lastFrameAnimEndEvents.clear()
     this.anyAnimEnd = false
     this.prevFeatures.clear()
+    this.prevBoolFeatures.clear()
   }
 
   clearAll(): void {
     this.features.clear()
+    this.vectorFeatures.clear()
+    this.boolFeatures.clear()
     this.floatVars.clear()
     this.boolVars.clear()
     this.intVars.clear()
@@ -121,11 +137,60 @@ export class SimInputBoard {
     return this.features.get(key[0])?.get(key[1])
   }
 
+  setVectorFeature(featureName: string, propertyName: string, value: SimVec4): void {
+    const key = SimInputBoard.featKey(featureName, propertyName)
+    if (!key) return
+    const [f, p] = key
+    let props = this.vectorFeatures.get(f)
+    if (!props) {
+      props = new Map()
+      this.vectorFeatures.set(f, props)
+    }
+    props.set(p, {
+      x: Number.isFinite(value.x) ? value.x : 0,
+      y: Number.isFinite(value.y) ? value.y : 0,
+      z: Number.isFinite(value.z) ? value.z : 0,
+      w: Number.isFinite(value.w) ? value.w : 0,
+    })
+  }
+
+  getVectorFeature(featureName: string, propertyName: string): SimVec4 | undefined {
+    const key = SimInputBoard.featKey(featureName, propertyName)
+    if (!key) return undefined
+    const v = this.vectorFeatures.get(key[0])?.get(key[1])
+    return v ? { ...v } : undefined
+  }
+
+  setBoolFeature(featureName: string, propertyName: string, value: boolean): void {
+    const key = SimInputBoard.featKey(featureName, propertyName)
+    if (!key) return
+    const [f, p] = key
+    let props = this.boolFeatures.get(f)
+    if (!props) {
+      props = new Map()
+      this.boolFeatures.set(f, props)
+    }
+    props.set(p, value === true)
+  }
+
+  getBoolFeature(featureName: string, propertyName: string): boolean | undefined {
+    const key = SimInputBoard.featKey(featureName, propertyName)
+    if (!key) return undefined
+    return this.boolFeatures.get(key[0])?.get(key[1])
+  }
+
   /** Previous-frame feature sample for edge conditions. */
   getPrevFeature(featureName: string, propertyName: string): number | undefined {
     const key = SimInputBoard.featKey(featureName, propertyName)
     if (!key) return undefined
     return this.prevFeatures.get(key[0])?.get(key[1])
+  }
+
+  /** Previous-frame bool feature sample for BoolEdge conditions. */
+  getPrevBoolFeature(featureName: string, propertyName: string): boolean | undefined {
+    const key = SimInputBoard.featKey(featureName, propertyName)
+    if (!key) return undefined
+    return this.prevBoolFeatures.get(key[0])?.get(key[1])
   }
 
   fireExternalEvent(name: string): void {
@@ -214,5 +279,11 @@ export class SimInputBoard {
       snap.set(f, new Map(props))
     }
     this.prevFeatures = snap
+
+    const boolSnap = new Map<string, Map<string, boolean>>()
+    for (const [f, props] of this.boolFeatures) {
+      boolSnap.set(f, new Map(props))
+    }
+    this.prevBoolFeatures = boolSnap
   }
 }

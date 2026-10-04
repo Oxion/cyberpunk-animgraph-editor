@@ -7,6 +7,13 @@ import { SimConditionDyn } from './conditionDyn'
 import { blend2WeightFromInput, blendByMaskDynamicBlendActive } from './engineParity'
 import { evalAnimMathExpression, listMathExprIdents } from './evalAnimMathExpression'
 import {
+  evalAnimMathExpressionVector,
+  listMathExprVectorIdents,
+  vec4Mag3,
+  ZERO_VEC4,
+  type SimVec4,
+} from './evalAnimMathExpressionVector'
+import {
   evalCurveFloatData,
   readDampDefaults,
   readSpringDefaults,
@@ -35,7 +42,17 @@ import {
   resolveAnimDatabaseName,
   type AnimDatabaseLibrary,
 } from './animDatabase'
-import { handleType, isLogicOpOr, readBool, readCName, readCNameList, readNumber, readTagList, resolveHandle } from './simDataUtils'
+import {
+  handleType,
+  isLogicOpOr,
+  readBool,
+  readCName,
+  readCNameList,
+  readNumber,
+  readTagList,
+  readVector4,
+  resolveHandle,
+} from './simDataUtils'
 import type { ClipLibrary } from './clipLibrary'
 import type { SimInputBoard } from './SimInputBoard'
 import {
@@ -528,6 +545,60 @@ function evalMathExpressionFloat(
   return first ?? 0
 }
 
+function mathExpressionString(node: AnimgraphNode): string {
+  return String(
+    node.Data?.expressionString ??
+      node.Data?.expressionData?.expressionString ??
+      node.Data?.expression ??
+      ''
+  )
+}
+
+/** Collect vector socket vars from MathExpressionVector expressionData. */
+function collectMathVectorSocketVars(
+  node: AnimgraphNode,
+  fctx: FloatEvalCtx,
+  depth: number
+): Record<string, SimVec4> {
+  const vars: Record<string, SimVec4> = {}
+  const sockets = node.Data?.expressionData?.vectorSockets
+  if (!Array.isArray(sockets)) return vars
+  const idents = listMathExprVectorIdents(mathExpressionString(node))
+  sockets.forEach((socket: any, index: number) => {
+    const varId = readNumber(socket?.expressionVarId, index)
+    const letter = String.fromCharCode(65 + Math.max(0, varId))
+    const named = readCName(socket?.variableName)
+    const ident = idents[varId] ?? idents[index]
+    const src = resolveHandle(fctx.handles, socket?.link ?? socket)
+    const v = readVectorSource(src, fctx, ZERO_VEC4, depth + 1)
+    if (named) vars[named] = v
+    if (ident) vars[ident] = v
+    vars[letter] = v
+    if (index === 0 || varId === 0) {
+      if (vars.In === undefined) vars.In = v
+      if (vars.in === undefined) vars.in = v
+      if (vars.Input === undefined) vars.Input = v
+    }
+  })
+  return vars
+}
+
+function evalMathExpressionVector(
+  node: AnimgraphNode,
+  fctx: FloatEvalCtx,
+  depth = 0
+): SimVec4 {
+  const floatVars = collectMathFloatSocketVars(node, fctx, depth)
+  const vectorVars = collectMathVectorSocketVars(node, fctx, depth)
+  const expr = mathExpressionString(node)
+  if (expr) {
+    const result = evalAnimMathExpressionVector(expr, floatVars, vectorVars)
+    if (result) return result
+  }
+  const first = Object.values(vectorVars)[0]
+  return first ?? ZERO_VEC4
+}
+
 function evalFloatInterpolation(
   node: AnimgraphNode,
   fctx: FloatEvalCtx,
@@ -636,8 +707,8 @@ function evalMultiBoolToFloat(node: AnimgraphNode, board: SimInputBoard): number
       const e = raw as Record<string, unknown>
       const group = readCName(e.group)
       const name = readCName(e.name)
-      const v = board.getFeature(group, name)
-      if (v === undefined || v === 0) return onFalse
+      const v = board.getBoolFeature(group, name)
+      if (v !== true) return onFalse
     }
     return onTrue
   }
@@ -647,8 +718,7 @@ function evalMultiBoolToFloat(node: AnimgraphNode, board: SimInputBoard): number
     const e = raw as Record<string, unknown>
     const group = readCName(e.group)
     const name = readCName(e.name)
-    const v = board.getFeature(group, name)
-    if (v !== undefined && v !== 0) return onTrue
+    if (board.getBoolFeature(group, name) === true) return onTrue
   }
   return onFalse
 }
@@ -741,8 +811,54 @@ function isFloatValueNodeType(t: string): boolean {
   )
 }
 
+/** Types that participate in vector value Update + length badge. */
+function isVectorValueNodeType(t: string): boolean {
+  return (
+    t === 'animAnimNode_VectorInput' ||
+    t === 'animAnimNode_VectorConstant' ||
+    t === 'animAnimNode_VectorJoin' ||
+    t === 'animAnimNode_MathExpressionVector'
+  )
+}
+
 function walkFloatValueInputs(node: AnimgraphNode, ctx: WalkCtx): void {
   forEachLinkedInput(node, ctx.handles, (linked) => updateFromNode(linked, ctx))
+}
+
+/** Read Vector4 from a vector source node (Input / Constant / Join / MathExpression). */
+function readVectorSource(
+  source: AnimgraphNode | null,
+  fctx: FloatEvalCtx,
+  fallback: SimVec4 = ZERO_VEC4,
+  depth = 0
+): SimVec4 {
+  if (!source || depth > 32) return fallback
+  const t = handleType(source)
+  const d = source.Data ?? {}
+  const { board, handles } = fctx
+
+  if (t === 'animAnimNode_VectorInput') {
+    const group = readCName(d.group)
+    const name = readCName(d.name)
+    if (!group || !name || name === 'None') return fallback
+    return board.getVectorFeature(group, name) ?? fallback
+  }
+
+  if (t === 'animAnimNode_VectorConstant') {
+    return readVector4(d.value, fallback)
+  }
+
+  if (t === 'animAnimNode_VectorJoin') {
+    const input = resolveHandle(handles, d.input)
+    if (input) return readVectorSource(input, fctx, fallback, depth + 1)
+    return fallback
+  }
+
+  if (t === 'animAnimNode_MathExpressionVector') {
+    return evalMathExpressionVector(source, fctx, depth)
+  }
+
+  return fallback
 }
 
 /** Read numeric value from a float/int source node (variable / constant / AnimFeature input). */
@@ -757,16 +873,20 @@ function readFloatSource(
   const d = source.Data ?? {}
   const { board, handles } = fctx
 
-  // External AnimFeature: group + name (FloatInput / IntInput / BoolInput)
-  if (
-    t === 'animAnimNode_FloatInput' ||
-    t === 'animAnimNode_IntInput' ||
-    t === 'animAnimNode_BoolInput'
-  ) {
+  // External AnimFeature: group + name (FloatInput / IntInput)
+  if (t === 'animAnimNode_FloatInput' || t === 'animAnimNode_IntInput') {
     const group = readCName(d.group)
     const name = readCName(d.name)
     const fromFeature = board.getFeature(group, name)
     if (fromFeature !== undefined) return fromFeature
+    return fallback
+  }
+
+  if (t === 'animAnimNode_BoolInput') {
+    const group = readCName(d.group)
+    const name = readCName(d.name)
+    const fromFeature = board.getBoolFeature(group, name)
+    if (fromFeature !== undefined) return fromFeature ? 1 : 0
     return fallback
   }
 
@@ -1127,6 +1247,14 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     walkFloatValueInputs(node, ctx)
     const v = readFloatSource(node, ctx, 0)
     markActive(nodes, node.HandleId, { weight: v, alpha: 1 })
+    return
+  }
+
+  // Vector value sources — badge shows |xyz| length
+  if (isVectorValueNodeType(t)) {
+    walkFloatValueInputs(node, ctx)
+    const v = readVectorSource(node, ctx, ZERO_VEC4)
+    markActive(nodes, node.HandleId, { weight: vec4Mag3(v), alpha: 1 })
     return
   }
 

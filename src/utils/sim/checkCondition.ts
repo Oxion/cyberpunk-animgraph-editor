@@ -112,10 +112,11 @@ export function checkCondition(
     case 'animAnimStateTransitionCondition_BoolFeature': {
       const feature = readCName(data.featureName)
       const prop = readCName(data.featurePropertyName)
-      const cur = board.getFeature(feature, prop)
+      const cur = board.getBoolFeature(feature, prop)
       if (cur === undefined) return 'unknown'
-      const compare = readNumber(data.compareValue, 1)
-      return (cur !== 0) === (compare !== 0)
+      const compare =
+        data.compareValue === undefined ? true : readBool(data.compareValue)
+      return cur === compare
     }
 
     case 'animAnimStateTransitionCondition_IntEdgeFeature': {
@@ -160,13 +161,13 @@ export function checkCondition(
       return Math.round(edge.prev) === 0 && Math.round(edge.curr) > thr
     }
     case 'animAnimStateTransitionCondition_BoolEdgeFeature': {
-      const edge = edgePrevCurr(
-        board,
-        readCName(data.featureName),
-        readCName(data.featurePropertyName)
-      )
-      if (edge === 'unknown') return 'unknown'
-      return (edge.prev !== 0) !== (edge.curr !== 0)
+      const feature = readCName(data.featureName)
+      const prop = readCName(data.featurePropertyName)
+      const curr = board.getBoolFeature(feature, prop)
+      if (curr === undefined) return 'unknown'
+      const prev = board.getPrevBoolFeature(feature, prop)
+      const prevB = prev === undefined ? curr : prev
+      return prevB !== curr
     }
 
     case 'animAnimStateTransitionCondition_FloatVariable': {
