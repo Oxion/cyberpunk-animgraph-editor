@@ -1,6 +1,6 @@
 {
   "name": "animgraph-editor",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Desktop/Web tool for editing Cyberpunk 2077 animgraphs",
   "main": "dist-electron/main.js",
   "scripts": {
