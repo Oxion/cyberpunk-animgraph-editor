@@ -1,0 +1,118 @@
+import type { FsEntry, FsListResult } from '../types/FsEntry'
+import { isElectron } from '../utils/platform'
+
+async function readJson<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    let message = response.statusText
+    try {
+      const body = (await response.json()) as { error?: string; details?: string }
+      message = body.details || body.error || message
+    } catch {
+      // ignore
+    }
+    throw new Error(message)
+  }
+  return (await response.json()) as T
+}
+
+const browserFs = {
+  async getDefaultRoot(): Promise<string> {
+    const data = await readJson<{ path: string }>(await fetch('/api/fs/default-root'))
+    return data.path
+  },
+
+  async list(dirPath: string | null): Promise<FsListResult> {
+    const q =
+      dirPath == null || dirPath === '__drives__'
+        ? 'path=__drives__'
+        : `path=${encodeURIComponent(dirPath)}`
+    return readJson<FsListResult>(await fetch(`/api/fs/list?${q}`))
+  },
+
+  async loadJson(filePath: string): Promise<unknown> {
+    return readJson<unknown>(
+      await fetch(`/api/fs/load?path=${encodeURIComponent(filePath)}`)
+    )
+  },
+
+  async saveJson(filePath: string, data: unknown): Promise<void> {
+    await readJson(
+      await fetch('/api/fs/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath, data }),
+      })
+    )
+  },
+
+  async mkdir(folderPath: string): Promise<void> {
+    await readJson(
+      await fetch('/api/fs/mkdir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: folderPath }),
+      })
+    )
+  },
+
+  async delete(targetPath: string): Promise<void> {
+    await readJson(
+      await fetch(`/api/fs?path=${encodeURIComponent(targetPath)}`, { method: 'DELETE' })
+    )
+  },
+
+  async listDrives(): Promise<FsEntry[]> {
+    return readJson<FsEntry[]>(await fetch('/api/fs/drives'))
+  },
+}
+
+function electronFs() {
+  const api = window.electronAPI
+  if (!api) throw new Error('electronAPI is not available')
+  return api
+}
+
+export async function fsGetDefaultRoot(): Promise<string> {
+  if (isElectron()) return electronFs().getDefaultRoot()
+  return browserFs.getDefaultRoot()
+}
+
+export async function fsList(dirPath: string | null): Promise<FsListResult> {
+  if (isElectron()) return electronFs().list(dirPath)
+  return browserFs.list(dirPath)
+}
+
+export async function fsLoadJson(filePath: string): Promise<unknown> {
+  if (isElectron()) return electronFs().loadJson(filePath)
+  return browserFs.loadJson(filePath)
+}
+
+export async function fsSaveJson(filePath: string, data: unknown): Promise<void> {
+  if (isElectron()) return electronFs().saveJson(filePath, data)
+  return browserFs.saveJson(filePath, data)
+}
+
+export async function fsMkdir(folderPath: string): Promise<void> {
+  if (isElectron()) return electronFs().mkdir(folderPath)
+  return browserFs.mkdir(folderPath)
+}
+
+export async function fsDelete(targetPath: string): Promise<void> {
+  if (isElectron()) return electronFs().delete(targetPath)
+  return browserFs.delete(targetPath)
+}
+
+export async function fsListDrives(): Promise<FsEntry[]> {
+  if (isElectron()) return electronFs().listDrives()
+  return browserFs.listDrives()
+}
+
+/** Absolute path for a dropped/picked File in Electron; always null in the browser. */
+export function getPathForFile(file: File): string | null {
+  if (!isElectron()) return null
+  try {
+    return electronFs().getPathForFile(file)
+  } catch {
+    return null
+  }
+}

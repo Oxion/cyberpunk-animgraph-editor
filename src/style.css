@@ -1,0 +1,288 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Blender-like dark editor theme (maps onto shadcn CSS variables) */
+:root {
+  /* App chrome — dialogs center visually between header and taskbar */
+  --app-header-h: 2.75rem;
+  --app-taskbar-h: 2.25rem;
+  /* 0.375rem → rounded-sm = 4px (matches graph node corners) */
+  --radius: 0.375rem;
+  --background: #2b2b2b;
+  --foreground: #e6e6e6;
+  --card: #303030;
+  --card-foreground: #e6e6e6;
+  --popover: #383838;
+  --popover-foreground: #e6e6e6;
+  --primary: #4772b3;
+  --primary-foreground: #ffffff;
+  --secondary: #3a3a3a;
+  --secondary-foreground: #e6e6e6;
+  --muted: #383838;
+  --muted-foreground: #999999;
+  --accent: #3e3e3e;
+  --accent-foreground: #e6e6e6;
+  --destructive: #a33;
+  --destructive-foreground: #ffffff;
+  --border: #1f1f1f;
+  --input: #1f1f1f;
+  --ring: #4772b3;
+  --panel: #303030;
+  --panel-header: #383838;
+  --panel-border: #1f1f1f;
+  --hairline: #545454;
+  --canvas: #1a1a1a;
+  /* Inset property wells (darker than panel/card) */
+  --control: #242424;
+  --control-hover: #2a2a2a;
+  --control-edge: #3a3a3a;
+  --control-label: #b3b3b3;
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, "Courier New", monospace;
+}
+
+.dark {
+  --background: #2b2b2b;
+  --foreground: #e6e6e6;
+  --card: #303030;
+  --card-foreground: #e6e6e6;
+  --popover: #383838;
+  --popover-foreground: #e6e6e6;
+  --primary: #4772b3;
+  --primary-foreground: #ffffff;
+  --secondary: #3a3a3a;
+  --secondary-foreground: #e6e6e6;
+  --muted: #383838;
+  --muted-foreground: #999999;
+  --accent: #3e3e3e;
+  --accent-foreground: #e6e6e6;
+  --destructive: #a33;
+  --destructive-foreground: #ffffff;
+  --border: #1f1f1f;
+  --input: #1f1f1f;
+  --ring: #4772b3;
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-panel: var(--panel);
+  --color-panel-header: var(--panel-header);
+  --color-hairline: var(--hairline);
+  --color-canvas: var(--canvas);
+  --color-control: var(--control);
+  --color-control-hover: var(--control-hover);
+  --color-control-edge: var(--control-edge);
+  --color-control-label: var(--control-label);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  button {
+    cursor: pointer;
+  }
+}
+
+/* App shell layout helpers (kept while migrating App.vue) */
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas);
+  color: var(--foreground);
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Blender-like scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #2b2b2b;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #545454;
+  border: 2px solid #2b2b2b;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6a6a6a;
+}
+
+.font-data {
+  font-family: var(--font-mono);
+}
+
+/* Property control chrome — inset wells (darker than panel) */
+@layer components {
+  .prop-chrome {
+    @apply flex h-[26px] w-full min-w-0 items-center overflow-hidden rounded-sm border-0 bg-control text-[11px] leading-[26px] text-foreground select-none;
+  }
+
+  .prop-chrome--disabled {
+    @apply pointer-events-none opacity-45;
+  }
+
+  .prop-chrome--on {
+    @apply bg-primary/20;
+  }
+
+  .prop-chrome:hover:not(.prop-chrome--disabled) {
+    @apply bg-control-hover;
+  }
+
+  .prop-chrome-side {
+    @apply flex h-full w-[22px] shrink-0 items-center justify-center self-stretch rounded-none border-0 bg-transparent p-0 text-control-label;
+  }
+
+  .prop-chrome-side:hover:not(:disabled) {
+    @apply bg-accent text-accent-foreground;
+  }
+
+  .prop-chrome-side:disabled {
+    @apply cursor-default opacity-35;
+  }
+
+  .prop-chrome-side--left {
+    @apply border-0 border-r border-solid border-control-edge;
+  }
+
+  .prop-chrome-side--right {
+    @apply border-0 border-l border-solid border-control-edge;
+  }
+
+  .prop-chrome-fill {
+    @apply pointer-events-none absolute inset-y-0 left-0 bg-primary/60;
+  }
+
+  .prop-chrome-label {
+    @apply min-w-0 truncate text-[11px] leading-[26px] text-foreground;
+  }
+
+  .prop-chrome-muted {
+    @apply min-w-0 truncate text-[11px] leading-[26px] text-control-label;
+  }
+
+  .prop-chrome-value {
+    @apply shrink-0 text-[11px] leading-[26px] text-foreground tabular-nums;
+  }
+
+  .prop-list {
+    @apply flex w-full flex-col overflow-hidden rounded-sm border-0 bg-control text-foreground;
+  }
+
+  .prop-list__head {
+    @apply flex h-[26px] items-center justify-between gap-2 px-2 text-[11px] leading-[26px] text-control-label;
+  }
+
+  .prop-list__row {
+    @apply flex h-[26px] items-center gap-2 border-0 border-t border-solid border-control-edge px-2 text-[11px] leading-[26px] text-foreground;
+  }
+
+  .prop-list__index {
+    @apply inline-flex h-[18px] shrink-0 items-center justify-center rounded-sm bg-canvas px-1.5 text-[11px] leading-none text-control-label tabular-nums;
+  }
+
+  .prop-list__label {
+    @apply min-w-0 flex-1 truncate leading-[26px] text-foreground tabular-nums;
+  }
+
+  .prop-list__pin {
+    @apply max-w-[40%] shrink truncate text-[11px] leading-[26px] text-control-label;
+  }
+
+  .prop-list__actions {
+    @apply inline-flex shrink-0 items-center gap-0.5;
+  }
+
+  .prop-list__empty {
+    @apply px-2 pb-2 text-[11px] leading-normal text-control-label;
+  }
+
+  .prop-list__slot {
+    @apply flex flex-col gap-1.5 border-0 border-t border-solid border-control-edge px-2 pb-2;
+  }
+
+  .prop-list__slot-head {
+    @apply flex h-[22px] items-center justify-between gap-2 px-0 text-[11px] leading-[22px] text-control-label;
+  }
+
+  .prop-list__icon-btn {
+    @apply inline-flex size-[22px] items-center justify-center rounded-sm border-0 bg-transparent p-0 text-control-label;
+  }
+
+  .prop-list__icon-btn:hover:not(:disabled) {
+    @apply bg-accent text-accent-foreground;
+  }
+
+  .prop-list__icon-btn:disabled {
+    @apply cursor-default opacity-35;
+  }
+
+  .prop-list__icon-btn--danger:hover:not(:disabled) {
+    @apply bg-destructive/20 text-destructive;
+  }
+
+  /* Nested controls inside lists: deeper inset vs list well */
+  .prop-list .prop-chrome {
+    @apply bg-canvas;
+  }
+
+  .prop-list .prop-chrome:hover:not(.prop-chrome--disabled) {
+    @apply bg-control-hover;
+  }
+
+  .prop-list .prop-list {
+    @apply bg-canvas;
+  }
+}
