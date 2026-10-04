@@ -3058,6 +3058,13 @@ const RTTI_TYPE_DEFINITIONS: Record<string, AnimTypeDef> = {
     { key: 'max', type: 'Vector4' },
   ],
   },
+  'animAnimsetWithOverridesTagCondition': {
+    kind: 'class',
+    parent: 'animIRuntimeCondition',
+    fields: [
+    { key: 'animsetTags', type: 'redTagList' },
+  ],
+  },
   'animAxis': { kind: 'enum', values: ['X', 'Y', 'Z', 'NegativeX', 'NegativeY', 'NegativeZ'] },
   'animBoolLink': {
     kind: 'struct',

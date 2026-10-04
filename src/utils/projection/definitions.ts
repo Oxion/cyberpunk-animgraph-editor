@@ -40,6 +40,8 @@ export const PROJECTION_DEFINITIONS: Record<string, ProjectionDef> = {
   animPoseBlendMethod_BoneBranch: AUX,
   animPoseBlendMethod_Mask: AUX,
   animSyncMethodByProgress: AUX,
+  animSyncMethodByFootPhase: AUX,
+  animAnimsetWithOverridesTagCondition: AUX,
   animAnimStateTransitionCondition_AnimEnd: AUX,
   animAnimStateTransitionCondition_ExternalEvent: AUX,
   animAnimStateTransitionCondition_BoolFeature: AUX,
@@ -118,5 +120,10 @@ export const PROJECTION_DEFINITIONS: Record<string, ProjectionDef> = {
     fields: {
       condition: 'embed',
     },
-  }
+  },
+  animAnimNode_RuntimeSwitch: {
+    fields: {
+      condition: 'embed',
+    },
+  },
 }

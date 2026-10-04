@@ -2339,4 +2339,426 @@ export const NODE_DEFINITION_ENTRIES: ReadonlyArray<readonly [string, NodeDefini
         }
       }
     }],
+
+    // Previously missing catalog rows (materialize warn / Add UI)
+    ['animAnimNode_AimConstraint_ObjectRotationUp', {
+      description: 'Aim constraint with object rotation up'
+    }],
+    ['animAnimNode_ApplyCorrectivePoseRBF', {
+      description: 'Apply corrective pose via RBF'
+    }],
+    ['animAnimNode_BlendSpace', {
+      description: 'Blend space with float inputs and progress link'
+    }],
+    ['animAnimNode_ConditionalSegmentBegin', {
+      description: 'Conditional segment begin marker'
+    }],
+    ['animAnimNode_ConditionalSegmentEnd', {
+      description: 'Conditional segment end marker'
+    }],
+    ['animAnimNode_ConeLimit', {
+      description: 'Cone rotation limit on transform'
+    }],
+    ['animAnimNode_DirectionToEuler', {
+      description: 'Convert direction vector to Euler floats'
+    }],
+    ['animAnimNode_DisableLunaticMode', {
+      description: 'Disable lunatic mode for pose subtree'
+    }],
+    ['animAnimNode_EnumSwitch', {
+      description: 'Switch pose inputs by enum selection',
+      fieldConstraints: {
+        blendTime: { range: { min: 0, max: 10, step: 0.01 } },
+      },
+      dataTemplate: {
+        "$type": "animAnimNode_EnumSwitch",
+        "blendTime": 0,
+        "canRequestInertialization": 0,
+        "enumName": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "id": 4294967295,
+        "inputNodes": [
+          {
+            "$type": "animPoseLink",
+            "node": null
+          }
+        ],
+        "selectFloatNode": {
+          "$type": "animFloatLink",
+          "node": null
+        },
+        "selectIntNode": {
+          "$type": "animIntLink",
+          "node": null
+        },
+        "syncMethod": null,
+        "timeWarpingEnabled": 0
+      }
+    }],
+    ['animAnimNode_FootStepScaling', {
+      description: 'Foot step scaling adjuster'
+    }],
+    ['animAnimNode_ForegroundSegmentBegin', {
+      description: 'Foreground segment begin marker'
+    }],
+    ['animAnimNode_ForegroundSegmentEnd', {
+      description: 'Foreground segment end marker'
+    }],
+    ['animAnimNode_IntJoin', {
+      description: 'Joins int input',
+      dataTemplate: {
+        "$type": "animAnimNode_IntJoin",
+        "id": 4294967295,
+        "input": {
+          "$type": "animIntLink",
+          "node": null
+        }
+      }
+    }],
+    ['animAnimNode_IntLatch', {
+      description: 'Latches int input',
+      dataTemplate: {
+        "$type": "animAnimNode_IntLatch",
+        "id": 4294967295,
+        "input": {
+          "$type": "animIntLink",
+          "node": null
+        }
+      }
+    }],
+    ['animAnimNode_LODBegin', {
+      description: 'LOD segment begin marker'
+    }],
+    ['animAnimNode_LODEnd', {
+      description: 'LOD segment end marker'
+    }],
+    ['animAnimNode_MultiBoolToFloatValue', {
+      description: 'Maps multiple bool inputs to a float value'
+    }],
+    ['animAnimNode_NPCExploration', {
+      description: 'NPC exploration pose node'
+    }],
+    ['animAnimNode_PoseCorrection', {
+      description: 'Pose correction post-process'
+    }],
+    ['animAnimNode_PostProcess_Footlock', {
+      description: 'Footlock post-process for blends'
+    }],
+    ['animAnimNode_RagdollControl', {
+      description: 'Ragdoll control blend'
+    }],
+    ['animAnimNode_RotationLimit', {
+      description: 'Rotation limit on transform'
+    }],
+    ['animAnimNode_RuntimeSwitch', {
+      description: 'Runtime condition switch between True/False poses'
+    }],
+    ['animAnimNode_SetTrackRange', {
+      description: 'Set named track range on pose'
+    }],
+    ['animAnimNode_SkipPerformanceModeBegin', {
+      description: 'Skip performance mode begin marker'
+    }],
+    ['animAnimNode_SkipPerformanceModeEnd', {
+      description: 'Skip performance mode end marker'
+    }],
+    ['animAnimNode_SkPhaseSlotWithDurationAnim', {
+      description: 'Phase slot animation with duration and action database',
+      dataTemplate: {
+        "$type": "animAnimNode_SkPhaseSlotWithDurationAnim",
+        "actionAnimDatabaseRef": {
+          "DepotPath": {
+            "$type": "ResourcePath",
+            "$storage": "uint64",
+            "$value": "0"
+          },
+          "Flags": "Default"
+        },
+        "animFeatureName": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "animation": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "animLoopEventName": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "applyInertializationOnAnimSetSwap": 1,
+        "applyMotion": 1,
+        "clipEnd": 0,
+        "clipEndByEvent": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "clipFront": 0,
+        "clipFrontByEvent": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "collectEvents": 1,
+        "convertToAdditive": 0,
+        "durationLink": {
+          "$type": "animFloatLink",
+          "node": null
+        },
+        "fireAnimLoopEvent": 1,
+        "id": 4294967295,
+        "isLooped": 0,
+        "motionProvider": null,
+        "phase": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "popDataByTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "pushDataByTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "pushSafeCutTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "resume": 0
+      }
+    }],
+    ['animAnimNode_SkSyncedMasterAnim', {
+      description: 'Synced master speed animation',
+      dataTemplate: {
+        "$type": "animAnimNode_SkSyncedMasterAnim",
+        "animation": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "animLoopEventName": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "applyInertializationOnAnimSetSwap": 1,
+        "applyMotion": 1,
+        "clipEnd": 0,
+        "clipEndByEvent": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "clipFront": 0,
+        "clipFrontByEvent": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "collectEvents": 1,
+        "convertToAdditive": 0,
+        "fireAnimLoopEvent": 1,
+        "id": 4294967295,
+        "isLooped": 0,
+        "motionProvider": null,
+        "popDataByTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "pushDataByTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "pushSafeCutTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "resume": 0,
+        "Speed": {
+          "$type": "animFloatLink",
+          "node": null
+        },
+        "syncTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        }
+      }
+    }],
+    ['animAnimNode_SkSyncedMasterAnimByTime', {
+      description: 'Synced master frame/time animation',
+      dataTemplate: {
+        "$type": "animAnimNode_SkSyncedMasterAnimByTime",
+        "animation": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "animLoopEventName": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "applyInertializationOnAnimSetSwap": 1,
+        "applyMotion": 1,
+        "clipEnd": 0,
+        "clipEndByEvent": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "clipFront": 0,
+        "clipFrontByEvent": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "collectEvents": 1,
+        "convertToAdditive": 0,
+        "fireAnimEndOnceOnAnimEnd": 0,
+        "fireAnimLoopEvent": 0,
+        "frameLink": {
+          "$type": "animFloatLink",
+          "node": null
+        },
+        "id": 4294967295,
+        "isLooped": 0,
+        "motionProvider": null,
+        "popDataByTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "progressLink": {
+          "$type": "animFloatLink",
+          "node": null
+        },
+        "pushDataByTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "pushSafeCutTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "resume": 0,
+        "syncTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "timeLink": {
+          "$type": "animFloatLink",
+          "node": null
+        }
+      }
+    }],
+    ['animAnimNode_SkSyncedSlaveAnim', {
+      description: 'Synced slave animation',
+      dataTemplate: {
+        "$type": "animAnimNode_SkSyncedSlaveAnim",
+        "animation": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "animLoopEventName": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "applyInertializationOnAnimSetSwap": 1,
+        "applyMotion": 1,
+        "clipEnd": 0,
+        "clipEndByEvent": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "clipFront": 0,
+        "clipFrontByEvent": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "collectEvents": 1,
+        "convertToAdditive": 0,
+        "fireAnimLoopEvent": 0,
+        "id": 4294967295,
+        "isLooped": 0,
+        "motionProvider": null,
+        "popDataByTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "pushDataByTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "pushSafeCutTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "resume": 0,
+        "syncTag": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        }
+      }
+    }],
+    ['animAnimNode_TwistConstraint', {
+      description: 'Twist constraint on transform chain'
+    }],
+    ['animAnimsetWithOverridesTagCondition', {
+      description: 'Runtime condition: animset has override tags',
+      dataTemplate: {
+        "$type": "animAnimsetWithOverridesTagCondition",
+        "animsetTags": {
+          "$type": "redTagList",
+          "tags": []
+        }
+      }
+    }],
+    ['animMotionTableProvider_Animation', {
+      description: 'Motion table provider from animation'
+    }],
+    ['animMotionTableProvider_Default', {
+      description: 'Default motion table provider'
+    }],
+    ['animMotionTableProvider_MasterSlaveBlend', {
+      description: 'Master/slave blend motion table provider'
+    }],
+    ['animMotionTableProvider_MultiBlend', {
+      description: 'Multi-blend motion table provider'
+    }],
+    ['animMotionTableProvider_StaticSwitch', {
+      description: 'Static switch motion table provider'
+    }],
+    ['animSyncMethodByFootPhase', {
+      description: 'Sync by foot phase',
+      dataTemplate: {
+        "$type": "animSyncMethodByFootPhase"
+      }
+    }],
   ]
