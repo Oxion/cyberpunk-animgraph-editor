@@ -31,8 +31,8 @@
       </button>
       <div v-show="nodeDetailsSections.general" class="details-accordion__body">
         <FieldGroup class="gap-3">
-          <PropertyReadonlyRow label="Node ID" :value="selectedNode!.id" />
-          <PropertyReadonlyRow label="Type" :value="selectedNode!.type" />
+          <PropertyReadonlyRow label="Node ID" :value="selectedNode!.id" copyable />
+          <PropertyReadonlyRow label="Type" :value="selectedNode!.type" copyable />
 
           <Field class="gap-1.5">
             <FieldLabel for="node-description" class="text-xs">
