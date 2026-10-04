@@ -20,9 +20,9 @@
     "dev:electron": "npm run electron:compile && concurrently -k \"vite\" \"wait-on http://127.0.0.1:5001 && electron .\""
   },
   "build": {
-    "appId": "com.animgraph.editor",
+    "appId": "com.tordalor.animgrapheditor",
     "productName": "Animgraph Editor",
-    "copyright": "Copyright © Animgraph Editor",
+    "copyright": "Copyright © 2026 TorDalor",
     "directories": {
       "output": "build",
       "buildResources": "buildResources"
@@ -32,8 +32,10 @@
       "dist-electron/**/*",
       "buildResources/icon.png",
       "buildResources/icon.ico",
-      "package.json"
+      "package.json",
+      "!**/node_modules/**"
     ],
+    "electronLanguages": ["en-US"],
     "asar": true,
     "win": {
       "icon": "buildResources/icon.ico",
