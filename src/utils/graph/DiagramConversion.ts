@@ -2,6 +2,8 @@ import { isArrayFieldType } from '../animFieldSchema'
 import type { AnimgraphNode } from './animgraphTypes'
 import type { DiagramConnection, RenderData, RenderNode } from './diagramTypes'
 import { NodeDefinitionRegistry, resolveAnimFields } from '../NodeDefinition'
+import { getProjectionDef } from '../projection'
+import type { NestedPinSpec } from '../projection'
 import { ANIM_NODE_STATE_TYPE_SET } from './animNodeStateTypes'
 import {
   ANIM_NODE_TYPE_STATE
@@ -533,88 +535,6 @@ function formatTypedDataFieldValue(value: unknown): string {
   return String(value)
 }
 
-const MATH_EXPRESSION_SOCKET_INPUTS = [
-  'floatSockets',
-  'quaternionSockets',
-  'vectorSockets',
-] as const
-
-function isAnimMathExpressionNodeData(value: unknown): value is Record<string, unknown> {
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    (value as { $type?: string }).$type === 'animMathExpressionNodeData'
-  )
-}
-
-function formatSocketPresence(socket: unknown): string {
-  if (!socket || typeof socket !== 'object') return '—'
-  const link = (socket as { link?: unknown }).link
-  return formatPresence(link)
-}
-
-/** Expand expressionData into socket-group rows (pins live under float/quat/vectorSockets). */
-function getExpressionDataPropertyRows(
-  node: RenderNode,
-  expressionData: Record<string, unknown>,
-  handlesRegistry?: Map<string, AnimgraphNode>
-): DiagramPropertyRow[] {
-  const rows: DiagramPropertyRow[] = [
-    {
-      key: 'expressionData',
-      text: 'expressionData:',
-      rowKind: 'header',
-    },
-  ]
-
-  const socketInputs =
-    NodeDefinitionRegistry.getInputFields(node.type).filter((name) =>
-      (MATH_EXPRESSION_SOCKET_INPUTS as readonly string[]).includes(name)
-    )
-
-  const handle = handlesRegistry?.get(node.data?.originalNodeId ?? node.id)
-
-  for (const inputName of socketInputs) {
-    rows.push({
-      key: inputName,
-      text: `  ${inputName}:`,
-      rowKind: 'header',
-    })
-
-    const sockets = expressionData[inputName]
-    const list = Array.isArray(sockets) ? sockets : []
-    // Prefer live count from handler when available (keeps pin ids aligned with wiring).
-    let count = list.length
-    if (handle) {
-      const handler = NodeDefinitionRegistry.getNodeInputHandler(node.type, inputName)
-      try {
-        count = Math.max(handler.count(handle), list.length)
-      } catch {
-        /* keep list.length */
-      }
-    }
-
-    for (let i = 0; i < count; i++) {
-      const slotVal = list[i]
-      const suffix = slotVal ? ` ${formatSocketPresence(slotVal)}` : ''
-      rows.push({
-        key: inputName,
-        text: `  [${i}]${suffix}`,
-        pinId: `${inputName}[${i}]`,
-        rowKind: 'slot',
-      })
-    }
-    rows.push({
-      key: inputName,
-      text: '  [+]',
-      pinId: makeAppendPinId(inputName),
-      rowKind: 'append',
-    })
-  }
-
-  return rows
-}
-
 export function getTypedDataPropertyRows(
   node: RenderNode,
   handlesRegistry?: Map<string, AnimgraphNode>
@@ -656,11 +576,6 @@ export function getTypedDataPropertyRows(
       continue
     }
 
-    if (key === 'expressionData' && isAnimMathExpressionNodeData(value)) {
-      rows.push(...getExpressionDataPropertyRows(node, value, handlesRegistry))
-      continue
-    }
-
     if (inputNameSet.has(key) && isArrayFieldType(field.type)) {
       const slots = Array.isArray(value) ? value : value != null ? [value] : []
       rows.push({
@@ -692,11 +607,96 @@ export function getTypedDataPropertyRows(
       })
       continue
     }
+
+    const nestedPins = nestedExtraPinsUnderField(typeName, key)
+    if (nestedPins.length > 0) {
+      rows.push({
+        key,
+        text: `${key}:`,
+        rowKind: 'header',
+      })
+      const handle = handlesRegistry?.get(node.data?.originalNodeId ?? node.id)
+      for (const spec of nestedPins) {
+        rows.push(...nestedExtraPinPropertyRows(typeName, spec, handle))
+      }
+      continue
+    }
+
     rows.push({
       key,
       text: `${key}: ${formatTypedDataFieldValue(value)}`,
     })
   }
+  return rows
+}
+
+function nestedExtraPinsUnderField(typeName: string, fieldKey: string): readonly NestedPinSpec[] {
+  return (getProjectionDef(typeName)?.extraPins ?? []).filter((p) => p.path[0] === fieldKey)
+}
+
+/** Property rows for an extraPin: intermediate path segments as headers, leaf as pin. */
+function nestedExtraPinPropertyRows(
+  ownerType: string,
+  spec: NestedPinSpec,
+  handle: AnimgraphNode | undefined
+): DiagramPropertyRow[] {
+  const rows: DiagramPropertyRow[] = []
+  const path = spec.path
+  // path[0] is the top-level field header already emitted by the caller.
+  for (let i = 1; i < path.length - 1; i++) {
+    const seg = path[i]!
+    rows.push({
+      key: seg,
+      text: `${'  '.repeat(i)}${seg}:`,
+      rowKind: 'header',
+    })
+  }
+
+  const leafDepth = Math.max(1, path.length - 1)
+  const leafIndent = '  '.repeat(leafDepth)
+  const leafLabel = path[path.length - 1] ?? spec.name
+
+  const handler = NodeDefinitionRegistry.getNodeInputHandler(ownerType, spec.name)
+  let count = 1
+  let linked: unknown = null
+  if (handle) {
+    try {
+      count = Math.max(handler.count(handle), 1)
+      linked = handler.get(handle, 0)
+    } catch {
+      /* keep defaults */
+    }
+  }
+
+  if (spec.elementType) {
+    rows.push({
+      key: spec.name,
+      text: `${leafIndent}${leafLabel}:`,
+      rowKind: 'header',
+    })
+    const slotIndent = '  '.repeat(leafDepth + 1)
+    for (let i = 0; i < count; i++) {
+      rows.push({
+        key: spec.name,
+        text: `${slotIndent}[${i}]`,
+        pinId: `${spec.name}[${i}]`,
+        rowKind: 'slot',
+      })
+    }
+    rows.push({
+      key: spec.name,
+      text: `${slotIndent}[+]`,
+      pinId: makeAppendPinId(spec.name),
+      rowKind: 'append',
+    })
+    return rows
+  }
+
+  rows.push({
+    key: spec.name,
+    text: `${leafIndent}${leafLabel}: ${formatPresence(linked)}`,
+    pinId: `${spec.name}[0]`,
+  })
   return rows
 }
 

@@ -83,10 +83,11 @@ export function resolveHandle(
     node?: unknown
     Data?: unknown
   }
-  if (r.HandleId && r.HandleId !== '-1' && r.HandleId !== '0') {
+  // "0"/"-1" are empty-link sentinels unless a real handle is registered (Root is "0").
+  if (r.HandleId && (r.HandleId !== '-1' && r.HandleId !== '0' || handles.has(r.HandleId))) {
     return handles.get(r.HandleId) ?? null
   }
-  if (r.HandleRefId && r.HandleRefId !== '-1' && r.HandleRefId !== '0') {
+  if (r.HandleRefId && (r.HandleRefId !== '-1' && r.HandleRefId !== '0' || handles.has(r.HandleRefId))) {
     return handles.get(r.HandleRefId) ?? null
   }
   // animPoseLink / animFloatLink / etc.

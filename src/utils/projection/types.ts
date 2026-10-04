@@ -1,8 +1,13 @@
-/** Nested pin: Data.expressionData.floatSockets[].link.node */
+/**
+ * Nested pin beyond top-level fields.
+ * - With `elementType`: array of sockets at `path`, each with `linkKey` (default `link`).
+ * - Without `elementType`: scalar link object at `path` (`.node`).
+ */
 export type NestedPinSpec = {
   name: string
   path: readonly string[]
-  elementType: string
+  /** Present for array sockets (MathExpression); omit for scalar nested links. */
+  elementType?: string
   linkKey?: string
   linkType?: string
   containerType?: string

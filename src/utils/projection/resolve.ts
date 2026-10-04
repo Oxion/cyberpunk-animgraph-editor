@@ -10,7 +10,7 @@ import type { AnimFieldDef, AnimFieldType } from '../animTypes'
 import { DefaultNodeInputsHandler } from '../extractors/DefaultNodeInputsHandler'
 import type { NodeInputHandler } from '../animNodes/handlers'
 import { PROJECTION_DEFINITIONS } from './definitions'
-import { nestedLinkArrayHandler } from './nestedLinkHandler'
+import { nestedLinkArrayHandler, nestedLinkScalarHandler } from './nestedLinkHandler'
 import type { FieldRole, NestedPinSpec, ProjectionDef } from './types'
 
 export { isLinkFieldType }
@@ -88,7 +88,11 @@ export function getProjectedInputHandler(
   pinName: string
 ): NodeInputHandler {
   const nested = extraPinByName(typeName, pinName)
-  if (nested) return nestedLinkArrayHandler(nested)
+  if (nested) {
+    return nested.elementType
+      ? nestedLinkArrayHandler(nested)
+      : nestedLinkScalarHandler(nested)
+  }
   return {
     count: (node) => DefaultNodeInputsHandler.count(pinName, node),
     get: (node, index) => DefaultNodeInputsHandler.get(pinName, node, index),

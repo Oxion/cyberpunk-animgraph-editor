@@ -142,6 +142,14 @@ export const PROJECTION_DEFINITIONS: Record<string, ProjectionDef> = {
     fields: {
       dyngConstraint: 'pin',
     },
+    extraPins: [
+      {
+        name: 'externalForceWsLink',
+        path: ['particlesContainer', 'externalForceWsLink'],
+        linkType: 'animVectorLink',
+        containerType: 'animDyngParticlesContainer',
+      },
+    ],
   },
   animDyngConstraintMulti: {
     fields: {

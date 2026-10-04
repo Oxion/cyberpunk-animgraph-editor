@@ -41,7 +41,15 @@ import {
   removeChild,
 } from './nodeChildSlots'
 
+/** Empty-link sentinels in CR2W; Root is still a real handle with id "0". */
 const INVALID_HANDLE_IDS = new Set(['-1', '0'])
+
+function isRegisteredOrNonSentinelId(
+  id: string,
+  registry: Map<string, AnimgraphNode>
+): boolean {
+  return !INVALID_HANDLE_IDS.has(id) || registry.has(id)
+}
 
 export type DiagramMaterializeResult = {
   rootNodes: RenderNode[]
@@ -62,20 +70,20 @@ export function resolveHandleId(
     record && typeof record.$type === 'string' && 'node' in record ? record.node : value
 
   if (!unwrapped || typeof unwrapped !== 'object') {
-    if (typeof unwrapped === 'string' && !INVALID_HANDLE_IDS.has(unwrapped)) {
-      return registry.has(unwrapped) ? unwrapped : unwrapped
+    if (typeof unwrapped === 'string' && isRegisteredOrNonSentinelId(unwrapped, registry)) {
+      return unwrapped
     }
     return null
   }
 
   const ref = unwrapped as AnimgraphNodeLike & { HandleRefId?: string; HandleId?: string }
 
-  if (ref.HandleRefId && !INVALID_HANDLE_IDS.has(ref.HandleRefId)) {
+  if (ref.HandleRefId && isRegisteredOrNonSentinelId(ref.HandleRefId, registry)) {
     const referenced = registry.get(ref.HandleRefId)
     if (referenced) return referenced.HandleId
   }
 
-  if (ref.HandleId && !INVALID_HANDLE_IDS.has(ref.HandleId)) {
+  if (ref.HandleId && isRegisteredOrNonSentinelId(ref.HandleId, registry)) {
     return ref.HandleId
   }
 
@@ -803,6 +811,16 @@ export function materializeDiagram(
     placeHandle(id)
   }
   nestPinInputsIntoParents()
+
+  if (floatingHandleIds.size > 0) {
+    const summary = [...floatingHandleIds]
+      .map((id) => {
+        const t = registry.get(id)?.Data?.$type ?? '?'
+        return `${id}:${t}`
+      })
+      .join(', ')
+    console.warn(`Floating handles (not reached via projection pins): ${summary}`)
+  }
 
   if (unknownTypeToUsageCount.size > 0) {
     const summary = [...unknownTypeToUsageCount.entries()]
