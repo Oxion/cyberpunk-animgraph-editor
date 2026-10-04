@@ -115,6 +115,25 @@ export const NODE_DEFINITION_ENTRIES: ReadonlyArray<readonly [string, NodeDefini
       }
     }],
 
+    ['animAnimNode_SharedMetaPoseAdditive', {
+      description: 'Shared meta pose additive blend with weight',
+      dataTemplate: {
+        "$type": "animAnimNode_SharedMetaPoseAdditive",
+        "additiveType": "AGAT_Local",
+        "blendTracks": "AGBT_Interpolate",
+        "convertParentPoseToAdditive": 0,
+        "id": 4294967295,
+        "inputLink": {
+          "$type": "animPoseLink",
+          "node": null
+        },
+        "weightLink": {
+          "$type": "animFloatLink",
+          "node": null
+        }
+      }
+    }],
+
     ['animAnimNode_BlendByMaskDynamic', {
       description: 'Dynamic mask blend of two poses',
       dataTemplate: {
@@ -2760,5 +2779,30 @@ export const NODE_DEFINITION_ENTRIES: ReadonlyArray<readonly [string, NodeDefini
       dataTemplate: {
         "$type": "animSyncMethodByFootPhase"
       }
+    }],
+
+    ['animAnimNode_Dangle', {
+      description: 'Dangle simulation with constraint'
+    }],
+    ['animAnimNode_PoseLsToMs', {
+      description: 'Convert pose from local to model space'
+    }],
+    ['animAnimNode_PoseMsToLs', {
+      description: 'Convert pose from model to local space'
+    }],
+    ['animDangleConstraint_SimulationDyng', {
+      description: 'Dyng particle dangle simulation'
+    }],
+    ['animDyngConstraintCone', {
+      description: 'Dyng cone constraint'
+    }],
+    ['animDyngConstraintEllipsoid', {
+      description: 'Dyng ellipsoid constraint'
+    }],
+    ['animDyngConstraintLink', {
+      description: 'Dyng link constraint between bones'
+    }],
+    ['animDyngConstraintMulti', {
+      description: 'Compound dyng constraint container'
     }],
   ]

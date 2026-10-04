@@ -3125,6 +3125,86 @@ const RTTI_TYPE_DEFINITIONS: Record<string, AnimTypeDef> = {
     { key: 'dangleAltersTransformsOfItsChildren', type: 'bool01' },
   ],
   },
+  'animDangleConstraint_SimulationDyng': {
+    kind: 'class',
+    parent: 'animDangleConstraint_Simulation',
+    fields: [
+    { key: 'HACK_checkDangleTeleport', type: 'bool01' },
+    { key: 'substepTime', type: 'float' },
+    { key: 'solverIterations', type: 'int' },
+    { key: 'particlesContainer', type: 'animDyngParticlesContainer' },
+    { key: 'dyngConstraint', type: { ref: 'animIDyngConstraint' } },
+  ],
+  },
+  'animDyngConstraintCone': {
+    kind: 'class',
+    parent: 'animIDyngConstraint',
+    fields: [
+    { key: 'constrainedBone', type: 'animTransformIndex' },
+    { key: 'coneAttachmentBone', type: 'animTransformIndex' },
+    { key: 'coneTransformLS', type: 'QsTransform' },
+    { key: 'constraintType', type: 'animPendulumConstraintType' },
+    { key: 'halfOfMaxApertureAngle', type: 'float' },
+    { key: 'projectionType', type: 'animPendulumProjectionType' },
+    { key: 'collisionCapsuleRadius', type: 'float' },
+    { key: 'collisionCapsuleHeightExtent', type: 'float' },
+  ],
+  },
+  'animDyngConstraintEllipsoid': {
+    kind: 'class',
+    parent: 'animIDyngConstraint',
+    fields: [
+    { key: 'bone', type: 'animTransformIndex' },
+    { key: 'ellipsoidTransformLS', type: 'QsTransform' },
+    { key: 'constraintRadius', type: 'float' },
+    { key: 'constraintScale1', type: 'float' },
+    { key: 'constraintScale2', type: 'float' },
+  ],
+  },
+  'animDyngConstraintLink': {
+    kind: 'class',
+    parent: 'animIDyngConstraint',
+    fields: [
+    { key: 'bone1', type: 'animTransformIndex' },
+    { key: 'bone2', type: 'animTransformIndex' },
+    { key: 'linkType', type: 'animDyngConstraintLinkType' },
+    { key: 'lengthLowerBoundRatioPercentage', type: 'float' },
+    { key: 'lengthUpperBoundRatioPercentage', type: 'float' },
+    { key: 'lookAtAxis', type: 'Vector3' },
+  ],
+  },
+  'animDyngConstraintLinkType': { kind: 'enum', values: ['KeepFixedDistance', 'KeepVariableDistance', 'Greater', 'Closer'] },
+  'animDyngConstraintMulti': {
+    kind: 'class',
+    parent: 'animIDyngConstraint',
+    fields: [
+    { key: 'innerConstraints', type: { array: { ref: 'animIDyngConstraint' } } },
+  ],
+  },
+  'animDyngParticle': {
+    kind: 'struct',
+    fields: [
+    { key: 'mass', type: 'float' },
+    { key: 'damping', type: 'float' },
+    { key: 'pullForceFactor', type: 'float' },
+    { key: 'isFree', type: 'bool01' },
+    { key: 'bone', type: 'animTransformIndex' },
+    { key: 'collisionCapsuleRadius', type: 'float' },
+    { key: 'collisionCapsuleHeightExtent', type: 'float' },
+    { key: 'collisionCapsuleAxisLS', type: 'Vector3' },
+    { key: 'projectionType', type: 'animDyngParticleProjectionType' },
+  ],
+  },
+  'animDyngParticleProjectionType': { kind: 'enum', values: ['Disabled', 'ShortestPath', 'Directed'] },
+  'animDyngParticlesContainer': {
+    kind: 'struct',
+    fields: [
+    { key: 'externalForceWS', type: 'Vector3' },
+    { key: 'externalForceWsLink', type: 'animVectorLink' },
+    { key: 'particles', type: { array: 'animDyngParticle' } },
+    { key: 'gravityWS', type: 'float' },
+  ],
+  },
   'animEAnimGraphAdditiveType': { kind: 'enum', values: ['AGAT_Local', 'AGAT_Ref'] },
   'animEAnimGraphCompareFunc': { kind: 'enum', values: ['AGCF_Equal', 'AGCF_NotEqual', 'AGCF_Less', 'AGCF_LessEqual', 'AGCF_Greater', 'AGCF_GreaterEqual'] },
   'animEAnimGraphLogicOp': { kind: 'enum', values: ['AGLO_Or', 'AGLO_And'] },
@@ -3227,6 +3307,11 @@ const RTTI_TYPE_DEFINITIONS: Record<string, AnimTypeDef> = {
     fields: [],
   },
   'animIAnimationBuffer': {
+    kind: 'class',
+    parent: 'ISerializable',
+    fields: [],
+  },
+  'animIDyngConstraint': {
     kind: 'class',
     parent: 'ISerializable',
     fields: [],
@@ -3541,6 +3626,8 @@ const RTTI_TYPE_DEFINITIONS: Record<string, AnimTypeDef> = {
   ],
   },
   'animParentStaticSwitchBranch': { kind: 'enum', values: ['None', 'TrueBranch', 'FalseBranch'] },
+  'animPendulumConstraintType': { kind: 'enum', values: ['Cone', 'HingePlane', 'HalfCone'] },
+  'animPendulumProjectionType': { kind: 'enum', values: ['Disabled', 'ShortestPathRotational', 'DirectedRotational'] },
   'animPoleVectorDetails': {
     kind: 'struct',
     fields: [

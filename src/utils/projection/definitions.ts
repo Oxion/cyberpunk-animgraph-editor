@@ -126,4 +126,26 @@ export const PROJECTION_DEFINITIONS: Record<string, ProjectionDef> = {
       condition: 'embed',
     },
   },
+
+  animAnimNode_DirectConnConstraint: {
+    fields: {
+      sourceTransform: 'embed',
+    },
+  },
+
+  animAnimNode_Dangle: {
+    fields: {
+      dangleConstraint: 'pin',
+    },
+  },
+  animDangleConstraint_SimulationDyng: {
+    fields: {
+      dyngConstraint: 'pin',
+    },
+  },
+  animDyngConstraintMulti: {
+    fields: {
+      innerConstraints: 'pin',
+    },
+  },
 }
