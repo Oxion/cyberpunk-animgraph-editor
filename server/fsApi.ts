@@ -57,7 +57,8 @@ export function createFsRouter(projectRoot: string): Router {
 
   router.get('/load', (req: Request, res: Response) => {
     try {
-      res.json(api.loadJson(String(req.query.path ?? '')))
+      // Send raw file text; client JSON.parse via response.json() (same as Electron).
+      res.type('application/json').send(api.readText(String(req.query.path ?? '')))
     } catch (error) {
       sendFsError(res, 'Failed to load file', error)
     }

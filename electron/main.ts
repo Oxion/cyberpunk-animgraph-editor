@@ -32,10 +32,11 @@ function registerFsIpc() {
   ipcMain.handle('fs:getDefaultRoot', () => wrapFs(() => fsCore.getDefaultRoot()))
   ipcMain.handle('fs:list', (_e, dirPath: string | null) => wrapFs(() => fsCore.list(dirPath)))
   ipcMain.handle('fs:listDrives', () => wrapFs(() => fsCore.listDrives()))
-  ipcMain.handle('fs:loadJson', (_e, filePath: string) => wrapFs(() => fsCore.loadJson(filePath)))
-  ipcMain.handle('fs:saveJson', (_e, filePath: string, data: unknown) =>
+  // Text only — JSON parse/stringify stays in the renderer (contextBridge depth limit).
+  ipcMain.handle('fs:readText', (_e, filePath: string) => wrapFs(() => fsCore.readText(filePath)))
+  ipcMain.handle('fs:writeText', (_e, filePath: string, text: string) =>
     wrapFs(() => {
-      fsCore.saveJson(filePath, data)
+      fsCore.writeText(filePath, text)
     })
   )
   ipcMain.handle('fs:mkdir', (_e, folderPath: string) =>

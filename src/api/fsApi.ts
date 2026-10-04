@@ -83,12 +83,18 @@ export async function fsList(dirPath: string | null): Promise<FsListResult> {
 }
 
 export async function fsLoadJson(filePath: string): Promise<unknown> {
-  if (isElectron()) return electronFs().loadJson(filePath)
+  if (isElectron()) {
+    const text = await electronFs().readText(filePath)
+    return JSON.parse(text) as unknown
+  }
   return browserFs.loadJson(filePath)
 }
 
 export async function fsSaveJson(filePath: string, data: unknown): Promise<void> {
-  if (isElectron()) return electronFs().saveJson(filePath, data)
+  if (isElectron()) {
+    await electronFs().writeText(filePath, JSON.stringify(data, null, 2))
+    return
+  }
   return browserFs.saveJson(filePath, data)
 }
 

@@ -6,9 +6,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDefaultRoot: () => ipcRenderer.invoke('fs:getDefaultRoot') as Promise<string>,
   list: (dirPath: string | null) => ipcRenderer.invoke('fs:list', dirPath),
   listDrives: () => ipcRenderer.invoke('fs:listDrives'),
-  loadJson: (filePath: string) => ipcRenderer.invoke('fs:loadJson', filePath),
-  saveJson: (filePath: string, data: unknown) =>
-    ipcRenderer.invoke('fs:saveJson', filePath, data),
+  readText: (filePath: string) => ipcRenderer.invoke('fs:readText', filePath) as Promise<string>,
+  writeText: (filePath: string, text: string) =>
+    ipcRenderer.invoke('fs:writeText', filePath, text) as Promise<void>,
   mkdir: (folderPath: string) => ipcRenderer.invoke('fs:mkdir', folderPath),
   delete: (targetPath: string) => ipcRenderer.invoke('fs:delete', targetPath),
 

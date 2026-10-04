@@ -162,14 +162,15 @@ export function createFsCore(_projectRoot: string) {
       }
     },
 
-    loadJson(filePath: string): unknown {
+    /** Raw file bytes as utf8 — no JSON parse (parse in the client). */
+    readText(filePath: string): string {
       const abs = normalizeAbsolutePath(filePath)
       if (!abs) throw new FsCoreError('Path parameter required', 'invalid')
       if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
         throw new FsCoreError('File not found', 'not_found')
       }
       try {
-        return JSON.parse(fs.readFileSync(abs, 'utf8'))
+        return fs.readFileSync(abs, 'utf8')
       } catch (error) {
         throw new FsCoreError(
           error instanceof Error ? error.message : 'Failed to load file',
@@ -178,13 +179,35 @@ export function createFsCore(_projectRoot: string) {
       }
     },
 
-    saveJson(filePath: string, data: unknown): FsSaveResult {
+    /** Write utf8 text as-is (caller stringifies JSON). */
+    writeText(filePath: string, text: string): FsSaveResult {
       const abs = normalizeAbsolutePath(filePath)
       if (!abs) throw new FsCoreError('Path is required', 'invalid')
-      if (data == null) throw new FsCoreError('Data is required', 'invalid')
+      if (typeof text !== 'string') throw new FsCoreError('Data is required', 'invalid')
       try {
         fs.mkdirSync(path.dirname(abs), { recursive: true })
+        fs.writeFileSync(abs, text)
+        return {
+          success: true,
+          path: abs,
+          size: text.length,
+          sizeMB: (text.length / 1024 / 1024).toFixed(2),
+        }
+      } catch (error) {
+        throw new FsCoreError(
+          error instanceof Error ? error.message : 'Failed to save file',
+          'internal'
+        )
+      }
+    },
+
+    saveJson(filePath: string, data: unknown): FsSaveResult {
+      if (data == null) throw new FsCoreError('Data is required', 'invalid')
+      const abs = normalizeAbsolutePath(filePath)
+      if (!abs) throw new FsCoreError('Path is required', 'invalid')
+      try {
         const payload = JSON.stringify(data, null, 2)
+        fs.mkdirSync(path.dirname(abs), { recursive: true })
         fs.writeFileSync(abs, payload)
         return {
           success: true,

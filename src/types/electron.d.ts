@@ -5,8 +5,8 @@ export interface ElectronFsApi {
   getDefaultRoot: () => Promise<string>
   list: (dirPath: string | null) => Promise<FsListResult>
   listDrives: () => Promise<FsEntry[]>
-  loadJson: (filePath: string) => Promise<unknown>
-  saveJson: (filePath: string, data: unknown) => Promise<void>
+  readText: (filePath: string) => Promise<string>
+  writeText: (filePath: string, text: string) => Promise<void>
   mkdir: (folderPath: string) => Promise<void>
   delete: (targetPath: string) => Promise<void>
   getPathForFile: (file: File) => string | null
