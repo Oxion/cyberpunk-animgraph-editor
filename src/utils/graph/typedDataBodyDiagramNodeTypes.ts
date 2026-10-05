@@ -92,6 +92,7 @@ export const TYPED_DATA_BODY_DIAGRAM_NODE_TYPES_SET = new Set([
   'animDyngConstraintLink',
   'animDyngConstraintCone',
   'animDyngConstraintEllipsoid',
+  'animDyngConstraintMulti',
   'animAnimNode_AddSnapToTerrainIkRequest',
   'animAnimNode_BlendByMaskDynamic',
   'animAnimNode_FloatTrackModifier',
