@@ -39,6 +39,8 @@
   --control-hover: #2a2a2a;
   --control-edge: #3a3a3a;
   --control-label: #b3b3b3;
+  --warning: #e8a838;
+  --warning-foreground: #1a1a1a;
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", Consolas, "Courier New", monospace;
 }
@@ -97,6 +99,8 @@
   --color-control-hover: var(--control-hover);
   --color-control-edge: var(--control-edge);
   --color-control-label: var(--control-label);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
 }
@@ -273,7 +277,7 @@
     @apply bg-destructive/20 text-destructive;
   }
 
-  /* Nested controls inside lists: deeper inset vs list well */
+  /* Nested wells: alternate control ↔ canvas by depth so chrome never matches parent */
   .prop-list .prop-chrome {
     @apply bg-canvas;
   }
@@ -283,6 +287,34 @@
   }
 
   .prop-list .prop-list {
+    @apply bg-canvas;
+  }
+
+  .prop-list .prop-list .prop-chrome {
+    @apply bg-control;
+  }
+
+  .prop-list .prop-list .prop-list {
+    @apply bg-control;
+  }
+
+  .prop-list .prop-list .prop-list .prop-chrome {
+    @apply bg-canvas;
+  }
+
+  .prop-list .prop-list .prop-list .prop-list {
+    @apply bg-canvas;
+  }
+
+  .prop-list .prop-list .prop-list .prop-list .prop-chrome {
+    @apply bg-control;
+  }
+
+  .prop-list .prop-list .prop-list__index {
+    @apply bg-control;
+  }
+
+  .prop-list .prop-list .prop-list .prop-list__index {
     @apply bg-canvas;
   }
 }

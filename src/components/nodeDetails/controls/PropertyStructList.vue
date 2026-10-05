@@ -184,6 +184,7 @@ function elementAt(index: number): unknown {
         :type="elementTypeName()"
         :value="elementAt(index)"
         :revision="handleDataRevision"
+        :grouped="false"
         @change="onPatch(index, $event)"
       />
     </div>

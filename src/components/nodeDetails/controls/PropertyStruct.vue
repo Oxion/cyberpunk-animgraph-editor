@@ -67,6 +67,7 @@ function onChange(patch: StructValuePatch) {
         :type="structType"
         :value="obj()"
         :revision="handleDataRevision"
+        :grouped="false"
         @change="onChange"
       />
     </div>

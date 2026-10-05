@@ -42,12 +42,17 @@ export type StructValuePatch = {
   immediate: boolean
 }
 
-const props = defineProps<{
-  label: string
-  type: AnimFieldType
-  value: unknown
-  revision?: number
-}>()
+const props = withDefaults(
+  defineProps<{
+    label: string
+    type: AnimFieldType
+    value: unknown
+    revision?: number
+    /** When true, wrap nested struct fields in a collapsible group headed by `label`. */
+    grouped?: boolean
+  }>(),
+  { grouped: true }
+)
 
 const emit = defineEmits<{
   change: [payload: StructValuePatch]
@@ -301,15 +306,33 @@ function presenceText(): string {
       :value="presenceText()"
     />
     <template v-else-if="kind === 'struct'">
-      <PropertyStructElement
-        v-for="field in structFields()"
-        :key="field.key"
-        :label="field.key"
-        :type="field.type"
-        :value="fieldValue(field.key)"
-        :revision="handleDataRevision"
-        @change="onChildField(field.key, $event)"
-      />
+      <details v-if="grouped" class="prop-list">
+        <summary class="cursor-pointer select-none px-2 py-1 text-xs text-muted-foreground">
+          {{ label }}
+        </summary>
+        <div class="flex flex-col gap-1.5 px-2 pb-2">
+          <PropertyStructElement
+            v-for="field in structFields()"
+            :key="field.key"
+            :label="field.key"
+            :type="field.type"
+            :value="fieldValue(field.key)"
+            :revision="handleDataRevision"
+            @change="onChildField(field.key, $event)"
+          />
+        </div>
+      </details>
+      <template v-else>
+        <PropertyStructElement
+          v-for="field in structFields()"
+          :key="field.key"
+          :label="field.key"
+          :type="field.type"
+          :value="fieldValue(field.key)"
+          :revision="handleDataRevision"
+          @change="onChildField(field.key, $event)"
+        />
+      </template>
     </template>
   </div>
 </template>

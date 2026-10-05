@@ -120,6 +120,7 @@ function elementAt(index: number): unknown {
         :type="elementType"
         :value="elementAt(index)"
         :revision="revision()"
+        :grouped="false"
         @change="onPatch(index, $event)"
       />
     </div>

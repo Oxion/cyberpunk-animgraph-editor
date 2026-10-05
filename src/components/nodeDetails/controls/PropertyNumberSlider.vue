@@ -309,7 +309,16 @@ function onEditKeydown(e: KeyboardEvent) {
   touch-action: none;
 }
 
+.prop-num-slider--out-of-track .prop-chrome-fill {
+  background: color-mix(in srgb, var(--warning) 45%, transparent);
+}
+
 .prop-num-slider--out-of-track .prop-num-slider__value {
-  color: var(--primary);
+  color: var(--warning-foreground);
+  background: var(--warning);
+  border-radius: 2px;
+  padding: 0 5px;
+  font-weight: 600;
+  line-height: 18px;
 }
 </style>
