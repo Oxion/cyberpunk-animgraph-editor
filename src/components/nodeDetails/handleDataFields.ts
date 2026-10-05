@@ -3,7 +3,7 @@
  * Preserves RED CName / bool-as-0|1 shapes when mutating in place.
  */
 
-import type { AnimFieldDef } from '../../utils/animFieldSchema'
+import type { AnimFieldDef, AnimFieldRange } from '../../utils/animFieldSchema'
 import type { FieldConstraint } from '../../utils/animNodes'
 import {
   fieldTypeName,
@@ -20,6 +20,7 @@ import {
 import { NodeDefinitionRegistry } from '../../utils/NodeDefinition'
 import { linkedDataTypeName } from '../../utils/graph/linkedAnimgraphData'
 import { getFieldRole, getProjectionDef, type FieldRole } from '../../utils/projection'
+import { getTypeFieldEditorOverlay } from '../../utils/fieldEditor'
 
 export type PropertyFieldKind =
   | 'number'
@@ -251,6 +252,45 @@ export function inferNumberControl(
   return { sliderMin: 0, sliderMax: 1, step: 0.01, decimals: 3 }
 }
 
+export type NumberFieldEditorHints = {
+  /** System accept overlay (hard clamp). */
+  range?: AnimFieldRange
+  /** UI slider track only. */
+  slider?: AnimFieldRange
+}
+
+/**
+ * Split system accept limits vs UI slider track.
+ * - valueMin/Max ← field.range + editor.range (system)
+ * - slider ← editor.slider, else closed system interval, else key heuristics
+ */
+export function resolveNumberFieldControl(
+  field: AnimFieldDef,
+  editor?: NumberFieldEditorHints
+): Pick<
+  PropertyFieldDef,
+  'sliderMin' | 'sliderMax' | 'step' | 'decimals' | 'valueMin' | 'valueMax'
+> {
+  const typeName = fieldTypeName(field.type)
+  const kind = resolveAnimType(typeName)?.kind
+  const isInt = kind === 'int' || typeName === 'int'
+  const system = getEffectiveFieldConstraint(field, editor?.range)
+  const inferred = inferNumberControl(field.key)
+  const slider = editor?.slider
+  const closedSystem = system.min != null && system.max != null
+
+  return {
+    sliderMin:
+      slider?.min ?? (closedSystem ? system.min : undefined) ?? inferred.sliderMin ?? (isInt ? 0 : -1),
+    sliderMax:
+      slider?.max ?? (closedSystem ? system.max : undefined) ?? inferred.sliderMax ?? (isInt ? 255 : 1),
+    step: slider?.step ?? system.step ?? inferred.step ?? (isInt ? 1 : 0.01),
+    decimals: isInt || system.integer ? 0 : (inferred.decimals ?? 3),
+    valueMin: system.min,
+    valueMax: system.max,
+  }
+}
+
 export function classifyTypedDataValue(
   key: string,
   value: unknown,
@@ -310,7 +350,7 @@ export function animFieldToDetailsControl(
   field: AnimFieldDef,
   value: unknown,
   data: Record<string, unknown>,
-  editor?: Pick<FieldConstraint, 'range' | 'derivedFrom'>
+  editor?: Pick<FieldConstraint, 'range' | 'slider' | 'derivedFrom'>
 ): PropertyFieldDef {
   const label = field.key
   const derivedFrom = editor?.derivedFrom ?? field.derivedFrom
@@ -414,19 +454,14 @@ export function animFieldToDetailsControl(
       return { key: field.key, label, kind: 'presence' }
     case 'int':
     case 'float': {
-      const inferred = inferNumberControl(field.key)
-      const isInt = kind === 'int'
-      const c = getEffectiveFieldConstraint(field, editor?.range)
       return {
         key: field.key,
         label,
         kind: 'number',
-        sliderMin: c.min ?? inferred.sliderMin,
-        sliderMax: c.max ?? inferred.sliderMax ?? (isInt ? 255 : 1),
-        step: c.step ?? inferred.step ?? (isInt ? 1 : 0.01),
-        decimals: isInt || c.integer ? 0 : (inferred.decimals ?? 3),
-        valueMin: c.min,
-        valueMax: c.max,
+        ...resolveNumberFieldControl(field, {
+          range: editor?.range,
+          slider: editor?.slider,
+        }),
       }
     }
     default:
@@ -509,12 +544,13 @@ export function gatherTypedDataDetailsFields(
       })
       continue
     }
-    const control = animFieldToDetailsControl(
-      field,
-      data[field.key],
-      data,
-      fieldConstraints[field.key]
-    )
+    const catalog = fieldConstraints[field.key]
+    const typeOverlay = getTypeFieldEditorOverlay(typeName, field.key)
+    const control = animFieldToDetailsControl(field, data[field.key], data, {
+      range: catalog?.range,
+      slider: catalog?.slider ?? typeOverlay?.slider,
+      derivedFrom: catalog?.derivedFrom,
+    })
     if (role === 'pin') {
       out.push({ ...control, pinBound: true })
       continue

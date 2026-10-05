@@ -9,8 +9,10 @@ import {
   isWrefFieldType,
   resolveAnimType,
   structWrefNodeTarget,
+  type AnimFieldDef,
   type AnimFieldType,
 } from '../../../utils/animFieldSchema'
+import { getTypeFieldEditorOverlay } from '../../../utils/fieldEditor'
 import {
   nodeDetailsContextKey,
   type NodeDetailsContext,
@@ -21,6 +23,7 @@ import {
   readNumber,
   readResourcePath,
   readStringField,
+  resolveNumberFieldControl,
   writePlainString,
   writeResourcePath,
   writeStringOrCName,
@@ -50,6 +53,10 @@ const props = withDefaults(
     revision?: number
     /** When true, wrap nested struct fields in a collapsible group headed by `label`. */
     grouped?: boolean
+    /** Field schema from parent struct (enables system range). */
+    field?: AnimFieldDef
+    /** Parent struct/class type name (enables TYPE_FIELD_EDITOR_OVERLAYS lookup). */
+    ownerType?: string
   }>(),
   { grouped: true }
 )
@@ -160,11 +167,15 @@ function setNumber(value: number) {
   emit('change', { path: [], value, immediate: false })
 }
 
-function isIntKind(): boolean {
-  return resolvedKind() === 'int'
-}
-
 const kind = computed(() => resolvedKind())
+
+const numberControl = computed(() => {
+  const field: AnimFieldDef = props.field ?? { key: props.label, type: props.type }
+  const overlay = props.ownerType
+    ? getTypeFieldEditorOverlay(props.ownerType, field.key)
+    : undefined
+  return resolveNumberFieldControl(field, { slider: overlay?.slider })
+})
 
 function enumValue(): string {
   const raw = readStringField(props.value)
@@ -255,10 +266,12 @@ function presenceText(): string {
       v-else-if="kind === 'float' || kind === 'int'"
       :label="label"
       :model-value="numberValue()"
-      :slider-min="isIntKind() ? 0 : -1"
-      :slider-max="isIntKind() ? 255 : 1"
-      :step="isIntKind() ? 1 : 0.01"
-      :decimals="isIntKind() ? 0 : 3"
+      :slider-min="numberControl.sliderMin"
+      :slider-max="numberControl.sliderMax"
+      :step="numberControl.step"
+      :decimals="numberControl.decimals"
+      :value-min="numberControl.valueMin"
+      :value-max="numberControl.valueMax"
       @update:model-value="setNumber"
     />
     <PropertyQsTransform
@@ -316,6 +329,8 @@ function presenceText(): string {
             :key="field.key"
             :label="field.key"
             :type="field.type"
+            :field="field"
+            :owner-type="typeName()"
             :value="fieldValue(field.key)"
             :revision="handleDataRevision"
             @change="onChildField(field.key, $event)"
@@ -328,6 +343,8 @@ function presenceText(): string {
           :key="field.key"
           :label="field.key"
           :type="field.type"
+          :field="field"
+          :owner-type="typeName()"
           :value="fieldValue(field.key)"
           :revision="handleDataRevision"
           @change="onChildField(field.key, $event)"

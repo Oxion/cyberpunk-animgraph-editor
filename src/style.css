@@ -254,7 +254,7 @@
   }
 
   .prop-list__slot {
-    @apply flex flex-col gap-1.5 border-0 border-t border-solid border-control-edge px-2 pb-2;
+    @apply flex flex-col gap-1.5 border-0 border-t border-solid border-control-edge px-2 pt-1 pb-2;
   }
 
   .prop-list__slot-head {

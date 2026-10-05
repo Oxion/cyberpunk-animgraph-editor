@@ -395,7 +395,7 @@ export const NODE_DEFINITION_ENTRIES: ReadonlyArray<readonly [string, NodeDefini
     ['animAnimNode_Switch', {
       description: 'Switch node with multiple inputs and weight control',
       fieldConstraints: {
-        blendTime: { range: { min: 0, max: 10, step: 0.01 } },
+        blendTime: { slider: { min: 0, max: 10, step: 0.01 } },
         numInputs: {
           derivedFrom: { kind: 'arrayLength', key: 'inputNodes' },
         },
@@ -2393,7 +2393,7 @@ export const NODE_DEFINITION_ENTRIES: ReadonlyArray<readonly [string, NodeDefini
     ['animAnimNode_EnumSwitch', {
       description: 'Switch pose inputs by enum selection',
       fieldConstraints: {
-        blendTime: { range: { min: 0, max: 10, step: 0.01 } },
+        blendTime: { slider: { min: 0, max: 10, step: 0.01 } },
       },
       dataTemplate: {
         "$type": "animAnimNode_EnumSwitch",

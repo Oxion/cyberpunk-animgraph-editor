@@ -69,14 +69,14 @@ const RTTI_TYPE_DEFINITIONS: Record<string, AnimTypeDef> = {
     kind: 'class',
     fields: [],
   },
-  'LookAtPartInfo': {
+  'animLookAtPartInfo': {
     kind: 'struct',
     fields: [
     { key: 'partName', type: 'cname' },
     { key: 'defaultPositionBoneName', type: 'cname' },
   ],
   },
-  'LookAtPartsDependency': {
+  'animLookAtPartsDependency': {
     kind: 'struct',
     fields: [
     { key: 'masterPart', type: 'cname' },
@@ -91,9 +91,11 @@ const RTTI_TYPE_DEFINITIONS: Record<string, AnimTypeDef> = {
     { key: 'pullScaleBySquareSizeFactor', type: 'float' },
     { key: 'pullScaleBySquareSizeCurve', type: 'CurveDataFloat' },
     { key: 'innerSquareScale', type: 'float' },
+    { key: 'innerSquareColor', type: 'Color' },
+    { key: 'outerSquareColor', type: 'Color' },
   ],
   },
-  'LookAtStateMachineSettings': {
+  'animLookAtStateMachineSettings': {
     kind: 'struct',
     fields: [
     { key: 'partName', type: 'cname' },
@@ -108,6 +110,15 @@ const RTTI_TYPE_DEFINITIONS: Record<string, AnimTypeDef> = {
     { key: 'blendWeightPowFactor', type: 'float' },
     { key: 'coneLimitReached', type: 'cname' },
     { key: 'allowToBlendBehindBack', type: 'bool01' },
+  ],
+  },
+  'Color': {
+    kind: 'struct',
+    fields: [
+    { key: 'Red', type: 'int', range: { min: 0, max: 255, step: 1 } },
+    { key: 'Green', type: 'int', range: { min: 0, max: 255, step: 1 } },
+    { key: 'Blue', type: 'int', range: { min: 0, max: 255, step: 1 } },
+    { key: 'Alpha', type: 'int', range: { min: 0, max: 255, step: 1 } },
   ],
   },
   'QsTransform': {
@@ -129,8 +140,8 @@ const RTTI_TYPE_DEFINITIONS: Record<string, AnimTypeDef> = {
   'CurveKeyFloat': {
     kind: 'struct',
     fields: [
-    { key: 'point', type: 'float' },
-    { key: 'value', type: 'float' },
+    { key: 'Point', type: 'float' },
+    { key: 'Value', type: 'float' },
   ],
   },
   'CurveDataFloat': {
@@ -1639,9 +1650,9 @@ const RTTI_TYPE_DEFINITIONS: Record<string, AnimTypeDef> = {
     parent: 'animAnimNode_OnePoseInput',
     fields: [
     { key: 'E3_HACK_offset', type: 'animVectorLink' },
-    { key: 'orderedBodyParts', type: { array: 'LookAtPartInfo' } },
-    { key: 'stateMachinesSettings', type: { array: 'LookAtStateMachineSettings' } },
-    { key: 'bodyPartsDependencies', type: { array: 'LookAtPartsDependency' } },
+    { key: 'orderedBodyParts', type: { array: 'animLookAtPartInfo' } },
+    { key: 'stateMachinesSettings', type: { array: 'animLookAtStateMachineSettings' } },
+    { key: 'bodyPartsDependencies', type: { array: 'animLookAtPartsDependency' } },
     { key: 'substepTime', type: 'float' },
     { key: 'isFacial', type: 'bool01' },
   ],
