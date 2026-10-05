@@ -156,4 +156,11 @@ export const PROJECTION_DEFINITIONS: Record<string, ProjectionDef> = {
       innerConstraints: 'pin',
     },
   },
+
+  animAnimNode_BlendOverride: {
+    fields: {
+      blendMethod: 'embed',
+      postProcess: 'embed',
+    },
+  },
 }
