@@ -18,6 +18,9 @@ import type { SimVec4 } from './evalAnimMathExpressionVector'
 
 export type { SimVec4 }
 
+/** FiredEvent phase for timeline events (animNode_Signal DurStart/DurEnd split). */
+export type SimAnimEventPhase = 'tick' | 'durStart' | 'durEnd'
+
 export class SimInputBoard {
   /** lowercase featureName -> lowercase propertyName -> number */
   private features = new Map<string, Map<string, number>>()
@@ -47,6 +50,8 @@ export class SimInputBoard {
   externalEvents = new Set<string>()
   /** Timeline anim events collected this frame (SkAnim CollectEvents) */
   animEvents = new Set<string>()
+  /** Per-name FiredEvent phases this frame (tick / DurStart / DurEnd) */
+  animEventPhases = new Map<string, Set<SimAnimEventPhase>>()
   /** Valued timeline events this frame (name → last value if multiple) */
   animEventValues = new Map<string, number>()
   /**
@@ -54,6 +59,8 @@ export class SimInputBoard {
    * (animStateTransitionCondition_AnimEvent.cpp → m_lastFrameFiredEvents).
    */
   lastFrameAnimEvents = new Set<string>()
+  /** Previous frame phases — Signal start/end DurStart/DurEnd filter */
+  lastFrameAnimEventPhases = new Map<string, Set<SimAnimEventPhase>>()
   /** Previous frame valued events — AnimNode_EventValue */
   lastFrameAnimEventValues = new Map<string, number>()
   /**
@@ -85,8 +92,10 @@ export class SimInputBoard {
   resetDynamics(): void {
     this.externalEvents.clear()
     this.animEvents.clear()
+    this.animEventPhases.clear()
     this.animEventValues.clear()
     this.lastFrameAnimEvents.clear()
+    this.lastFrameAnimEventPhases.clear()
     this.lastFrameAnimEventValues.clear()
     this.animEndEvents.clear()
     this.lastFrameAnimEndEvents.clear()
@@ -197,9 +206,19 @@ export class SimInputBoard {
     if (name) this.externalEvents.add(name)
   }
 
-  fireAnimEvent(name: string, value?: number): void {
+  fireAnimEvent(
+    name: string,
+    value?: number,
+    phase: SimAnimEventPhase = 'tick'
+  ): void {
     if (!name || name === 'None') return
     this.animEvents.add(name)
+    let phases = this.animEventPhases.get(name)
+    if (!phases) {
+      phases = new Set()
+      this.animEventPhases.set(name, phases)
+    }
+    phases.add(phase)
     if (value !== undefined && Number.isFinite(value)) {
       this.animEventValues.set(name, value)
     }
@@ -208,13 +227,19 @@ export class SimInputBoard {
   /**
    * Manual SimPanel inject: make event visible to AnimEvent conditions this step
    * (engine normally exposes timeline events only as last-frame).
+   * Injected as Tick (instant pulse), not DurStart/DurEnd.
    */
   injectAnimEventNow(name: string, value?: number): void {
     if (!name || name === 'None') return
-    this.animEvents.add(name)
+    this.fireAnimEvent(name, value, 'tick')
     this.lastFrameAnimEvents.add(name)
+    let phases = this.lastFrameAnimEventPhases.get(name)
+    if (!phases) {
+      phases = new Set()
+      this.lastFrameAnimEventPhases.set(name, phases)
+    }
+    phases.add('tick')
     if (value !== undefined && Number.isFinite(value)) {
-      this.animEventValues.set(name, value)
       this.lastFrameAnimEventValues.set(name, value)
     }
   }
@@ -233,10 +258,16 @@ export class SimInputBoard {
     }
   }
 
-  /** AnimEvent condition: last-frame timeline events. */
+  /** AnimEvent condition: last-frame timeline events (any phase). */
   hasAnimEvent(name: string): boolean {
     if (!name || name === 'None') return false
     return this.lastFrameAnimEvents.has(name)
+  }
+
+  /** Last-frame FiredEvent phases for Signal DurStart/DurEnd filter. */
+  getLastFrameAnimEventPhases(name: string): ReadonlySet<SimAnimEventPhase> | undefined {
+    if (!name || name === 'None') return undefined
+    return this.lastFrameAnimEventPhases.get(name)
   }
 
   getLastFrameAnimEventValue(name: string): number | undefined {
@@ -266,6 +297,12 @@ export class SimInputBoard {
   endFrame(): void {
     this.lastFrameAnimEvents = new Set(this.animEvents)
     this.animEvents.clear()
+    const phaseSnap = new Map<string, Set<SimAnimEventPhase>>()
+    for (const [name, phases] of this.animEventPhases) {
+      phaseSnap.set(name, new Set(phases))
+    }
+    this.lastFrameAnimEventPhases = phaseSnap
+    this.animEventPhases.clear()
     this.lastFrameAnimEventValues = new Map(this.animEventValues)
     this.animEventValues.clear()
     this.lastFrameAnimEndEvents = new Set(this.animEndEvents)

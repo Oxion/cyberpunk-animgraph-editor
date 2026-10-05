@@ -171,41 +171,177 @@ export function stepCriticalSpringDamp(
   }
 }
 
-/** Linear / Constant curve sample from CurveDataFloat. Bezier etc. → linear. */
+/** Scale t into [0,1] between two key times (curveInterpolator helper::scale_t). */
+function curveScaleT(t: number, min: number, max: number): number {
+  return max - min > 0 ? (t - min) / (max - min) : 1
+}
+
+function curveClampKey(key: number, max: number): number {
+  return Math.min(max, Math.max(0, key))
+}
+
+/** Modified interpolation search — floor index (curveInterpolator helper). */
+function curveInterpolationSearch(times: number[], key: number): number {
+  const numKeys = times.length
+  if (numKeys === 0) return -1
+  let low = 0
+  let high = numKeys - 1
+  let mid = 0
+  if (times[0]! > key || key > times[numKeys - 1]!) return -1
+  while (times[high] !== times[low] && key >= times[low]! && key <= times[high]!) {
+    mid = low + Math.trunc(curveScaleT(key, times[low]!, times[high]!) * (high - low))
+    if (times[mid]! < key) low = mid + 1
+    else if (key < times[mid]!) high = mid - 1
+    else return mid
+  }
+  if (key >= times[high]!) return high
+  if (key >= times[low]!) return low
+  return mid
+}
+
+function curveLinear(p0: number, p1: number, t: number): number {
+  return p0 * (1 - t) + p1 * t
+}
+
+function curveQuadraticBezier(p0: number, c0: number, p1: number, t: number): number {
+  const u = 1 - t
+  return p0 * (u * u) + c0 * (2 * t * u) + p1 * (t * t)
+}
+
+function curveCubicBezier(
+  p0: number,
+  c0: number,
+  c1: number,
+  p1: number,
+  t: number
+): number {
+  const u = 1 - t
+  return (
+    p0 * (u * u * u) +
+    c0 * (3 * t * u * u) +
+    c1 * (3 * t * t * u) +
+    p1 * (t * t * t)
+  )
+}
+
+/** Engine math::Interpolation::CubicHermite (p0, tangent0, tangent1, p1). */
+function curveCubicHermite(
+  p0: number,
+  t0: number,
+  t1: number,
+  p1: number,
+  t: number
+): number {
+  const t2 = t * t
+  const t3 = t2 * t
+  return (
+    p0 * (2 * t3 - 3 * t2 + 1) +
+    t0 * (t3 - 2 * t2 + t) +
+    p1 * (-2 * t3 + 3 * t2) +
+    t1 * (t3 - t2)
+  )
+}
+
+/**
+ * CurveDataFloat sample — CurveDataEvaluator::EvalAt + float interpolators.
+ * Supports Constant / Linear / BezierQuadratic / BezierCubic / Hermite.
+ * LinkType not applied (engine GetValue path is interpolator-type only).
+ */
 export function evalCurveFloatData(curveData: unknown, argument: number): number {
   if (!curveData || typeof curveData !== 'object') return argument
   const data = curveData as {
     InterpolationType?: string
-    Elements?: Array<{ point?: unknown; value?: unknown }>
+    Elements?: Array<{
+      point?: unknown
+      Point?: unknown
+      value?: unknown
+      Value?: unknown
+    }>
   }
   const elements = Array.isArray(data.Elements) ? data.Elements : []
   if (elements.length === 0) return argument
 
   const keys = elements
     .map((e) => ({
-      point: readNumber(e.point, 0),
-      value: readNumber(e.value, 0),
+      point: readNumber(e.point ?? e.Point, 0),
+      value: readNumber(e.value ?? e.Value, 0),
     }))
     .sort((a, b) => a.point - b.point)
 
-  if (argument <= keys[0]!.point) return keys[0]!.value
-  const last = keys[keys.length - 1]!
-  if (argument >= last.point) return last.value
+  const times = keys.map((k) => k.point)
+  const values = keys.map((k) => k.value)
+  const numKeys = times.length
+  if (numKeys === 0) return argument
 
-  const interp = String(data.InterpolationType ?? 'Linear').replace(/^curveE?/i, '')
-  const isConstant = /constant/i.test(interp)
+  if (argument <= times[0]!) return values[0]!
+  if (argument >= times[numKeys - 1]!) return values[numKeys - 1]!
 
-  for (let i = 0; i < keys.length - 1; i++) {
-    const a = keys[i]!
-    const b = keys[i + 1]!
-    if (argument > b.point) continue
-    if (isConstant) return a.value
-    const span = b.point - a.point
-    if (Math.abs(span) < Number.EPSILON) return a.value
-    const t = (argument - a.point) / span
-    return a.value + (b.value - a.value) * t
+  const interpRaw = String(data.InterpolationType ?? 'Linear')
+  const interp = interpRaw
+    .replace(/^curveE?/i, '')
+    .replace(/^EIT_/i, '')
+    .toLowerCase()
+
+  const at = Math.min(times[numKeys - 1]!, Math.max(times[0]!, argument))
+
+  if (interp.includes('constant')) {
+    const idx = curveClampKey(curveInterpolationSearch(times, at), numKeys - 1)
+    return values[idx]!
   }
-  return last.value
+
+  if (interp.includes('bezierquadratic') || interp.includes('quadraticbezier')) {
+    if (numKeys < 3) return values[0]!
+    let first = curveClampKey(curveInterpolationSearch(times, at), numKeys - 1)
+    first = first - (first % 2)
+    const second = curveClampKey(first + 1, numKeys - 1)
+    const third = curveClampKey(second + 1, numKeys - 1)
+    const t = curveScaleT(at, times[first]!, times[third]!)
+    return curveQuadraticBezier(values[first]!, values[second]!, values[third]!, t)
+  }
+
+  if (
+    interp.includes('beziercubic') ||
+    interp.includes('cubicbezier') ||
+    (interp.includes('bezier') && !interp.includes('quadratic'))
+  ) {
+    if (numKeys < 4) return values[0]!
+    let first = curveClampKey(curveInterpolationSearch(times, at), numKeys - 1)
+    first = first - (first % 3)
+    const second = curveClampKey(first + 1, numKeys - 1)
+    const third = curveClampKey(second + 1, numKeys - 1)
+    const fourth = curveClampKey(third + 1, numKeys - 1)
+    const t = curveScaleT(at, times[first]!, times[fourth]!)
+    return curveCubicBezier(
+      values[first]!,
+      values[second]!,
+      values[third]!,
+      values[fourth]!,
+      t
+    )
+  }
+
+  if (interp.includes('hermite')) {
+    if (numKeys < 4) return values[0]!
+    let first = curveClampKey(curveInterpolationSearch(times, at), numKeys - 1)
+    first = first - (first % 3)
+    const second = curveClampKey(first + 1, numKeys - 1)
+    const third = curveClampKey(second + 1, numKeys - 1)
+    const fourth = curveClampKey(third + 1, numKeys - 1)
+    const t = curveScaleT(at, times[first]!, times[fourth]!)
+    return curveCubicHermite(
+      values[first]!,
+      values[second]!,
+      values[third]!,
+      values[fourth]!,
+      t
+    )
+  }
+
+  // Linear (default)
+  let first = curveClampKey(curveInterpolationSearch(times, at), numKeys - 1)
+  const second = curveClampKey(first + 1, numKeys - 1)
+  const t = curveScaleT(at, times[first]!, times[second]!)
+  return curveLinear(values[first]!, values[second]!, t)
 }
 
 export function readDampDefaults(d: Record<string, unknown>): {

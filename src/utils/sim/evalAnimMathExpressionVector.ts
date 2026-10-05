@@ -1,10 +1,10 @@
 /**
  * Minimal vector math-expression evaluator for animAnimNode_MathExpressionVector.
  * Covers common expressionToolkit vector ops (Vec, getX/Y/Z, + - * /, length, norm, …).
- * Not a full RED expressionToolkit port.
+ * Scalar subset matches evalAnimMathExpression (deg-trig). Rotation ops not ported.
  */
 
-import { listMathExprIdents } from './evalAnimMathExpression'
+import { ANIM_MATH_SCALAR_BUILTINS, listMathExprIdents } from './evalAnimMathExpression'
 
 export type SimVec4 = { x: number; y: number; z: number; w: number }
 
@@ -39,16 +39,7 @@ const VECTOR_BUILTINS = new Set([
   'cross',
   'dot',
   'lerp',
-  'clamp',
-  'max',
-  'min',
-  'abs',
-  'sqrt',
-  'sin',
-  'cos',
-  'floor',
-  'ceil',
-  'round',
+  ...Object.keys(ANIM_MATH_SCALAR_BUILTINS).map((n) => n.toLowerCase()),
 ])
 
 type Tok =
@@ -84,7 +75,7 @@ function tokenize(expr: string): Tok[] | null {
       i = j
       continue
     }
-    if ('+-*/'.includes(c)) {
+    if ('+-*/^%&|!#'.includes(c)) {
       out.push({ t: 'op', v: c })
       i++
       continue
@@ -223,30 +214,19 @@ function callBuiltin(name: string, args: Val[]): Val | null {
       ),
     }
   }
-  // scalar helpers (same as float eval)
-  if (n === 'clamp') {
-    const x = f(0)
-    const lo = f(1)
-    const hi = f(2)
-    return x != null && lo != null && hi != null
-      ? { kind: 'f', n: Math.min(hi, Math.max(lo, x)) }
-      : null
-  }
-  if (n === 'max') {
+  // scalar helpers — shared with float eval (deg-trig, logical, …)
+  const scalar = ANIM_MATH_SCALAR_BUILTINS[n]
+  if (scalar) {
     const nums = args.map(asF)
     if (nums.some((x) => x == null)) return null
-    return { kind: 'f', n: Math.max(...(nums as number[])) }
-  }
-  if (n === 'min') {
-    const nums = args.map(asF)
-    if (nums.some((x) => x == null)) return null
-    return { kind: 'f', n: Math.min(...(nums as number[])) }
-  }
-  if (n === 'abs' || n === 'sqrt' || n === 'sin' || n === 'cos' || n === 'floor' || n === 'ceil' || n === 'round') {
-    const x = f(0)
-    if (x == null) return null
-    const fn = Math[n as 'abs' | 'sqrt' | 'sin' | 'cos' | 'floor' | 'ceil' | 'round']
-    return { kind: 'f', n: fn(x) }
+    try {
+      const result = scalar(...(nums as number[]))
+      return typeof result === 'number' && Number.isFinite(result)
+        ? { kind: 'f', n: result }
+        : null
+    } catch {
+      return null
+    }
   }
   return null
 }
@@ -341,18 +321,42 @@ class Parser {
   }
 
   private parseMul(): Val | null {
-    let left = this.parseUnary()
+    let left = this.parsePow()
     if (!left) return null
     while (
       this.peek()?.t === 'op' &&
-      ((this.peek() as { v: string }).v === '*' || (this.peek() as { v: string }).v === '/')
+      ((this.peek() as { v: string }).v === '*' ||
+        (this.peek() as { v: string }).v === '/' ||
+        (this.peek() as { v: string }).v === '%')
     ) {
-      const op = (this.take() as { t: 'op'; v: '*' | '/' }).v
-      const right = this.parseUnary()
+      const op = (this.take() as { t: 'op'; v: string }).v
+      const right = this.parsePow()
       if (!right) return null
-      const next = applyMul(left, op, right)
+      if (op === '%') {
+        const af = asF(left)
+        const bf = asF(right)
+        if (af == null || bf == null) return null
+        left = { kind: 'f', n: af % bf }
+        continue
+      }
+      const next = applyMul(left, op as '*' | '/', right)
       if (!next) return null
       left = next
+    }
+    return left
+  }
+
+  private parsePow(): Val | null {
+    let left = this.parseUnary()
+    if (!left) return null
+    if (this.peek()?.t === 'op' && (this.peek() as { v: string }).v === '^') {
+      this.take()
+      const right = this.parsePow()
+      if (!right) return null
+      const af = asF(left)
+      const bf = asF(right)
+      if (af == null || bf == null) return null
+      return { kind: 'f', n: Math.pow(af, bf) }
     }
     return left
   }
@@ -368,6 +372,21 @@ class Parser {
     if (this.peek()?.t === 'op' && (this.peek() as { v: string }).v === '+') {
       this.take()
       return this.parseUnary()
+    }
+    if (this.peek()?.t === 'op' && (this.peek() as { v: string }).v === '#') {
+      this.take()
+      const v = this.parseUnary()
+      if (!v) return null
+      if (v.kind === 'f') return { kind: 'f', n: -v.n }
+      return { kind: 'v', v: vec4(-v.v.x, -v.v.y, -v.v.z, -v.v.w) }
+    }
+    if (this.peek()?.t === 'op' && (this.peek() as { v: string }).v === '!') {
+      this.take()
+      const v = this.parseUnary()
+      if (!v) return null
+      const n = asF(v)
+      if (n == null) return null
+      return { kind: 'f', n: ANIM_MATH_SCALAR_BUILTINS.not!(n) }
     }
     return this.parsePrimary()
   }
@@ -411,6 +430,9 @@ class Parser {
   }
 
   private lookup(name: string): Val | null {
+    if (name.toLowerCase() === 'pi') {
+      return { kind: 'f', n: Math.PI }
+    }
     if (Object.prototype.hasOwnProperty.call(this.vectors, name)) {
       return { kind: 'v', v: this.vectors[name]! }
     }

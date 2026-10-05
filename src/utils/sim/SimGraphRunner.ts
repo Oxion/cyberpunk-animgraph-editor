@@ -612,7 +612,8 @@ function evalFloatInterpolation(
   const y2 = readNumber(d.y2, 1)
   if (Math.abs(x2 - x1) < Number.EPSILON) return y1
   const t = Math.min(1, Math.max(0, (x - x1) / (x2 - x1)))
-  // Offline: linear only (SIN/BEZIER stubbed as linear)
+  // Matches engine AnimNode_FloatInterpolation::OnGetValue — m_interpolationType
+  // (AGMI_SIN / AGMI_BEZIER) is stored but unused; always linear remap + clamp.
   return y1 + (y2 - y1) * t
 }
 

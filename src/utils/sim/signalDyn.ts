@@ -42,18 +42,27 @@ export function createSignalState(params: SignalNodeParams): SignalDynState {
 }
 
 /**
- * Engine helper::ContainsExternalOrAnimEvent (simplified: no duration start/end split).
+ * Engine helper::ContainsExternalOrAnimEvent.
+ * Duration events: DurStart matches startEvent, DurEnd matches endEvent; Tick matches both.
  * Sources: external (this frame), last-frame anim events, last-frame anim-end events.
  */
 export function signalEventPresent(
   board: SimInputBoard,
   eventName: string,
-  _isStartEvent: boolean
+  isStartEvent: boolean
 ): boolean {
   if (!eventName || eventName === 'None') return false
   if (board.externalEvents.has(eventName)) return true
-  if (board.lastFrameAnimEvents.has(eventName)) return true
   if (board.lastFrameAnimEndEvents.has(eventName)) return true
+
+  const phases = board.getLastFrameAnimEventPhases(eventName)
+  if (phases && phases.size > 0) {
+    if (phases.has('tick')) return true
+    if (isStartEvent) return phases.has('durStart')
+    return phases.has('durEnd')
+  }
+  // Name present without phase metadata (legacy / inject edge) → Tick semantics
+  if (board.lastFrameAnimEvents.has(eventName)) return true
   return false
 }
 

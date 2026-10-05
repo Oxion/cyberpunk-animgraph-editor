@@ -1,27 +1,54 @@
 /**
- * Minimal evaluator for anim MathExpressionFloat strings seen in graphs
- * (clamp, max, min, abs, comparisons, arithmetic, & |).
- * Not a full RED expressionToolkit port.
+ * Scalar evaluator for anim MathExpressionFloat strings.
+ * Subset of RED expressionToolkit (expressionToolkit_opRegistry Scalar + Logical).
+ * Rotation ops (Rot / getRoll|Pitch|Yaw) are not ported.
  *
- * Engine `&` / `|` (expressionToolkit_opRegistry LogicalOperations) are logical,
- * not bitwise: operand > eps → 1 else 0. Mapped to JS `&&` / `||` + Number().
+ * Engine trig takes/returns degrees. Engine `&` / `|` / `xor` / `!` are float
+ * logical (operand > eps → 1 else 0), not bitwise / JS boolean.
  */
 
-const SAFE_EXPR = /^[\d\s+\-*/().,_<>=!&|%a-zA-Z]+$/
+const SAFE_EXPR = /^[\d\s+\-*/().,_<>=!&|^%#a-zA-Z]+$/
 const IDENT_RE = /[A-Za-z_][A-Za-z0-9_]*/g
+const EPS = Number.EPSILON
 
-const BUILTINS: Record<string, (...args: number[]) => number> = {
+const DEG2RAD = Math.PI / 180
+const RAD2DEG = 180 / Math.PI
+
+function logicalTrue(x: number): boolean {
+  return x > EPS
+}
+
+/** Shared scalar builtins (also used by vector expression eval). */
+export const ANIM_MATH_SCALAR_BUILTINS: Record<string, (...args: number[]) => number> = {
   clamp: (x, a, b) => Math.min(b, Math.max(a, x)),
   max: (...args) => Math.max(...args),
   min: (...args) => Math.min(...args),
   abs: (x) => Math.abs(x),
   sqrt: (x) => Math.sqrt(x),
-  sin: (x) => Math.sin(x),
-  cos: (x) => Math.cos(x),
+  cbrt: (x) => Math.cbrt(x),
+  log: (x) => Math.log(x),
+  log2: (x) => Math.log(x) / Math.log(2),
+  // Degrees in / out — expressionToolkit ScalarOperations
+  sin: (x) => Math.sin(x * DEG2RAD),
+  cos: (x) => Math.cos(x * DEG2RAD),
+  tan: (x) => Math.tan(x * DEG2RAD),
+  asin: (x) => Math.asin(x) * RAD2DEG,
+  acos: (x) => Math.acos(x) * RAD2DEG,
+  atan: (x) => Math.atan(x) * RAD2DEG,
   floor: (x) => Math.floor(x),
   ceil: (x) => Math.ceil(x),
   round: (x) => Math.round(x),
+  sign: (x) => (x >= 0 ? 1 : -1),
+  pow: (a, b) => Math.pow(a, b),
+  /** Zero-arg PI constant: PI() or PI in rewritten form */
+  pi: () => Math.PI,
+  and: (a, b) => (logicalTrue(a) && logicalTrue(b) ? 1 : 0),
+  or: (a, b) => (logicalTrue(a) || logicalTrue(b) ? 1 : 0),
+  xor: (a, b) => (logicalTrue(a) !== logicalTrue(b) ? 1 : 0),
+  not: (a) => (logicalTrue(a) ? 0 : 1),
 }
+
+const BUILTINS = ANIM_MATH_SCALAR_BUILTINS
 
 /** Scalar builtins + vector-toolkit names so listMathExprIdents skips them. */
 const BUILTIN_NAMES = new Set([
@@ -69,6 +96,106 @@ function lookupVar(vars: Record<string, number>, name: string): number {
   return 0
 }
 
+/** Top-level split on `op` (paren-aware). */
+function splitTopLevel(expr: string, op: string): string[] | null {
+  const parts: string[] = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < expr.length; i++) {
+    const c = expr[i]!
+    if (c === '(') depth++
+    else if (c === ')') depth--
+    else if (depth === 0 && expr.startsWith(op, i)) {
+      if (op.length === 1) {
+        const prev = expr[i - 1]
+        const next = expr[i + 1]
+        if (op === '&' && (prev === '&' || next === '&')) continue
+        if (op === '|' && (prev === '|' || next === '|')) continue
+        if (
+          op === '=' &&
+          (prev === '=' || next === '=' || prev === '!' || prev === '<' || prev === '>')
+        )
+          continue
+        if (op === '!' && next === '=') continue
+      }
+      parts.push(expr.slice(start, i).trim())
+      i += op.length - 1
+      start = i + 1
+    }
+  }
+  parts.push(expr.slice(start).trim())
+  return parts.length > 1 ? parts : null
+}
+
+/**
+ * Rewrite ^ / & / | with toolkit precedence: | < & < ^.
+ * Each part is rewritten before wrapping so ops are never trapped inside __fn.*().
+ */
+function rewriteLogicalAndPow(expr: string): string {
+  const orParts = splitTopLevel(expr, '|')
+  if (orParts) {
+    return orParts.map(rewriteLogicalAndPow).reduce((a, b) => `__fn.or(${a},${b})`)
+  }
+  const andParts = splitTopLevel(expr, '&')
+  if (andParts) {
+    return andParts.map(rewriteLogicalAndPow).reduce((a, b) => `__fn.and(${a},${b})`)
+  }
+  const powParts = splitTopLevel(expr, '^')
+  if (powParts) {
+    return powParts.map(rewriteLogicalAndPow).reduce((a, b) => `__fn.pow(${a},${b})`)
+  }
+  return expr
+}
+
+/** Rewrite unary `!` / `#` (engine # = unary minus). */
+function rewriteUnary(expr: string): string {
+  let out = ''
+  let i = 0
+  while (i < expr.length) {
+    const c = expr[i]!
+    if (c === '!' && expr[i + 1] !== '=') {
+      i++
+      while (expr[i] === ' ') i++
+      if (expr[i] === '(') {
+        let depth = 0
+        const start = i
+        for (; i < expr.length; i++) {
+          if (expr[i] === '(') depth++
+          else if (expr[i] === ')') {
+            depth--
+            if (depth === 0) {
+              i++
+              break
+            }
+          }
+        }
+        out += `__fn.not(${rewriteUnary(expr.slice(start, i))})`
+        continue
+      }
+      const m = expr.slice(i).match(/^(?:__fn\.[A-Za-z_]\w*|\w+)/)
+      if (m) {
+        out += `__fn.not(${m[0]})`
+        i += m[0].length
+        continue
+      }
+      out += c
+      continue
+    }
+    if (c === '#') {
+      out += '-'
+      i++
+      continue
+    }
+    out += c
+    i++
+  }
+  return out
+}
+
+function rewriteBarePi(expr: string): string {
+  return expr.replace(/\bPI\b/gi, '__fn.pi()')
+}
+
 /**
  * @returns null if expression cannot be evaluated safely
  */
@@ -91,12 +218,19 @@ export function evalAnimMathExpression(
   }
 
   let js = expr.replace(IDENT_RE, (name) => {
-    if (isBuiltinIdent(name)) return `__fn.${name.toLowerCase()}`
+    if (isBuiltinIdent(name)) {
+      const lower = name.toLowerCase()
+      if (lower === 'pi') return '__fn.pi()'
+      return `__fn.${lower}`
+    }
     return paramOf.get(name) ?? name
   })
+
   // lone = → ==
   js = js.replace(/([^!<>=])=([^=])/g, '$1==$2')
-  js = js.replace(/&/g, '&&').replace(/\|/g, '||')
+  js = rewriteBarePi(js)
+  js = rewriteUnary(js)
+  js = rewriteLogicalAndPow(js)
 
   try {
     // eslint-disable-next-line no-new-func
