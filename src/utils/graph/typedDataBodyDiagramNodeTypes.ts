@@ -49,6 +49,7 @@ export const TYPED_DATA_BODY_DIAGRAM_NODE_TYPES_SET = new Set([
   'animComponentTagCondition',
   'animAnimNode_Signal',
   'animAnimNode_SkAnim',
+  'animAnimNode_SkPhaseAnim',
   'animAnimNode_FloatVariable',
   'animAnimNode_FloatClamp',
   'animAnimNode_StackTracksExtender',
