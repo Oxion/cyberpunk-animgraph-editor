@@ -272,34 +272,30 @@
 
           <TabsContent value="tags" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
             <Input
-              v-if="hasAnyTags"
+              v-if="hasAnyTagValues"
               class="h-7 shrink-0 rounded-sm text-xs"
               placeholder="Filter tags"
               v-model="tagsFilter"
             />
             <div v-if="filteredTagVars.length" class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-              <div v-for="name in filteredTagVars" :key="`t-${name}`" class="flex items-center gap-2">
-                <Label class="min-w-0 flex-1 truncate text-[11px] font-normal text-muted-foreground">{{ name }}</Label>
-                <Input
-                  type="number"
-                  step="0.1"
-                  class="h-7 w-[72px] shrink-0 rounded-sm text-xs"
-                  :model-value="tagValues[name] ?? 0"
-                  @update:model-value="(v) => onTagValue(name, v)"
-                />
-              </div>
+              <PropertyNumberControl
+                v-for="name in filteredTagVars"
+                :key="`t-${name}`"
+                :label="name"
+                :model-value="tagValues[name] ?? 0"
+                :decimals="2"
+                @update:model-value="(v) => onTagValue(name, v)"
+              />
             </div>
-            <p v-else-if="hasAnyTags" class="m-0 text-[11px] text-muted-foreground">No matching tags</p>
-            <p v-else class="m-0 text-[11px] text-muted-foreground">
-              No TagValue tags from graph
-            </p>
+            <p v-else-if="hasAnyTagValues" class="m-0 text-[11px] text-muted-foreground">No matching tags</p>
+            <p v-else class="m-0 text-[11px] text-muted-foreground">No TagValue tags from graph</p>
           </TabsContent>
         </Tabs>
       </TabsContent>
 
       <TabsContent value="resources" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
         <Tabs v-model="resourcesSubTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
-          <TabsList class="grid h-8 w-full shrink-0 grid-cols-2 rounded-sm bg-muted/60 p-0.5">
+          <TabsList class="grid h-8 w-full shrink-0 grid-cols-3 rounded-sm bg-muted/60 p-0.5">
             <TabsTrigger value="sets" class="h-7 rounded-sm px-1 text-[11px]">
               Anim sets
               <span v-if="clipStats.entryCount" class="ml-1 opacity-70">{{ clipStats.entryCount }}</span>
@@ -307,6 +303,10 @@
             <TabsTrigger value="db" class="h-7 rounded-sm px-1 text-[11px]">
               Anim DB
               <span v-if="animDbStats.dbCount" class="ml-1 opacity-70">{{ animDbStats.dbCount }}</span>
+            </TabsTrigger>
+            <TabsTrigger value="entity" class="h-7 rounded-sm px-1 text-[11px]">
+              Entity
+              <span v-if="entityTagsCount" class="ml-1 opacity-70">{{ entityTagsCount }}</span>
             </TabsTrigger>
           </TabsList>
 
@@ -686,6 +686,76 @@
           </p>
           <p v-else class="m-0 text-[11px] text-muted-foreground">Select a database above</p>
         </TabsContent>
+
+        <!-- Entity tags (StaticSwitch Component/Visual/Rig mock) — saved in project -->
+        <TabsContent value="entity" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
+          <div class="flex shrink-0 items-center gap-1">
+            <Input
+              class="h-7 min-w-0 flex-1 rounded-sm text-xs"
+              placeholder="Add entity tag"
+              v-model="entityTagDraft"
+              @keydown.enter.prevent="onAddEntityTag"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              class="h-7 shrink-0 rounded-sm px-2 text-xs"
+              @click="onAddEntityTag"
+            >
+              Add
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              :variant="entityTagsEditMode ? 'default' : 'secondary'"
+              class="h-7 w-7 shrink-0 rounded-sm p-0"
+              :title="entityTagsEditMode ? 'Done editing' : 'Edit tags'"
+              :aria-label="entityTagsEditMode ? 'Done editing' : 'Edit tags'"
+              :aria-pressed="entityTagsEditMode"
+              @click="entityTagsEditMode = !entityTagsEditMode"
+            >
+              <PencilIcon :size="12" />
+            </Button>
+          </div>
+          <Input
+            v-if="hasAnyEntityTags"
+            class="h-7 shrink-0 rounded-sm text-xs"
+            placeholder="Filter entity tags"
+            v-model="entityTagsFilter"
+          />
+          <div v-if="filteredEntityTags.length" class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+            <div
+              v-for="name in filteredEntityTags"
+              :key="`et-${name}`"
+              class="flex items-center gap-1"
+            >
+              <div class="min-w-0 flex-1">
+                <PropertyBoolToggle
+                  :label="name"
+                  :model-value="entityTags[name] === true"
+                  @update:model-value="(v) => onEntityTag(name, v)"
+                />
+              </div>
+              <Button
+                v-if="entityTagsEditMode"
+                type="button"
+                size="icon-xs"
+                variant="secondary"
+                class="size-[26px] shrink-0 rounded-sm text-muted-foreground hover:text-destructive"
+                title="Remove tag"
+                :aria-label="`Remove ${name}`"
+                @click="onRemoveEntityTag(name)"
+              >
+                <TrashIcon :size="12" />
+              </Button>
+            </div>
+          </div>
+          <p v-else-if="hasAnyEntityTags" class="m-0 text-[11px] text-muted-foreground">No matching entity tags</p>
+          <p v-else class="m-0 text-[11px] text-muted-foreground">
+            Mock Component / Visual / Rig tags for StaticSwitch. Saved with the project.
+          </p>
+        </TabsContent>
         </Tabs>
       </TabsContent>
     </Tabs>
@@ -694,6 +764,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { PencilIcon, TrashIcon } from 'lucide-vue-next'
 import type {
   AnimSetupEntryView,
   ClipLibraryStats,
@@ -728,7 +799,8 @@ const props = defineProps<{
     intVars: string[]
     wrappers: string[]
     events: string[]
-  tags?: string[]
+    tags?: string[]
+    entityTags?: string[]
   }
   eventDraft: string
   featureDrafts: Record<string, number>
@@ -738,6 +810,7 @@ const props = defineProps<{
   boolVars: Record<string, boolean>
   intVars: Record<string, number>
   tagValues: Record<string, number>
+  entityTags: Record<string, boolean>
   wrapperWeights: Record<string, number>
   clipStats: ClipLibraryStats
   clipNames: string[]
@@ -772,6 +845,8 @@ const props = defineProps<{
   applyBoolVar: (name: string, value: boolean) => void
   applyIntVar: (name: string, value: number) => void
   applyTagValue: (name: string, value: number) => void
+  applyEntityTag: (name: string, present: boolean) => void
+  removeEntityTag: (name: string) => void
   applyWrapperWeight: (name: string, value: number) => void
   resolveFeatureValue: (feature: string, property: string) => number
   resolveBoolFeatureValue?: (feature: string, property: string) => boolean
@@ -797,11 +872,14 @@ const emit = defineEmits<{
 
 const activeTab = ref<'events' | 'values' | 'resources'>('events')
 const valuesSubTab = ref<'features' | 'vars' | 'wrappers' | 'tags'>('features')
-const resourcesSubTab = ref<'sets' | 'db'>('sets')
+const resourcesSubTab = ref<'sets' | 'db' | 'entity'>('sets')
 const eventsFilter = ref('')
 const featuresFilter = ref('')
 const varsFilter = ref('')
 const tagsFilter = ref('')
+const entityTagsFilter = ref('')
+const entityTagDraft = ref('')
+const entityTagsEditMode = ref(false)
 const wrappersFilter = ref('')
 const clipsFilter = ref('')
 const animDbRowsFilter = ref('')
@@ -902,15 +980,23 @@ const filteredTagVars = computed(() =>
     .slice()
     .sort(localeCmp)
 )
+const filteredEntityTags = computed(() =>
+  (props.discovered.entityTags ?? [])
+    .filter((name) => matchesQuery(name, entityTagsFilter.value))
+    .slice()
+    .sort(localeCmp)
+)
 const varsCount = computed(
   () =>
     props.discovered.floatVars.length +
     (props.discovered.boolVars?.length ?? 0) +
     (props.discovered.intVars?.length ?? 0)
 )
+const hasAnyTagValues = computed(() => (props.discovered.tags?.length ?? 0) > 0)
+const hasAnyEntityTags = computed(() => (props.discovered.entityTags?.length ?? 0) > 0)
+const entityTagsCount = computed(() => props.discovered.entityTags?.length ?? 0)
 const tagsCount = computed(() => props.discovered.tags?.length ?? 0)
 const hasAnyVars = computed(() => varsCount.value > 0)
-const hasAnyTags = computed(() => tagsCount.value > 0)
 const hasFilteredVars = computed(
   () =>
     filteredFloatVars.value.length > 0 ||
@@ -1132,6 +1218,21 @@ const onTagValue = (name: string, raw: string | number) => {
   const value = Number(raw)
   if (!Number.isFinite(value)) return
   props.applyTagValue(name, value)
+}
+
+const onEntityTag = (name: string, present: boolean) => {
+  props.applyEntityTag(name, present)
+}
+
+const onAddEntityTag = () => {
+  const name = entityTagDraft.value.trim()
+  if (!name || name === 'None') return
+  props.applyEntityTag(name, true)
+  entityTagDraft.value = ''
+}
+
+const onRemoveEntityTag = (name: string) => {
+  props.removeEntityTag(name)
 }
 
 const onWrapperWeight = (name: string, raw: string | number) => {

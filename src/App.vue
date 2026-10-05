@@ -228,6 +228,7 @@
                 :bool-vars="simBoolVarDrafts"
                 :int-vars="simIntVarDrafts"
                 :tag-values="simTagValueDrafts"
+                :entity-tags="simEntityTagDrafts"
                 :wrapper-weights="simWrapperWeightDrafts"
                 :clip-stats="simClipStats"
                 :clip-names="simClipNames"
@@ -250,6 +251,8 @@
                 :apply-bool-var="simSetBoolVar"
                 :apply-int-var="simSetIntVar"
                 :apply-tag-value="simSetTagValue"
+                :apply-entity-tag="simSetEntityTag"
+                :remove-entity-tag="simRemoveEntityTag"
                 :apply-wrapper-weight="simSetWrapperWeight"
                 :resolve-feature-value="simDraftFeatureValue"
                 :resolve-bool-feature-value="simDraftBoolFeatureValue"
@@ -1038,6 +1041,7 @@ const {
   boolVarDrafts: simBoolVarDrafts,
   intVarDrafts: simIntVarDrafts,
   tagValueDrafts: simTagValueDrafts,
+  entityTagDrafts: simEntityTagDrafts,
   wrapperWeightDrafts: simWrapperWeightDrafts,
   toggle: simToggle,
   step: simStep,
@@ -1052,6 +1056,8 @@ const {
   setBoolVar: simSetBoolVar,
   setIntVar: simSetIntVar,
   setTagValue: simSetTagValue,
+  setEntityTag: simSetEntityTag,
+  removeEntityTag: simRemoveEntityTag,
   setWrapperWeight: simSetWrapperWeight,
   setFeature: simSetFeature,
   setBoolFeature: simSetBoolFeature,

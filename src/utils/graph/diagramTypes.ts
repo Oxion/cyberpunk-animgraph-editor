@@ -176,6 +176,11 @@ export interface AnimgraphProjectFile {
   clipSetup?: AnimClipSetupJson
   /** Compact anim database library — optional; shared across diagrams. */
   animDatabaseLibrary?: AnimDatabaseLibraryJson
+  /**
+   * Offline StaticSwitch entity tags (Component/Visual/Rig mock).
+   * name → present; shared across diagrams.
+   */
+  entityTags?: Record<string, boolean>
 }
 
 /** Default id suggestion for the first diagram; not a hard requirement. */

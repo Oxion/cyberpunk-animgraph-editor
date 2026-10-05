@@ -370,6 +370,8 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   events: string[]
   /** Data-flow tags (AnimNode_TagValue) */
   tags: string[]
+  /** StaticSwitch Component/Visual/Rig tags (offline entityTags mock) */
+  entityTags: string[]
 } {
   const features: Array<{ feature: string; property: string }> = []
   const vectorFeatures: Array<{ feature: string; property: string }> = []
@@ -383,6 +385,7 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   const wrappers = new Set<string>()
   const events = new Set<string>()
   const tags = new Set<string>()
+  const entityTags = new Set<string>()
 
   const addFeature = (feature: string, property: string, preferDisplay = false) => {
     if (!feature || !property || feature === 'None' || property === 'None') return
@@ -492,6 +495,15 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
       const name = readCName(d.tag)
       if (name && name !== 'None') tags.add(name)
     }
+    if (
+      t === 'animComponentTagCondition' ||
+      t === 'animVisualTagCondition' ||
+      t === 'animRigTagCondition'
+    ) {
+      const name =
+        readCName(d.animTag) || readCName(d.visualTag) || readCName(d.tag)
+      if (name && name !== 'None') entityTags.add(name)
+    }
     if (t === 'animAnimNode_MultiBoolToFloatValue') {
       const inputs = Array.isArray(d.inputsData) ? d.inputsData : []
       for (const raw of inputs) {
@@ -535,5 +547,6 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
     wrappers: [...wrappers].sort((a, b) => a.localeCompare(b)),
     events: [...events].sort((a, b) => a.localeCompare(b)),
     tags: [...tags].sort((a, b) => a.localeCompare(b)),
+    entityTags: [...entityTags].sort((a, b) => a.localeCompare(b)),
   }
 }

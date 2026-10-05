@@ -42,6 +42,11 @@ export class SimInputBoard {
    */
   tagValues = new Map<string, number>()
   /**
+   * Offline mock for StaticSwitch ComponentTag / VisualTag / RigTag
+   * (engine parentTags / visualTags / rig tags at Init).
+   */
+  entityTags = new Set<string>()
+  /**
    * Anim wrapper weights (SetAnimWrapperWeight).
    * Engine treats weight >= 0.5 as active for WrapperValue / conditions.
    */
@@ -112,8 +117,25 @@ export class SimInputBoard {
     this.boolVars.clear()
     this.intVars.clear()
     this.tagValues.clear()
+    this.entityTags.clear()
     this.wrapperWeights.clear()
     this.resetDynamics()
+  }
+
+  setEntityTag(name: string, present = true): void {
+    if (!name || name === 'None') return
+    if (present) this.entityTags.add(name)
+    else this.entityTags.delete(name)
+  }
+
+  hasEntityTag(name: string): boolean {
+    if (!name || name === 'None') return false
+    if (this.entityTags.has(name)) return true
+    const lower = name.toLowerCase()
+    for (const t of this.entityTags) {
+      if (t.toLowerCase() === lower) return true
+    }
+    return false
   }
 
   setWrapperWeight(name: string, value: number): void {

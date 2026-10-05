@@ -80,6 +80,8 @@ export function useAnimgraphSim() {
   const intVarDrafts = ref<Record<string, number>>({})
   /** AnimNode_TagValue data-flow tags */
   const tagValueDrafts = ref<Record<string, number>>({})
+  /** StaticSwitch entity tags (Component/Visual/Rig) — name → present */
+  const entityTagDrafts = ref<Record<string, boolean>>({})
   /** SetAnimWrapperWeight mock: name → weight (active if >= 0.5) */
   const wrapperWeightDrafts = ref<Record<string, number>>({})
 
@@ -129,6 +131,7 @@ export function useAnimgraphSim() {
   const discovered = computed(() => {
     void projectRef.value
     void clipLibraryRevision.value
+    void entityTagDrafts.value
     const features: { feature: string; property: string }[] = []
     const vectorFeatures: { feature: string; property: string }[] = []
     const boolFeatures: { feature: string; property: string }[] = []
@@ -138,6 +141,7 @@ export function useAnimgraphSim() {
     const wrappers: string[] = []
     const events: string[] = []
     const tags: string[] = []
+    const entityTags: string[] = []
     const featSeen = new Set<string>()
     const vecFeatSeen = new Set<string>()
     const boolFeatSeen = new Set<string>()
@@ -155,6 +159,7 @@ export function useAnimgraphSim() {
     const wrapSeen = new Set<string>()
     const eventSeen = new Set<string>()
     const tagSeen = new Set<string>()
+    const entityTagSeen = new Set<string>()
 
     for (const id of listDiagramIds.value) {
       const handles = getRenderData(id)?.handlesRegistry
@@ -184,7 +189,10 @@ export function useAnimgraphSim() {
       mergeUnique(wrappers, wrapSeen, fromGraph.wrappers)
       mergeUnique(events, eventSeen, fromGraph.events)
       mergeUnique(tags, tagSeen, fromGraph.tags)
+      mergeUnique(entityTags, entityTagSeen, fromGraph.entityTags)
     }
+    // Keep manually added entity tags in the list
+    mergeUnique(entityTags, entityTagSeen, Object.keys(entityTagDrafts.value))
 
     const fromClips = clipLibrary.value.eventNames()
     const fromSetupWrappers = clipLibrary.value.wrapperNames()
@@ -206,6 +214,7 @@ export function useAnimgraphSim() {
     wrappers.sort((a, b) => a.localeCompare(b))
     events.sort((a, b) => a.localeCompare(b))
     tags.sort((a, b) => a.localeCompare(b))
+    entityTags.sort((a, b) => a.localeCompare(b))
 
     return {
       features,
@@ -217,6 +226,7 @@ export function useAnimgraphSim() {
       wrappers,
       events,
       tags,
+      entityTags,
     }
   })
 
@@ -288,6 +298,10 @@ export function useAnimgraphSim() {
       const n = Number(val)
       if (!Number.isFinite(n)) continue
       board.value.setWrapperWeight(name, n)
+    }
+    board.value.entityTags.clear()
+    for (const [name, present] of Object.entries(entityTagDrafts.value)) {
+      if (present) board.value.setEntityTag(name, true)
     }
   }
 
@@ -431,6 +445,7 @@ export function useAnimgraphSim() {
     boolVarDrafts.value = {}
     intVarDrafts.value = {}
     tagValueDrafts.value = {}
+    // entityTagDrafts are project resources — kept across rebind (like clip/anim DB).
     wrapperWeightDrafts.value = {}
     snapshotsByDiagram.value = {}
     publish(0)
@@ -575,6 +590,30 @@ export function useAnimgraphSim() {
     if (!trimmed || !Number.isFinite(n)) return
     wrapperWeightDrafts.value = { ...wrapperWeightDrafts.value, [trimmed]: n }
     board.value.setWrapperWeight(trimmed, n)
+    publish(0)
+  }
+
+  const invalidateAllStaticSwitches = () => {
+    for (const r of runners.values()) r.invalidateStaticSwitches()
+  }
+
+  const setEntityTag = (name: string, present: boolean) => {
+    const trimmed = name.trim()
+    if (!trimmed || trimmed === 'None') return
+    entityTagDrafts.value = { ...entityTagDrafts.value, [trimmed]: present === true }
+    board.value.setEntityTag(trimmed, present === true)
+    invalidateAllStaticSwitches()
+    publish(0)
+  }
+
+  const removeEntityTag = (name: string) => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    const next = { ...entityTagDrafts.value }
+    delete next[trimmed]
+    entityTagDrafts.value = next
+    board.value.setEntityTag(trimmed, false)
+    invalidateAllStaticSwitches()
     publish(0)
   }
 
@@ -811,18 +850,24 @@ export function useAnimgraphSim() {
       animDbLibrary.value.size > 0
         ? animDatabaseLibraryToCompactJson(animDbLibrary.value)
         : undefined
-    if (clipSetup == null && animDatabaseLibrary == null) return null
-    return { clipSetup, animDatabaseLibrary }
+    const entityTags =
+      Object.keys(entityTagDrafts.value).length > 0
+        ? { ...entityTagDrafts.value }
+        : undefined
+    if (clipSetup == null && animDatabaseLibrary == null && entityTags == null) return null
+    return { clipSetup, animDatabaseLibrary, entityTags }
   }
 
   const applyProjectSimResources = (
     resources: {
       clipSetup?: AnimClipSetupJson
       animDatabaseLibrary?: AnimDatabaseLibraryJson
+      entityTags?: Record<string, boolean>
     } | null
   ) => {
     clipLibrary.value.clear()
     animDbLibrary.value.clear()
+    entityTagDrafts.value = {}
     if (resources?.clipSetup != null) {
       try {
         loadCompactClipLibraryJson(clipLibrary.value, resources.clipSetup, 'project')
@@ -841,12 +886,22 @@ export function useAnimgraphSim() {
         console.warn('Failed to restore project animDatabaseLibrary', err)
       }
     }
+    if (resources?.entityTags != null && typeof resources.entityTags === 'object') {
+      const next: Record<string, boolean> = {}
+      for (const [name, present] of Object.entries(resources.entityTags)) {
+        const trimmed = name.trim()
+        if (!trimmed || trimmed === 'None') continue
+        next[trimmed] = present === true
+      }
+      entityTagDrafts.value = next
+    }
     bumpClips()
     bumpAnimDb()
     // Keep board feature drafts; re-publish so runners see new libraries.
     for (const runner of runners.values()) {
       runner.setClipLibrary(clipLibrary.value)
       runner.setAnimDatabaseLibrary(animDbLibrary.value)
+      runner.invalidateStaticSwitches()
     }
     publish(0)
   }
@@ -871,6 +926,7 @@ export function useAnimgraphSim() {
     boolVarDrafts,
     intVarDrafts,
     tagValueDrafts,
+    entityTagDrafts,
     wrapperWeightDrafts,
     clipStats,
     clipNames,
@@ -913,6 +969,8 @@ export function useAnimgraphSim() {
     setBoolVar,
     setIntVar,
     setTagValue,
+    setEntityTag,
+    removeEntityTag,
     setWrapperWeight,
     setFeature,
     setBoolFeature,

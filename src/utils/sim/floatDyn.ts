@@ -11,6 +11,92 @@ export type FloatDynState = {
   velocity: number
 }
 
+/** AnimNode_FloatRandom instance buffer */
+export type FloatRandomState = {
+  value: number
+  timer: number
+}
+
+/** AnimNode_FloatTimeDependentSinus instance buffer */
+export type FloatSinusState = {
+  currentTime: number
+}
+
+export function createFloatRandomState(min: number, max: number): FloatRandomState {
+  return { value: randomInRange(min, max), timer: 0 }
+}
+
+export function createFloatSinusState(): FloatSinusState {
+  return { currentTime: 0 }
+}
+
+function randomInRange(min: number, max: number): number {
+  const lo = Math.min(min, max)
+  const hi = Math.max(min, max)
+  if (!(hi > lo)) return lo
+  return lo + Math.random() * (hi - lo)
+}
+
+/** AnimNode_FloatRandom::OnUpdate — re-roll when rand && timer >= cooldown. */
+export function stepFloatRandom(
+  state: FloatRandomState,
+  rand: boolean,
+  cooldown: number,
+  min: number,
+  max: number,
+  dt: number
+): void {
+  if (!rand) return
+  state.timer += Math.max(0, dt)
+  const cd = Math.max(0, cooldown)
+  if (state.timer >= cd) {
+    state.value = randomInRange(min, max)
+    state.timer = 0
+  }
+}
+
+/**
+ * AnimNode_FloatTimeDependentSinus — period = 2π / frequencyFactor.
+ * GetValue uses engine MSin (radians), not MathExpression deg-trig.
+ */
+export function stepFloatTimeDependentSinus(
+  state: FloatSinusState,
+  frequencyFactor: number,
+  dt: number
+): void {
+  const freq = frequencyFactor
+  if (!(freq > 0) || !Number.isFinite(freq)) {
+    state.currentTime = 0
+    return
+  }
+  const period = (Math.PI * 2) / freq
+  if (!(period > 0) || !Number.isFinite(period)) {
+    state.currentTime = 0
+    return
+  }
+  let t = state.currentTime + Math.max(0, dt)
+  t = t % period
+  if (t < 0) t += period
+  state.currentTime = t
+}
+
+export function evalFloatTimeDependentSinus(
+  state: FloatSinusState,
+  min: number,
+  max: number,
+  frequencyFactor: number,
+  phaseFactor: number
+): number {
+  const mid = (min + max) * 0.5
+  const span = max - min
+  const freq = frequencyFactor
+  if (!(freq > 0) || !Number.isFinite(freq)) return mid
+  const period = (Math.PI * 2) / freq
+  return (
+    Math.sin(state.currentTime * freq + phaseFactor * period) * (span * 0.5) + mid
+  )
+}
+
 export function wrapAroundRange(
   value: number,
   wrap: boolean,

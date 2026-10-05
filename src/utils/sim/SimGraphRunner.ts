@@ -2,9 +2,21 @@ import type { AnimgraphNode } from '../graph/animgraphTypes'
 import type { RenderData } from '../graph/diagramTypes'
 import { NodeDefinitionRegistry } from '../NodeDefinition'
 import { isAnimType } from '../animTypes/registry'
-import { normalizeCompareFunc, type CheckConditionCtx } from './checkCondition'
+import {
+  checkRuntimeCondition,
+  checkStaticCondition,
+  normalizeCompareFunc,
+  type CheckConditionCtx,
+} from './checkCondition'
 import { SimConditionDyn } from './conditionDyn'
-import { blend2WeightFromInput, blendByMaskDynamicBlendActive } from './engineParity'
+import {
+  blend2WeightFromInput,
+  blendByMaskDynamicBlendActive,
+  blendMultipleFirstInputActive,
+  blendMultipleSecondInputActive,
+  buildBlendMultipleSlots,
+  selectBlendMultipleInputs,
+} from './engineParity'
 import { evalAnimMathExpression, listMathExprIdents } from './evalAnimMathExpression'
 import {
   evalAnimMathExpressionVector,
@@ -14,14 +26,21 @@ import {
   type SimVec4,
 } from './evalAnimMathExpressionVector'
 import {
+  createFloatRandomState,
+  createFloatSinusState,
   evalCurveFloatData,
+  evalFloatTimeDependentSinus,
   readDampDefaults,
   readSpringDefaults,
   stepCriticalSpringDamp,
   stepDampFloat,
+  stepFloatRandom,
+  stepFloatTimeDependentSinus,
   stepSpringDamp,
   wrapAroundRange,
   type FloatDynState,
+  type FloatRandomState,
+  type FloatSinusState,
 } from './floatDyn'
 import {
   createSignalState,
@@ -177,6 +196,8 @@ type FloatEvalCtx = {
   dt: number
   floatDyn: Map<string, FloatDynState>
   floatUpdated: Set<string>
+  randomDyn: Map<string, FloatRandomState>
+  sinusDyn: Map<string, FloatSinusState>
   signalDyn: Map<string, SignalDynState>
   signalUpdated: Set<string>
   clipLibrary: ClipLibrary | null
@@ -189,6 +210,8 @@ type WalkCtx = FloatEvalCtx & {
   condCtx: CheckConditionCtx
   clipClocks: Map<string, ClipClockState>
   animDbLibrary: AnimDatabaseLibrary | null
+  /** Cached StaticSwitch Init results (handleId → useTrue). */
+  staticSwitchResults: Map<string, boolean>
   /** Frame meta for nested GraphSlot runners. */
   time: number
   playing: boolean
@@ -338,6 +361,57 @@ function tickClipClocksAlongPose(
     const index = switchIndexFromWeight(weight, Math.max(numInputs, inputs.length))
     const h = resolveHandle(handles, inputs[index])
     tickClipClocksAlongPose(h, ctx, clockVisited)
+    return
+  }
+
+  if (t === 'animAnimNode_BlendMultiple') {
+    const { slots, select } = resolveBlendMultipleSelection(
+      d as Record<string, unknown>,
+      ctx
+    )
+    if (
+      select.firstIndex >= 0 &&
+      blendMultipleFirstInputActive(select.alpha)
+    ) {
+      tickClipClocksAlongPose(
+        resolveHandle(handles, slots.refs[select.firstIndex]),
+        ctx,
+        clockVisited
+      )
+    }
+    if (
+      select.secondIndex >= 0 &&
+      blendMultipleSecondInputActive(select.alpha)
+    ) {
+      tickClipClocksAlongPose(
+        resolveHandle(handles, slots.refs[select.secondIndex]),
+        ctx,
+        clockVisited
+      )
+    }
+    return
+  }
+
+  if (t === 'animAnimNode_StaticSwitch' || t === 'animAnimNode_RuntimeSwitch') {
+    const cond = resolveHandle(handles, d.condition)
+    let useTrue: boolean
+    if (t === 'animAnimNode_StaticSwitch') {
+      useTrue =
+        ctx.staticSwitchResults?.get(node.HandleId) ??
+        checkStaticCondition(cond, ctx.board, {
+          clipLibrary: ctx.clipLibrary,
+          isWrapperActive: (n) => ctx.board.isWrapperActive(n),
+        })
+    } else {
+      useTrue = checkRuntimeCondition(cond, ctx.board, {
+        clipLibrary: ctx.clipLibrary,
+        isWrapperActive: (n) => ctx.board.isWrapperActive(n),
+      })
+    }
+    const branch = useTrue
+      ? resolveHandle(handles, d.True ?? d.true)
+      : resolveHandle(handles, d.False ?? d.false)
+    tickClipClocksAlongPose(branch, ctx, clockVisited)
     return
   }
 
@@ -967,13 +1041,11 @@ function readFloatSource(
   }
 
   if (t === 'animAnimNode_FloatRandom') {
-    const min = readNumber(d.min, 0)
-    const max = readNumber(d.max, 1)
-    return (min + max) * 0.5
+    return evalFloatRandomNode(source, fctx)
   }
 
   if (t === 'animAnimNode_FloatTimeDependentSinus') {
-    return 0
+    return evalFloatSinusNode(source, fctx)
   }
 
   if (t === 'animAnimNode_EventValue') {
@@ -1151,6 +1223,87 @@ function switchIndexFromWeight(weight: number, numInputs: number): number {
   if (weight >= 0 && weight <= maxIndex) return Math.round(weight)
   if (weight > maxIndex) return maxIndex
   return 0
+}
+
+function evalFloatRandomNode(source: AnimgraphNode, fctx: FloatEvalCtx): number {
+  const id = source.HandleId
+  if (fctx.floatUpdated.has(id)) {
+    return fctx.randomDyn.get(id)?.value ?? 0
+  }
+  const d = source.Data ?? {}
+  const min = readNumber(d.min, 0)
+  const max = readNumber(d.max, 1)
+  const rand = d.rand === undefined ? true : readBool(d.rand)
+  const cooldown = readNumber(d.cooldown, 1)
+  let state = fctx.randomDyn.get(id)
+  if (!state) {
+    state = createFloatRandomState(min, max)
+    fctx.randomDyn.set(id, state)
+  }
+  stepFloatRandom(state, rand, cooldown, min, max, fctx.dt)
+  fctx.floatUpdated.add(id)
+  return state.value
+}
+
+function evalFloatSinusNode(source: AnimgraphNode, fctx: FloatEvalCtx): number {
+  const id = source.HandleId
+  if (fctx.floatUpdated.has(id)) {
+    const existing = fctx.sinusDyn.get(id)
+    if (!existing) return 0
+    const d = source.Data ?? {}
+    return evalFloatTimeDependentSinus(
+      existing,
+      readNumber(d.min, 0),
+      readNumber(d.max, 1),
+      readNumber(d.frequencyFactor, 1),
+      readNumber(d.phaseFactor, 0)
+    )
+  }
+  const d = source.Data ?? {}
+  let state = fctx.sinusDyn.get(id)
+  if (!state) {
+    state = createFloatSinusState()
+    fctx.sinusDyn.set(id, state)
+  }
+  const freq = readNumber(d.frequencyFactor, 1)
+  stepFloatTimeDependentSinus(state, freq, fctx.dt)
+  fctx.floatUpdated.add(id)
+  return evalFloatTimeDependentSinus(
+    state,
+    readNumber(d.min, 0),
+    readNumber(d.max, 1),
+    freq,
+    readNumber(d.phaseFactor, 0)
+  )
+}
+
+function resolveBlendMultipleSelection(
+  d: Record<string, unknown>,
+  ctx: FloatEvalCtx
+): {
+  slots: { values: number[]; refs: unknown[] }
+  select: ReturnType<typeof selectBlendMultipleInputs>
+  inputWeight: number
+} {
+  const slots = buildBlendMultipleSlots(
+    d.inputValues,
+    d.sortedInputValues,
+    Array.isArray(d.inputNodes) ? d.inputNodes : []
+  )
+  const weightNode = resolveHandle(ctx.handles, d.weightNode ?? d.input)
+  const minWeight = readNumber(d.minWeight, 0)
+  const maxWeight = readNumber(d.maxWeight, 1)
+  const inputWeight = weightNode
+    ? readFloatSource(weightNode, ctx, minWeight)
+    : minWeight
+  const select = selectBlendMultipleInputs(
+    inputWeight,
+    slots.values,
+    minWeight,
+    maxWeight,
+    readBool(d.radialBlending)
+  )
+  return { slots, select, inputWeight }
 }
 
 function findRootHandle(
@@ -1411,16 +1564,22 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
 
   if (t === 'animAnimNode_BlendMultiple') {
     const weightNode = resolveHandle(handles, d.weightNode ?? d.input)
-    let weight = 0
-    if (weightNode) {
-      updateFromNode(weightNode, ctx)
-      weight = readFloatSource(weightNode, ctx, readNumber(d.value, 0))
-    }
-    markActive(nodes, node.HandleId, { weight, alpha: weight })
-    const inputs = Array.isArray(d.inputNodes) ? d.inputNodes : []
-    for (const ref of inputs) {
-      updateFromNode(resolveHandle(handles, ref), ctx)
-    }
+    if (weightNode) updateFromNode(weightNode, ctx)
+    const { slots, select, inputWeight } = resolveBlendMultipleSelection(
+      d as Record<string, unknown>,
+      ctx
+    )
+    markActive(nodes, node.HandleId, { weight: inputWeight, alpha: select.alpha })
+    slots.refs.forEach((ref, i) => {
+      const h = resolveHandle(handles, ref)
+      if (!h) return
+      const activeFirst =
+        i === select.firstIndex && blendMultipleFirstInputActive(select.alpha)
+      const activeSecond =
+        i === select.secondIndex && blendMultipleSecondInputActive(select.alpha)
+      if (activeFirst || activeSecond) updateFromNode(h, ctx)
+      else markInactiveBranch(h, handles, nodes, new Set(), ctx.visited)
+    })
     return
   }
 
@@ -1445,13 +1604,22 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
-  if (t === 'animAnimNode_StaticSwitch') {
-    // Condition stub: treat True branch when board bool / feature forces it
+  if (t === 'animAnimNode_StaticSwitch' || t === 'animAnimNode_RuntimeSwitch') {
     const cond = resolveHandle(handles, d.condition)
-    let useTrue = false
-    if (cond) {
-      markActive(nodes, cond.HandleId)
-      useTrue = readBool(cond.Data?.value) || board.boolVars.get(String(cond.HandleId)) === true
+    if (cond) markActive(nodes, cond.HandleId)
+    let useTrue: boolean
+    if (t === 'animAnimNode_StaticSwitch') {
+      useTrue =
+        ctx.staticSwitchResults?.get(node.HandleId) ??
+        checkStaticCondition(cond, board, {
+          clipLibrary: ctx.clipLibrary,
+          isWrapperActive: (n) => board.isWrapperActive(n),
+        })
+    } else {
+      useTrue = checkRuntimeCondition(cond, board, {
+        clipLibrary: ctx.clipLibrary,
+        isWrapperActive: (n) => board.isWrapperActive(n),
+      })
     }
     markActive(nodes, node.HandleId, { weight: useTrue ? 1 : 0, alpha: 1 })
     const trueIn = resolveHandle(handles, d.True ?? d.true)
@@ -1528,6 +1696,8 @@ export class SimGraphRunner {
   private prevNodes: Record<string, SimNodeState> | null = null
   /** Per-handle damp / spring / latch state (cleared on bind/reset / deactivate). */
   private floatDyn = new Map<string, FloatDynState>()
+  private randomDyn = new Map<string, FloatRandomState>()
+  private sinusDyn = new Map<string, FloatSinusState>()
   /** Per-handle Signal latch / blend (cleared like floatDyn). */
   private signalDyn = new Map<string, SignalDynState>()
   /** Anim setup / clip index for HasAnimation + SkAnim clock. */
@@ -1541,9 +1711,18 @@ export class SimGraphRunner {
    * Not on SimInputBoard — HandleIds collide across nested graphs.
    */
   private conditionDyn = new SimConditionDyn()
+  /** StaticSwitch Init cache — recomputed when dirty (bind/reset/clipLibrary). */
+  private staticSwitchResults = new Map<string, boolean>()
+  private staticSwitchDirty = true
 
   setClipLibrary(library: ClipLibrary | null): void {
     this.clipLibrary = library
+    this.staticSwitchDirty = true
+  }
+
+  /** Force StaticSwitch Init re-eval (entity tags / HasAnimation context changed). */
+  invalidateStaticSwitches(): void {
+    this.staticSwitchDirty = true
   }
 
   setAnimDatabaseLibrary(library: AnimDatabaseLibrary | null): void {
@@ -1555,9 +1734,13 @@ export class SimGraphRunner {
     this.originalAnimgraph = graphData?.originalAnimgraph ?? null
     this.runtimes.clear()
     this.floatDyn.clear()
+    this.randomDyn.clear()
+    this.sinusDyn.clear()
     this.signalDyn.clear()
     this.clipClocks.clear()
     this.conditionDyn.clear()
+    this.staticSwitchResults.clear()
+    this.staticSwitchDirty = true
     this.prevNodes = null
     for (const sm of findStateMachineHandles(this.handles)) {
       const def = readNumber(sm.Data?.defaultStateIndex, 0)
@@ -1568,15 +1751,35 @@ export class SimGraphRunner {
   reset(): void {
     this.prevNodes = null
     this.floatDyn.clear()
+    this.randomDyn.clear()
+    this.sinusDyn.clear()
     this.signalDyn.clear()
     this.clipClocks.clear()
     this.conditionDyn.clear()
+    this.staticSwitchResults.clear()
+    this.staticSwitchDirty = true
     for (const sm of findStateMachineHandles(this.handles)) {
       const rt = this.runtimes.get(sm.HandleId)
       const def = readNumber(sm.Data?.defaultStateIndex, 0)
       if (rt) rt.reset(def)
       else this.runtimes.set(sm.HandleId, new SimStateMachineRuntime(sm.HandleId, def))
     }
+  }
+
+  private recomputeStaticSwitches(board: SimInputBoard): void {
+    this.staticSwitchResults.clear()
+    for (const h of this.handles.values()) {
+      if (handleType(h) !== 'animAnimNode_StaticSwitch') continue
+      const cond = resolveHandle(this.handles, h.Data?.condition)
+      this.staticSwitchResults.set(
+        h.HandleId,
+        checkStaticCondition(cond, board, {
+          clipLibrary: this.clipLibrary,
+          isWrapperActive: (n) => board.isWrapperActive(n),
+        })
+      )
+    }
+    this.staticSwitchDirty = false
   }
 
   private buildCondCtx(board: SimInputBoard): CheckConditionCtx {
@@ -1601,6 +1804,7 @@ export class SimGraphRunner {
     const nodes: Record<string, SimNodeState> = {}
     this.conditionDyn.beginStep()
     beginClipClockStep(this.clipClocks)
+    if (this.staticSwitchDirty) this.recomputeStaticSwitches(board)
     const floatUpdated = new Set<string>()
     const signalUpdated = new Set<string>()
     const condCtx = { ...this.buildCondCtx(board), dt }
@@ -1611,6 +1815,8 @@ export class SimGraphRunner {
       dt,
       floatDyn: this.floatDyn,
       floatUpdated,
+      randomDyn: this.randomDyn,
+      sinusDyn: this.sinusDyn,
       signalDyn: this.signalDyn,
       signalUpdated,
       runtimes: this.runtimes,
@@ -1618,6 +1824,7 @@ export class SimGraphRunner {
       clipLibrary: this.clipLibrary,
       clipClocks: this.clipClocks,
       animDbLibrary: this.animDbLibrary,
+      staticSwitchResults: this.staticSwitchResults,
       time,
       playing,
       speed,
@@ -1646,6 +1853,12 @@ export class SimGraphRunner {
     // Drop dyn state for nodes not updated this frame (deactivated → re-init on reactivate)
     for (const id of [...this.floatDyn.keys()]) {
       if (!floatUpdated.has(id)) this.floatDyn.delete(id)
+    }
+    for (const id of [...this.randomDyn.keys()]) {
+      if (!floatUpdated.has(id)) this.randomDyn.delete(id)
+    }
+    for (const id of [...this.sinusDyn.keys()]) {
+      if (!floatUpdated.has(id)) this.sinusDyn.delete(id)
     }
     for (const id of [...this.signalDyn.keys()]) {
       if (!signalUpdated.has(id)) this.signalDyn.delete(id)
