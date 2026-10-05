@@ -8,6 +8,7 @@ import type { LayoutDebugContainer } from './DirectChildrenLayout'
 import type { AnimgraphData, AnimgraphNode } from './animgraphTypes'
 import type { AnimClipSetupJson } from '../sim/clipLibrary'
 import type { AnimDatabaseLibraryJson } from '../sim/animDatabase'
+import type { RigLibraryJson } from '../sim/rigResource'
 
 /** Roots: world/stage; children: local offset to parent. */
 export interface RenderNode {
@@ -181,6 +182,8 @@ export interface AnimgraphProjectFile {
    * name → present; shared across diagrams.
    */
   entityTags?: Record<string, boolean>
+  /** Offline Sample rig palette (one active). */
+  rigLibrary?: RigLibraryJson
 }
 
 /** Default id suggestion for the first diagram; not a hard requirement. */

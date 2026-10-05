@@ -13,6 +13,8 @@ export type ClipEvent = {
   value?: number
   /** Raw $type, e.g. animAnimEvent_Sound */
   type?: string
+  /** Present for animAnimEvent_FootPhase */
+  footPhase?: string
 }
 
 export type ClipMeta = {
@@ -179,10 +181,18 @@ export class ClipLibrary {
     name: string,
     isWrapperActive: (name: string) => boolean
   ): ClipMeta | undefined {
+    return this.resolveClipEntry(name, isWrapperActive)?.clip
+  }
+
+  /** Winning setup entry id + clip (same order as resolveClip). */
+  resolveClipEntry(
+    name: string,
+    isWrapperActive: (name: string) => boolean
+  ): { entryId: string; clip: ClipMeta } | undefined {
     if (!name || name === 'None') return undefined
     for (const entry of this.orderedActiveEntries(isWrapperActive)) {
       const clip = findClipInMap(entry.clips, name)
-      if (clip) return clip
+      if (clip) return { entryId: entry.id, clip }
     }
     return undefined
   }

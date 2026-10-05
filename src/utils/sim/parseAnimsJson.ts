@@ -4,6 +4,7 @@
  */
 
 import { readCName, readNumber } from './simDataUtils'
+import { normalizeFootPhase } from './footPhase'
 import {
   ClipLibrary,
   DEFAULT_ANIM_FPS,
@@ -80,7 +81,11 @@ function parseEvents(eventsContainer: unknown, fps: number): ClipEvent[] {
     const valueRaw = e.value
     const value =
       typeof valueRaw === 'number' && Number.isFinite(valueRaw) ? valueRaw : undefined
-    out.push({ name, time, duration, value, type })
+    const footPhase =
+      normalizeFootPhase(e.phase) ??
+      normalizeFootPhase(e.footPhase) ??
+      undefined
+    out.push({ name, time, duration, value, type, footPhase })
   }
   out.sort((a, b) => a.time - b.time || a.name.localeCompare(b.name))
   return out

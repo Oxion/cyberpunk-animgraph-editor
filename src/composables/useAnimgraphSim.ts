@@ -37,6 +37,8 @@ import { SimInputBoard, type SimVec4 } from '../utils/sim/SimInputBoard'
 import { ZERO_VEC4 } from '../utils/sim/evalAnimMathExpressionVector'
 import { collectDiscoveredInputs } from '../utils/sim/SimStateMachine'
 import { emptySimSnapshot, type SimSnapshot } from '../utils/sim/simTypes'
+import { RigLibrary, type RigLibraryJson, type RigEntryView } from '../utils/sim/rigResource'
+import { ClipPoseLibrary, type ClipPoseSetView } from '../utils/sim/clipPoseLibrary'
 
 function resolveRootDiagramId(ids: string[]): string | null {
   if (!ids.length) return null
@@ -60,9 +62,13 @@ export function useAnimgraphSim() {
   const runners = new Map<string, SimGraphRunner>()
   const clipLibrary = shallowRef(new ClipLibrary())
   const animDbLibrary = shallowRef(new AnimDatabaseLibrary())
+  const rigLibrary = shallowRef(new RigLibrary())
+  const clipPoseLibrary = shallowRef(new ClipPoseLibrary())
   /** Bump to refresh clip UI after library mutates in place. */
   const clipLibraryRevision = ref(0)
   const animDbRevision = ref(0)
+  const rigRevision = ref(0)
+  const clipPoseRevision = ref(0)
   /** Per-diagram overlay snapshots from last publish. */
   const snapshotsByDiagram = shallowRef<Record<string, SimSnapshot>>({})
   // Shallow: publish replaces the whole object; avoid deep-walking nodes each frame.
@@ -98,6 +104,22 @@ export function useAnimgraphSim() {
     animDbRevision.value++
   }
 
+  const bumpRigs = () => {
+    rigRevision.value++
+  }
+
+  const bumpClipPose = () => {
+    clipPoseRevision.value++
+  }
+
+  const syncSampleResourcesToRunners = () => {
+    const rig = rigLibrary.value.getActive()
+    for (const runner of runners.values()) {
+      runner.setClipPoseLibrary(clipPoseLibrary.value)
+      runner.setActiveRig(rig)
+    }
+  }
+
   const isWrapperActive = (name: string) => {
     const w = wrapperWeightDrafts.value[name]
     if (w !== undefined) return w >= SimInputBoard.WRAPPER_ACTIVE_THRESHOLD
@@ -112,6 +134,8 @@ export function useAnimgraphSim() {
     }
     r.setClipLibrary(clipLibrary.value)
     r.setAnimDatabaseLibrary(animDbLibrary.value)
+    r.setClipPoseLibrary(clipPoseLibrary.value)
+    r.setActiveRig(rigLibrary.value.getActive())
     return r
   }
 
@@ -255,6 +279,39 @@ export function useAnimgraphSim() {
     void animDbRevision.value
     return animDbLibrary.value.list()
   })
+
+  const rigEntries = computed((): RigEntryView[] => {
+    void rigRevision.value
+    return rigLibrary.value.list()
+  })
+
+  const activeRigBones = computed((): string[] => {
+    void rigRevision.value
+    return rigLibrary.value.getActive()?.boneNames.slice() ?? []
+  })
+
+  const activeRigParts = computed((): string[] => {
+    void rigRevision.value
+    return rigLibrary.value.getActive()?.parts.map((p) => p.name) ?? []
+  })
+
+  const clipPoseSets = computed((): ClipPoseSetView[] => {
+    void clipPoseRevision.value
+    return clipPoseLibrary.value.listSets()
+  })
+
+  const getClipGlbInfo = (
+    clipName: string,
+    setupEntryId?: string | null
+  ): { name: string; duration: number } | null => {
+    void clipPoseRevision.value
+    return clipPoseLibrary.value.getAnimInfo(clipName, setupEntryId)
+  }
+
+  const listGlbAnimNames = (setupEntryId: string): string[] => {
+    void clipPoseRevision.value
+    return clipPoseLibrary.value.listAnimNames(setupEntryId)
+  }
 
   const featureKey = (feature: string, property: string) => `${feature}\0${property}`
 
@@ -423,6 +480,8 @@ export function useAnimgraphSim() {
       runner.bind(data)
       runner.setClipLibrary(clipLibrary.value)
       runner.setAnimDatabaseLibrary(animDbLibrary.value)
+      runner.setClipPoseLibrary(clipPoseLibrary.value)
+      runner.setActiveRig(rigLibrary.value.getActive())
     }
     board.value.clearAll()
     clock.value.reset()
@@ -761,7 +820,80 @@ export function useAnimgraphSim() {
 
   const clearClipLibrary = () => {
     clipLibrary.value.clear()
+    clipPoseLibrary.value.clear()
     bumpClips()
+    bumpClipPose()
+    syncSampleResourcesToRunners()
+    publish(0)
+  }
+
+  const loadAnimsetGlb = async (
+    buffer: ArrayBuffer,
+    sourceLabel: string,
+    setupEntryId?: string | null
+  ): Promise<number> => {
+    if (!setupEntryId) {
+      console.warn('loadAnimsetGlb requires setupEntryId')
+      return 0
+    }
+    const { animCount } = clipPoseLibrary.value.loadGlb(
+      buffer,
+      sourceLabel,
+      setupEntryId
+    )
+    bumpClipPose()
+    syncSampleResourcesToRunners()
+    publish(0)
+    return animCount
+  }
+
+  const clearAnimsetGlb = (setupEntryId: string) => {
+    if (!clipPoseLibrary.value.removeBySetupEntry(setupEntryId)) return
+    bumpClipPose()
+    syncSampleResourcesToRunners()
+    publish(0)
+  }
+
+  const clearClipPoseLibrary = () => {
+    clipPoseLibrary.value.clear()
+    bumpClipPose()
+    syncSampleResourcesToRunners()
+    publish(0)
+  }
+
+  const loadRigJson = (json: unknown, sourceLabel?: string): string => {
+    const id = rigLibrary.value.addFromJson(json, sourceLabel || 'rig')
+    bumpRigs()
+    syncSampleResourcesToRunners()
+    publish(0)
+    return id
+  }
+
+  const removeRig = (id: string) => {
+    if (!rigLibrary.value.remove(id)) return
+    bumpRigs()
+    syncSampleResourcesToRunners()
+    publish(0)
+  }
+
+  const setActiveRig = (id: string | null) => {
+    if (!rigLibrary.value.setActive(id)) return
+    bumpRigs()
+    syncSampleResourcesToRunners()
+    publish(0)
+  }
+
+  const clearRigLibrary = () => {
+    rigLibrary.value.clear()
+    bumpRigs()
+    syncSampleResourcesToRunners()
+    publish(0)
+  }
+
+  const setPoseInspectBones = (names: string[]) => {
+    for (const runner of runners.values()) {
+      runner.poseInspectBones = names.map((n) => n.trim()).filter(Boolean)
+    }
     publish(0)
   }
 
@@ -813,8 +945,11 @@ export function useAnimgraphSim() {
   }
 
   const removeSetupEntry = (id: string) => {
+    clipPoseLibrary.value.removeBySetupEntry(id)
     if (!clipLibrary.value.removeEntry(id)) return
     bumpClips()
+    bumpClipPose()
+    syncSampleResourcesToRunners()
     publish(0)
   }
 
@@ -854,8 +989,17 @@ export function useAnimgraphSim() {
       Object.keys(entityTagDrafts.value).length > 0
         ? { ...entityTagDrafts.value }
         : undefined
-    if (clipSetup == null && animDatabaseLibrary == null && entityTags == null) return null
-    return { clipSetup, animDatabaseLibrary, entityTags }
+    const rigLibraryJson =
+      rigLibrary.value.size > 0 ? rigLibrary.value.toJson() : undefined
+    if (
+      clipSetup == null &&
+      animDatabaseLibrary == null &&
+      entityTags == null &&
+      (rigLibraryJson == null || !(rigLibraryJson.entries?.length > 0))
+    ) {
+      return null
+    }
+    return { clipSetup, animDatabaseLibrary, entityTags, rigLibrary: rigLibraryJson }
   }
 
   const applyProjectSimResources = (
@@ -863,10 +1007,13 @@ export function useAnimgraphSim() {
       clipSetup?: AnimClipSetupJson
       animDatabaseLibrary?: AnimDatabaseLibraryJson
       entityTags?: Record<string, boolean>
+      rigLibrary?: RigLibraryJson
     } | null
   ) => {
     clipLibrary.value.clear()
     animDbLibrary.value.clear()
+    clipPoseLibrary.value.clear()
+    rigLibrary.value.clear()
     entityTagDrafts.value = {}
     if (resources?.clipSetup != null) {
       try {
@@ -895,12 +1042,22 @@ export function useAnimgraphSim() {
       }
       entityTagDrafts.value = next
     }
+    if (resources?.rigLibrary != null) {
+      try {
+        rigLibrary.value.loadFromJson(resources.rigLibrary)
+      } catch (err) {
+        console.warn('Failed to restore project rigLibrary', err)
+      }
+    }
     bumpClips()
     bumpAnimDb()
-    // Keep board feature drafts; re-publish so runners see new libraries.
+    bumpRigs()
+    bumpClipPose()
     for (const runner of runners.values()) {
       runner.setClipLibrary(clipLibrary.value)
       runner.setAnimDatabaseLibrary(animDbLibrary.value)
+      runner.setClipPoseLibrary(clipPoseLibrary.value)
+      runner.setActiveRig(rigLibrary.value.getActive())
       runner.invalidateStaticSwitches()
     }
     publish(0)
@@ -933,6 +1090,12 @@ export function useAnimgraphSim() {
     setupEntries,
     animDbStats,
     animDatabases,
+    rigEntries,
+    activeRigBones,
+    activeRigParts,
+    clipPoseSets,
+    getClipGlbInfo,
+    listGlbAnimNames,
     draftFeatureValue,
     draftVectorFeatureValue,
     draftBoolFeatureValue,
@@ -941,8 +1104,16 @@ export function useAnimgraphSim() {
     isClipActive,
     listClipSets,
     loadAnimsetJson,
+    loadAnimsetGlb,
+    clearAnimsetGlb,
     loadClipLibraryJson,
     clearClipLibrary,
+    clearClipPoseLibrary,
+    loadRigJson,
+    removeRig,
+    setActiveRig,
+    clearRigLibrary,
+    setPoseInspectBones,
     loadAnimDatabaseJson,
     loadAnimDatabaseLibraryJson,
     clearAnimDatabaseLibrary,

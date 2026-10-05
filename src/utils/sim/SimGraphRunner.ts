@@ -73,6 +73,10 @@ import {
   resolveHandle,
 } from './simDataUtils'
 import type { ClipLibrary } from './clipLibrary'
+import type { ClipPoseLibrary } from './clipPoseLibrary'
+import type { RigEntry } from './rigResource'
+import { readBoneTrs, type Pose } from './pose'
+import { allocSampleScratch, sampleGraphPose } from './sampleWalk'
 import type { SimInputBoard } from './SimInputBoard'
 import {
   findStateMachineHandles,
@@ -1673,7 +1677,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const masksCount = Array.isArray(d.masks) ? d.masks.length : 0
     const blendActive = blendByMaskDynamicBlendActive(weight, maskIndex, masksCount)
 
-    markActive(nodes, node.HandleId, { weight, alpha: 1 })
+    markActive(nodes, node.HandleId, { weight, alpha: maskIndex })
     const base = resolveHandle(handles, d.base)
     const blend = resolveHandle(handles, d.blend)
     if (base) updateFromNode(base, ctx)
@@ -1702,6 +1706,15 @@ export class SimGraphRunner {
   private signalDyn = new Map<string, SignalDynState>()
   /** Anim setup / clip index for HasAnimation + SkAnim clock. */
   private clipLibrary: ClipLibrary | null = null
+  /** Glb pose clips for Sample. */
+  private clipPoseLibrary: ClipPoseLibrary | null = null
+  /** Active rig (from RigLibrary.getActive). */
+  private activeRig: RigEntry | null = null
+  /** Bone names to copy into poseStats.inspect each frame. */
+  poseInspectBones: string[] = []
+  private sampleOut: Pose | null = null
+  private sampleScratchA: Pose | null = null
+  private sampleScratchB: Pose | null = null
   /** Loaded motion databases for AnimDatabase nodes. */
   private animDbLibrary: AnimDatabaseLibrary | null = null
   /** Per-SkAnim playback clocks */
@@ -1718,6 +1731,29 @@ export class SimGraphRunner {
   setClipLibrary(library: ClipLibrary | null): void {
     this.clipLibrary = library
     this.staticSwitchDirty = true
+  }
+
+  setClipPoseLibrary(library: ClipPoseLibrary | null): void {
+    this.clipPoseLibrary = library
+  }
+
+  setActiveRig(rig: RigEntry | null): void {
+    this.activeRig = rig
+    if (!rig) {
+      this.sampleOut = null
+      this.sampleScratchA = null
+      this.sampleScratchB = null
+      return
+    }
+    const buf = allocSampleScratch(rig)
+    this.sampleOut = buf.out
+    this.sampleScratchA = buf.scratchA
+    this.sampleScratchB = buf.scratchB
+  }
+
+  /** Latest sampled pose (pooled) — not for reactive Vue binding. */
+  getSampledPose(): Pose | null {
+    return this.sampleOut
   }
 
   /** Force StaticSwitch Init re-eval (entity tags / HasAnimation context changed). */
@@ -1897,6 +1933,46 @@ export class SimGraphRunner {
     const nodeDelta = this.prevNodes ? diffSimNodeStates(this.prevNodes, nodes) : null
     this.prevNodes = nodes
 
+    let poseStats: SimSnapshot['poseStats'] = null
+    const rig = this.activeRig
+    if (rig && this.clipPoseLibrary && this.sampleOut && this.sampleScratchA && this.sampleScratchB) {
+      const result = sampleGraphPose(root, {
+        handles: this.handles,
+        board,
+        nodes,
+        clipClocks: this.clipClocks,
+        clipPoseLibrary: this.clipPoseLibrary,
+        clipLibrary: this.clipLibrary,
+        rig,
+        staticSwitchResults: this.staticSwitchResults,
+        scratchA: this.sampleScratchA,
+        scratchB: this.sampleScratchB,
+      }, this.sampleOut)
+      const inspect: NonNullable<SimSnapshot['poseStats']>['inspect'] = {}
+      for (const boneName of this.poseInspectBones) {
+        const idx = rig.boneIndexByName.get(boneName.toLowerCase())
+        if (idx === undefined) continue
+        const trs = readBoneTrs(this.sampleOut, idx)
+        if (trs) inspect[boneName] = trs
+      }
+      poseStats = {
+        ok: result.ok,
+        reason: result.reason,
+        boneCount: rig.boneNames.length,
+        trackCount: rig.trackNames.length,
+        sampleMs: result.sampleMs,
+        inspect: Object.keys(inspect).length ? inspect : undefined,
+      }
+    } else {
+      poseStats = {
+        ok: false,
+        reason: !rig ? 'no-rig' : !this.clipPoseLibrary ? 'no-glb' : 'no-buffers',
+        boneCount: rig?.boneNames.length ?? 0,
+        trackCount: rig?.trackNames.length ?? 0,
+        sampleMs: 0,
+      }
+    }
+
     return {
       time,
       playing,
@@ -1908,6 +1984,7 @@ export class SimGraphRunner {
         rootHandleId: root?.HandleId ?? null,
         clips,
       },
+      poseStats,
     }
   }
 

@@ -55,6 +55,7 @@ export type GraphDocumentIoHost = {
     clipSetup?: AnimClipSetupJson
     animDatabaseLibrary?: AnimDatabaseLibraryJson
     entityTags?: Record<string, boolean>
+    rigLibrary?: import('../utils/sim/rigResource').RigLibraryJson
   } | null
   /** Restore / clear sim resources after project load. */
   applyProjectSimResources?: (
@@ -62,6 +63,7 @@ export type GraphDocumentIoHost = {
       clipSetup?: AnimClipSetupJson
       animDatabaseLibrary?: AnimDatabaseLibraryJson
       entityTags?: Record<string, boolean>
+      rigLibrary?: import('../utils/sim/rigResource').RigLibraryJson
     } | null
   ) => void
 }
@@ -203,6 +205,7 @@ export const loadProjectFile = async (data: AnimgraphProjectFile) => {
     clipSetup: data.clipSetup,
     animDatabaseLibrary: data.animDatabaseLibrary,
     entityTags: data.entityTags,
+    rigLibrary: data.rigLibrary,
   })
   presentReplacedProject(data.mainDiagramId)
   clearProjectDirty()
@@ -520,6 +523,9 @@ export const createProjectExportData = (): AnimgraphProjectFile | null => {
   if (sim?.animDatabaseLibrary != null) out.animDatabaseLibrary = sim.animDatabaseLibrary
   if (sim?.entityTags != null && Object.keys(sim.entityTags).length > 0) {
     out.entityTags = sim.entityTags
+  }
+  if (sim?.rigLibrary != null && (sim.rigLibrary.entries?.length ?? 0) > 0) {
+    out.rigLibrary = sim.rigLibrary
   }
   return out
 }

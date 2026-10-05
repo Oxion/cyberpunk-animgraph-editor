@@ -59,6 +59,8 @@ export class SimInputBoard {
   animEventPhases = new Map<string, Set<SimAnimEventPhase>>()
   /** Valued timeline events this frame (name → last value if multiple) */
   animEventValues = new Map<string, number>()
+  /** FootPhase timeline events this frame */
+  footPhases = new Set<string>()
   /**
    * Previous frame's timeline events — AnimEvent conditions read this
    * (animStateTransitionCondition_AnimEvent.cpp → m_lastFrameFiredEvents).
@@ -68,6 +70,8 @@ export class SimInputBoard {
   lastFrameAnimEventPhases = new Map<string, Set<SimAnimEventPhase>>()
   /** Previous frame valued events — AnimNode_EventValue */
   lastFrameAnimEventValues = new Map<string, number>()
+  /** Previous frame FootPhase events */
+  lastFrameFootPhases = new Set<string>()
   /**
    * Previous frame's anim-end names — Signal / TriggerBranch read these
    * (animNode_Signal.cpp → m_lastFrameAnimEndEvents).
@@ -99,9 +103,11 @@ export class SimInputBoard {
     this.animEvents.clear()
     this.animEventPhases.clear()
     this.animEventValues.clear()
+    this.footPhases.clear()
     this.lastFrameAnimEvents.clear()
     this.lastFrameAnimEventPhases.clear()
     this.lastFrameAnimEventValues.clear()
+    this.lastFrameFootPhases.clear()
     this.animEndEvents.clear()
     this.lastFrameAnimEndEvents.clear()
     this.anyAnimEnd = false
@@ -231,7 +237,8 @@ export class SimInputBoard {
   fireAnimEvent(
     name: string,
     value?: number,
-    phase: SimAnimEventPhase = 'tick'
+    phase: SimAnimEventPhase = 'tick',
+    footPhase?: string
   ): void {
     if (!name || name === 'None') return
     this.animEvents.add(name)
@@ -244,6 +251,25 @@ export class SimInputBoard {
     if (value !== undefined && Number.isFinite(value)) {
       this.animEventValues.set(name, value)
     }
+    if (footPhase && footPhase !== 'None') {
+      this.footPhases.add(footPhase)
+    }
+  }
+
+  fireFootPhase(phase: string): void {
+    if (!phase || phase === 'None') return
+    this.footPhases.add(phase)
+  }
+
+  /** FootPhaseEvent condition: last-frame foot phase events. */
+  hasFootPhase(phase: string): boolean {
+    if (!phase || phase === 'None') return false
+    if (this.lastFrameFootPhases.has(phase)) return true
+    const lower = phase.toLowerCase()
+    for (const p of this.lastFrameFootPhases) {
+      if (p.toLowerCase() === lower) return true
+    }
+    return false
   }
 
   /**
@@ -327,6 +353,8 @@ export class SimInputBoard {
     this.animEventPhases.clear()
     this.lastFrameAnimEventValues = new Map(this.animEventValues)
     this.animEventValues.clear()
+    this.lastFrameFootPhases = new Set(this.footPhases)
+    this.footPhases.clear()
     this.lastFrameAnimEndEvents = new Set(this.animEndEvents)
     this.animEndEvents.clear()
     this.anyAnimEnd = false

@@ -58,6 +58,7 @@ type ClipEventEdge = {
   name: string
   value?: number
   phase: SimAnimEventPhase
+  footPhase?: string
 }
 
 /** Expand clip events into Tick / DurStart / DurEnd edges (eventsContainer RebuildRuntimeStorage). */
@@ -65,16 +66,18 @@ function clipEventEdges(clip: ClipMeta): ClipEventEdge[] {
   const out: ClipEventEdge[] = []
   for (const ev of clip.events) {
     if (!ev.name || ev.name === 'None') continue
+    const footPhase = ev.footPhase
     if (ev.duration > 0) {
-      out.push({ time: ev.time, name: ev.name, value: ev.value, phase: 'durStart' })
+      out.push({ time: ev.time, name: ev.name, value: ev.value, phase: 'durStart', footPhase })
       out.push({
         time: ev.time + ev.duration,
         name: ev.name,
         value: ev.value,
         phase: 'durEnd',
+        footPhase,
       })
     } else {
-      out.push({ time: ev.time, name: ev.name, value: ev.value, phase: 'tick' })
+      out.push({ time: ev.time, name: ev.name, value: ev.value, phase: 'tick', footPhase })
     }
   }
   return out
@@ -92,12 +95,12 @@ export function collectClipEventsInRange(
   loops: number,
   front: number,
   animEnd: number,
-  fire: (name: string, value?: number, phase?: SimAnimEventPhase) => void
+  fire: (name: string, value?: number, phase?: SimAnimEventPhase, footPhase?: string) => void
 ): void {
   const edges = clipEventEdges(clip)
   if (!edges.length) return
   const emit = (edge: ClipEventEdge) => {
-    fire(edge.name, edge.value, edge.phase)
+    fire(edge.name, edge.value, edge.phase, edge.footPhase)
   }
   const inSpan = (t: number, lo: number, hi: number) => t > lo && t <= hi
 
@@ -254,7 +257,8 @@ export function advanceClipClock(
       Math.max(0, loops),
       front,
       animEnd,
-      (name, value, phase) => board.fireAnimEvent(name, value, phase ?? 'tick')
+      (name, value, phase, footPhase) =>
+        board.fireAnimEvent(name, value, phase ?? 'tick', footPhase)
     )
   }
 

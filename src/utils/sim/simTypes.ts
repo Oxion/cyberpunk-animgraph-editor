@@ -76,6 +76,16 @@ export interface SimStatus {
   clips: SimActiveClip[]
 }
 
+export interface SimPoseStats {
+  ok: boolean
+  reason?: string
+  boneCount: number
+  trackCount: number
+  sampleMs: number
+  /** Selected bone TRS for HUD inspect (sparse) */
+  inspect?: Record<string, import('./pose').BoneTrs>
+}
+
 export interface SimSnapshot {
   time: number
   playing: boolean
@@ -85,6 +95,8 @@ export interface SimSnapshot {
   /** null on first step after bind/reset — consumers should full-apply `nodes`. */
   nodeDelta: SimNodeDelta | null
   status: SimStatus
+  /** Sample-phase HUD (pooled pose stays on runner) */
+  poseStats?: SimPoseStats | null
 }
 
 export function emptySimStatus(): SimStatus {
@@ -100,6 +112,7 @@ export function emptySimSnapshot(): SimSnapshot {
     nodes: {},
     nodeDelta: null,
     status: emptySimStatus(),
+    poseStats: null,
   }
 }
 

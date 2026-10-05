@@ -260,8 +260,16 @@ export function checkCondition(
       if (r === 'unknown') return 'unknown'
       return r
     }
+    case 'animAnimStateTransitionCondition_FootPhaseEvent': {
+      const phase =
+        typeof data.footPhase === 'string'
+          ? data.footPhase
+          : readCName(data.footPhase)
+      if (!phase || phase === 'None' || phase === 'NotConsidered') return false
+      return board.hasFootPhase(phase)
+    }
     default:
-      // Locomotion / FootPhase / etc.
+      // Locomotion / etc.
       if (readBool(data.isForcedToTrue)) return true
       return 'unknown'
   }

@@ -295,7 +295,7 @@
 
       <TabsContent value="resources" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
         <Tabs v-model="resourcesSubTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
-          <TabsList class="grid h-8 w-full shrink-0 grid-cols-3 rounded-sm bg-muted/60 p-0.5">
+          <TabsList class="grid h-8 w-full shrink-0 grid-cols-4 rounded-sm bg-muted/60 p-0.5">
             <TabsTrigger value="sets" class="h-7 rounded-sm px-1 text-[11px]">
               Anim sets
               <span v-if="clipStats.entryCount" class="ml-1 opacity-70">{{ clipStats.entryCount }}</span>
@@ -303,6 +303,10 @@
             <TabsTrigger value="db" class="h-7 rounded-sm px-1 text-[11px]">
               Anim DB
               <span v-if="animDbStats.dbCount" class="ml-1 opacity-70">{{ animDbStats.dbCount }}</span>
+            </TabsTrigger>
+            <TabsTrigger value="rig" class="h-7 rounded-sm px-1 text-[11px]">
+              Rig
+              <span v-if="rigEntries.length" class="ml-1 opacity-70">{{ rigEntries.length }}</span>
             </TabsTrigger>
             <TabsTrigger value="entity" class="h-7 rounded-sm px-1 text-[11px]">
               Entity
@@ -319,6 +323,13 @@
               accept=".json,application/json"
               class="hidden"
               @change="onAnimsetFile"
+            />
+            <input
+              ref="animsetGlbFileInput"
+              type="file"
+              accept=".glb,model/gltf-binary"
+              class="hidden"
+              @change="onAnimsetGlbFile"
             />
             <Button
               type="button"
@@ -344,117 +355,31 @@
           <p class="font-data m-0 text-[11px] text-muted-foreground">
             {{ clipStats.entryCount }} sets · {{ clipStats.clipCount }} clips ·
             {{ clipStats.eventCount }} events
+            <span v-if="clipPoseAnimCount">
+              · {{ clipPoseAnimCount }} glb anims
+            </span>
           </p>
 
           <div
             v-if="setupEntries.length"
-            class="flex max-h-[42%] shrink-0 flex-col gap-1.5 overflow-y-auto rounded-sm border border-border bg-canvas p-1.5"
+            class="flex max-h-[42%] shrink-0 flex-col gap-1.5 overflow-y-auto"
           >
-            <div
+            <AnimSetupEntryCard
               v-for="entry in setupEntries"
               :key="entry.id"
-              class="rounded-sm border border-border/60 px-1.5 py-1.5"
-            >
-              <div class="flex items-center gap-1.5">
-                <span
-                  class="shrink-0 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide"
-                  :class="
-                    entry.active
-                      ? 'bg-emerald-500/20 text-emerald-400'
-                      : 'bg-muted text-muted-foreground'
-                  "
-                >
-                  {{ entry.active ? 'active' : 'off' }}
-                </span>
-                <span class="min-w-0 flex-1 truncate text-[11px]" :title="entry.sourceLabel">
-                  {{ entry.sourceLabel }}
-                </span>
-                <span class="font-data shrink-0 text-[10px] text-muted-foreground">
-                  {{ entry.clipCount }}
-                </span>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  class="h-5 w-5 shrink-0 rounded-sm p-0 text-[10px] text-muted-foreground"
-                  title="Remove entry"
-                  @click="applyRemoveEntry(entry.id)"
-                >
-                  ×
-                </Button>
-              </div>
-
-              <div class="mt-1.5">
-                <PropertyNumberSlider
-                  label="Priority"
-                  :model-value="entry.priority"
-                  :value-min="0"
-                  :value-max="255"
-                  :slider-min="0"
-                  :slider-max="255"
-                  :step="1"
-                  :decimals="0"
-                  @update:model-value="(v) => onEntryPriority(entry.id, v)"
-                />
-              </div>
-
-              <div class="mt-1.5 flex flex-col gap-1">
-                <Label class="text-[10px] text-muted-foreground">Set tags</Label>
-                <div v-if="entry.tags?.length" class="flex flex-wrap content-start gap-1">
-                  <span
-                    v-for="tg in entry.tags"
-                    :key="tg"
-                    class="font-data rounded-sm bg-muted/50 px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                    :title="tg"
-                  >
-                    {{ tg }}
-                  </span>
-                </div>
-                <p v-else class="m-0 text-[10px] text-muted-foreground">No set tags</p>
-              </div>
-
-              <div class="mt-1.5 flex flex-col gap-1">
-                <Label class="text-[10px] text-muted-foreground">Wrappers (variableNames)</Label>
-                <div class="flex items-center gap-1">
-                  <Input
-                    class="h-7 min-w-0 flex-1 rounded-sm text-xs"
-                    placeholder="wrapper name"
-                    :model-value="wrapperAddDraftById[entry.id] ?? ''"
-                    @update:model-value="(v) => setWrapperAddDraft(entry.id, String(v ?? ''))"
-                    @keydown.enter.prevent="addEntryWrapper(entry.id)"
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    class="h-7 shrink-0 rounded-sm px-2 text-xs"
-                    @click="addEntryWrapper(entry.id)"
-                  >
-                    +
-                  </Button>
-                </div>
-                <div
-                  v-if="entry.variableNames.length"
-                  class="flex flex-wrap content-start gap-1"
-                >
-                  <Button
-                    v-for="wn in entry.variableNames"
-                    :key="wn"
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    class="h-6 rounded-sm px-2 text-[11px]"
-                    :title="`Remove ${wn}`"
-                    @click="removeEntryWrapper(entry.id, wn)"
-                  >
-                    {{ wn }} ×
-                  </Button>
-                </div>
-                <p v-else class="m-0 text-[10px] text-muted-foreground">
-                  Empty = always active
-                </p>
-              </div>
-            </div>
+              :entry="entry"
+              :pose="poseForEntry(entry.id)"
+              :wrapper-draft="wrapperAddDraftById[entry.id] ?? ''"
+              :get-clip-glb-info="getClipGlbInfo"
+              :list-glb-anim-names="listGlbAnimNames"
+              @update:priority="(v) => onEntryPriority(entry.id, v)"
+              @update:wrapper-draft="(v) => setWrapperAddDraft(entry.id, v)"
+              @pick-glb="pickGlbForEntry(entry.id)"
+              @clear-glb="props.clearAnimsetGlb(entry.id)"
+              @add-wrapper="addEntryWrapper(entry.id)"
+              @remove-wrapper="(wn) => removeEntryWrapper(entry.id, wn)"
+              @remove="applyRemoveEntry(entry.id)"
+            />
           </div>
 
           <div v-if="clipNames.length" class="flex shrink-0 flex-wrap items-center gap-1.5">
@@ -500,6 +425,13 @@
                   {{ isClipActive(name) ? 'on' : 'off' }}
                 </span>
                 <span class="min-w-0 flex-1 truncate text-[11px]">{{ name }}</span>
+                <span
+                  v-if="clipHasGlb(name)"
+                  class="shrink-0 rounded-sm bg-violet-500/20 px-1 py-0.5 text-[9px] font-medium uppercase text-violet-300"
+                  title="Has glb pose in resolving set"
+                >
+                  glb
+                </span>
                 <span class="font-data shrink-0 text-[10px] text-muted-foreground">
                   {{ formatClipDur(name) }}
                 </span>
@@ -520,6 +452,18 @@
                     "
                   >
                     {{ expandedClipIsActive ? 'resolvable' : 'gated' }}
+                  </span>
+                  <span
+                    v-if="expandedClipGlb"
+                    class="ml-1 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase bg-violet-500/20 text-violet-300"
+                  >
+                    glb {{ expandedClipGlb.duration.toFixed(3) }}s
+                  </span>
+                  <span
+                    v-else
+                    class="ml-1 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase bg-muted text-muted-foreground"
+                  >
+                    no glb
                   </span>
                 </p>
                 <div v-if="expandedClipSets.length" class="mb-1.5 flex flex-col gap-0.5">
@@ -546,6 +490,19 @@
                     </span>
                     <span class="min-w-0 flex-1 truncate text-[10px] text-foreground">
                       {{ s.sourceLabel }}
+                    </span>
+                    <span
+                      class="shrink-0 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase"
+                      :class="
+                        getClipGlbInfo(name, s.entryId)
+                          ? 'bg-violet-500/20 text-violet-300'
+                          : 'bg-muted text-muted-foreground'
+                      "
+                    >
+                      <template v-if="getClipGlbInfo(name, s.entryId)">
+                        glb {{ getClipGlbInfo(name, s.entryId)!.duration.toFixed(2) }}s
+                      </template>
+                      <template v-else>no glb</template>
                     </span>
                     <span class="font-data shrink-0 text-[9px]">
                       pri {{ s.priority }} · {{ s.duration.toFixed(2) }}s · {{ s.eventCount }}e
@@ -687,6 +644,150 @@
           <p v-else class="m-0 text-[11px] text-muted-foreground">Select a database above</p>
         </TabsContent>
 
+        <!-- Rig palette -->
+        <TabsContent value="rig" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
+          <div class="flex shrink-0 flex-wrap items-center gap-1.5">
+            <input
+              ref="rigFileInput"
+              type="file"
+              accept=".json,application/json"
+              class="hidden"
+              @change="onRigFile"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              class="h-7 rounded-sm px-2 text-xs"
+              @click="rigFileInput?.click()"
+            >
+              Load .rig.json
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              class="h-7 rounded-sm px-2 text-xs"
+              :disabled="!rigEntries.length"
+              @click="props.clearRigLibrary()"
+            >
+              Clear rigs
+            </Button>
+          </div>
+          <p v-if="rigError" class="m-0 text-[11px] text-destructive">{{ rigError }}</p>
+          <p class="font-data m-0 text-[11px] text-muted-foreground">
+            {{ rigEntries.length }} loaded · Sample uses active only
+          </p>
+          <div v-if="rigEntries.length" class="flex shrink-0 flex-col gap-1 overflow-y-auto max-h-[30%]">
+            <div
+              v-for="entry in rigEntries"
+              :key="entry.id"
+              class="flex items-center gap-1.5 rounded-sm border border-border/60 px-1.5 py-1"
+            >
+              <Button
+                type="button"
+                size="sm"
+                :variant="entry.active ? 'default' : 'secondary'"
+                class="h-6 shrink-0 rounded-sm px-2 text-[10px]"
+                @click="props.setActiveRig(entry.id)"
+              >
+                {{ entry.active ? 'active' : 'set' }}
+              </Button>
+              <span class="min-w-0 flex-1 truncate text-[11px]" :title="entry.sourceLabel">
+                {{ entry.sourceLabel }}
+              </span>
+              <span class="font-data shrink-0 text-[10px] text-muted-foreground">
+                {{ entry.boneCount }}b · {{ entry.partCount }}p
+              </span>
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                class="h-5 w-5 shrink-0 rounded-sm p-0 text-[10px] text-muted-foreground"
+                title="Remove rig"
+                @click="props.removeRig(entry.id)"
+              >
+                ×
+              </Button>
+            </div>
+          </div>
+          <p v-else class="m-0 text-[11px] text-muted-foreground">
+            Load player_woman_skeleton.rig.json (or other animRig) for Sample / masks.
+          </p>
+
+          <template v-if="activeRigBones.length">
+            <Input
+              class="h-7 shrink-0 rounded-sm text-xs"
+              placeholder="Filter bones / parts"
+              v-model="rigBonesFilter"
+            />
+            <div class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+              <p class="m-0 text-[9px] uppercase tracking-wide text-muted-foreground/80">
+                Bones ({{ filteredRigBones.length }}/{{ activeRigBones.length }})
+              </p>
+              <button
+                v-for="bone in filteredRigBones"
+                :key="bone"
+                type="button"
+                class="flex w-full items-center gap-1 rounded-sm px-1 py-0.5 text-left hover:bg-muted/60"
+                :title="`Inspect ${bone}`"
+                @click="poseInspectDraft = bone; applyPoseInspect()"
+              >
+                <span class="font-data min-w-0 flex-1 truncate text-[11px]">{{ bone }}</span>
+              </button>
+              <p
+                v-if="activeRigParts.length"
+                class="m-0 mt-1 text-[9px] uppercase tracking-wide text-muted-foreground/80"
+              >
+                Parts ({{ filteredRigParts.length }}/{{ activeRigParts.length }})
+              </p>
+              <p
+                v-for="part in filteredRigParts"
+                :key="`p-${part}`"
+                class="font-data m-0 truncate px-1 text-[10px] text-muted-foreground"
+              >
+                {{ part }}
+              </p>
+            </div>
+          </template>
+
+          <div class="flex shrink-0 items-center gap-1 border-t border-border/60 pt-1.5">
+            <Input
+              class="h-7 min-w-0 flex-1 rounded-sm text-xs"
+              placeholder="Inspect bone (e.g. Hips)"
+              v-model="poseInspectDraft"
+              @keydown.enter.prevent="applyPoseInspect"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              class="h-7 shrink-0 rounded-sm px-2 text-xs"
+              @click="applyPoseInspect"
+            >
+              Inspect
+            </Button>
+          </div>
+          <p
+            v-if="snapshot.poseStats"
+            class="font-data m-0 text-[10px] text-muted-foreground"
+          >
+            Sample:
+            {{ snapshot.poseStats.ok ? 'ok' : snapshot.poseStats.reason || 'off' }}
+            · {{ snapshot.poseStats.boneCount }} bones
+            · {{ snapshot.poseStats.sampleMs.toFixed(2) }}ms
+          </p>
+          <div
+            v-if="snapshot.poseStats?.inspect"
+            class="font-data max-h-24 overflow-y-auto text-[10px] text-muted-foreground"
+          >
+            <div v-for="(trs, name) in snapshot.poseStats.inspect" :key="name">
+              {{ name }}:
+              t({{ trs.tx.toFixed(3) }}, {{ trs.ty.toFixed(3) }}, {{ trs.tz.toFixed(3) }})
+            </div>
+          </div>
+        </TabsContent>
+
         <!-- Entity tags (StaticSwitch Component/Visual/Rig mock) — saved in project -->
         <TabsContent value="entity" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
           <div class="flex shrink-0 items-center gap-1">
@@ -771,10 +872,13 @@ import type {
   ClipMeta,
   ClipSetMembership,
 } from '../utils/sim/clipLibrary'
+import type { ClipPoseSetView } from '../utils/sim/clipPoseLibrary'
+import type { RigEntryView } from '../utils/sim/rigResource'
 import { DEFAULT_SIM_FPS } from '../utils/sim/SimClock'
 import type { AnimDatabase, AnimDatabaseStats } from '../utils/sim/animDatabase'
 import type { SimSnapshot } from '../utils/sim/simTypes'
 import { SimInputBoard } from '../utils/sim/SimInputBoard'
+import AnimSetupEntryCard from '@/components/sim/AnimSetupEntryCard.vue'
 import {
   PropertyBoolToggle,
   PropertyNumberControl,
@@ -817,6 +921,15 @@ const props = defineProps<{
   setupEntries: AnimSetupEntryView[]
   animDbStats: AnimDatabaseStats
   animDatabases: AnimDatabase[]
+  rigEntries: RigEntryView[]
+  activeRigBones: string[]
+  activeRigParts: string[]
+  clipPoseSets: ClipPoseSetView[]
+  getClipGlbInfo: (
+    clipName: string,
+    setupEntryId?: string | null
+  ) => { name: string; duration: number } | null
+  listGlbAnimNames: (setupEntryId: string) => string[]
   resolveClip: (name: string) => ClipMeta | undefined
   lookupClip: (name: string) => ClipMeta | undefined
   isClipActive: (name: string) => boolean
@@ -826,6 +939,17 @@ const props = defineProps<{
     sourceLabel?: string,
     options?: { priority?: number; variableNames?: string[] }
   ) => number
+  loadAnimsetGlb: (
+    buffer: ArrayBuffer,
+    sourceLabel: string,
+    setupEntryId?: string | null
+  ) => Promise<number> | number
+  clearAnimsetGlb: (setupEntryId: string) => void
+  loadRigJson: (json: unknown, sourceLabel?: string) => string
+  removeRig: (id: string) => void
+  setActiveRig: (id: string | null) => void
+  clearRigLibrary: () => void
+  setPoseInspectBones: (names: string[]) => void
   loadAnimDatabaseJson: (json: object, sourceLabel?: string) => string
   removeAnimDatabase: (pathKey: string) => void
   updateSetupEntry: (
@@ -872,7 +996,7 @@ const emit = defineEmits<{
 
 const activeTab = ref<'events' | 'values' | 'resources'>('events')
 const valuesSubTab = ref<'features' | 'vars' | 'wrappers' | 'tags'>('features')
-const resourcesSubTab = ref<'sets' | 'db' | 'entity'>('sets')
+const resourcesSubTab = ref<'sets' | 'db' | 'rig' | 'entity'>('sets')
 const eventsFilter = ref('')
 const featuresFilter = ref('')
 const varsFilter = ref('')
@@ -893,10 +1017,30 @@ const clipActiveFilterOptions = [
 const expandedClipName = ref('')
 const clipsError = ref('')
 const animDbError = ref('')
+const rigError = ref('')
+const rigBonesFilter = ref('')
+const poseInspectDraft = ref('')
 const animsetFileInput = ref<HTMLInputElement | null>(null)
+const animsetGlbFileInput = ref<HTMLInputElement | null>(null)
+const glbTargetEntryId = ref<string | null>(null)
 const animDbFileInput = ref<HTMLInputElement | null>(null)
+const rigFileInput = ref<HTMLInputElement | null>(null)
 /** Per-entry draft for adding a wrapper name chip. */
 const wrapperAddDraftById = ref<Record<string, string>>({})
+
+const clipPoseAnimCount = computed(() =>
+  (props.clipPoseSets ?? []).reduce((n, s) => n + s.animCount, 0)
+)
+
+const poseByEntryId = computed(() => {
+  const m = new Map<string, (typeof props.clipPoseSets)[number]>()
+  for (const s of props.clipPoseSets ?? []) {
+    if (s.setupEntryId) m.set(s.setupEntryId, s)
+  }
+  return m
+})
+
+const poseForEntry = (entryId: string) => poseByEntryId.value.get(entryId)
 
 const matchesQuery = (text: string, query: string) => {
   const q = query.trim().toLowerCase()
@@ -1052,6 +1196,29 @@ const expandedClipIsActive = computed(() =>
 const expandedClipSets = computed(() =>
   expandedClipName.value ? props.listClipSets(expandedClipName.value) : []
 )
+const expandedClipGlb = computed(() => {
+  const name = expandedClipName.value
+  if (!name) return null
+  const win = expandedClipSets.value.find((s) => s.resolves)
+  return props.getClipGlbInfo(name, win?.entryId ?? null)
+})
+
+const clipHasGlb = (name: string) => {
+  const win = props.listClipSets(name).find((s) => s.resolves)
+  if (win) return props.getClipGlbInfo(name, win.entryId) != null
+  // gated / no winner — any linked set still useful as existence hint
+  return props.getClipGlbInfo(name) != null
+}
+
+const filteredRigBones = computed(() => {
+  const q = rigBonesFilter.value
+  return (props.activeRigBones ?? []).filter((b) => matchesQuery(b, q))
+})
+
+const filteredRigParts = computed(() => {
+  const q = rigBonesFilter.value
+  return (props.activeRigParts ?? []).filter((p) => matchesQuery(p, q))
+})
 
 const toggleClipExpand = (name: string) => {
   expandedClipName.value = expandedClipName.value === name ? '' : name
@@ -1295,6 +1462,49 @@ const onAnimsetFile = async (ev: Event) => {
   } catch (err) {
     clipsError.value = err instanceof Error ? err.message : String(err)
   }
+}
+
+const onAnimsetGlbFile = async (ev: Event) => {
+  clipsError.value = ''
+  const input = ev.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  const setupId = glbTargetEntryId.value
+  glbTargetEntryId.value = null
+  if (!file || !setupId) return
+  try {
+    const buf = await file.arrayBuffer()
+    const n = await props.loadAnimsetGlb(buf, file.name, setupId)
+    if (!n) clipsError.value = 'No animations found in GLB'
+  } catch (err) {
+    clipsError.value = err instanceof Error ? err.message : String(err)
+  }
+}
+
+const pickGlbForEntry = (entryId: string) => {
+  glbTargetEntryId.value = entryId
+  animsetGlbFileInput.value?.click()
+}
+
+const onRigFile = async (ev: Event) => {
+  rigError.value = ''
+  const input = ev.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  try {
+    const text = await file.text()
+    const json = JSON.parse(text) as unknown
+    props.loadRigJson(json, file.name)
+    resourcesSubTab.value = 'rig'
+  } catch (err) {
+    rigError.value = err instanceof Error ? err.message : String(err)
+  }
+}
+
+const applyPoseInspect = () => {
+  const name = poseInspectDraft.value.trim()
+  props.setPoseInspectBones(name ? [name] : [])
 }
 
 const onAnimDbFile = async (ev: Event) => {

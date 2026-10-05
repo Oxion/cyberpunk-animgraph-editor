@@ -235,11 +235,24 @@
                 :setup-entries="simSetupEntries"
                 :anim-db-stats="simAnimDbStats"
                 :anim-databases="simAnimDatabases"
+                :rig-entries="simRigEntries"
+                :active-rig-bones="simActiveRigBones"
+                :active-rig-parts="simActiveRigParts"
+                :clip-pose-sets="simClipPoseSets"
+                :get-clip-glb-info="simGetClipGlbInfo"
+                :list-glb-anim-names="simListGlbAnimNames"
                 :resolve-clip="simGetClip"
                 :lookup-clip="simLookupClip"
                 :is-clip-active="simIsClipActive"
                 :list-clip-sets="simListClipSets"
                 :load-animset-json="simLoadAnimsetJson"
+                :load-animset-glb="simLoadAnimsetGlb"
+                :clear-animset-glb="simClearAnimsetGlb"
+                :load-rig-json="simLoadRigJson"
+                :remove-rig="simRemoveRig"
+                :set-active-rig="simSetActiveRig"
+                :clear-rig-library="simClearRigLibrary"
+                :set-pose-inspect-bones="simSetPoseInspectBones"
                 :load-anim-database-json="simLoadAnimDatabaseJson"
                 :remove-anim-database="simRemoveAnimDatabase"
                 :update-setup-entry="simUpdateSetupEntry"
@@ -1070,12 +1083,25 @@ const {
   setupEntries: simSetupEntries,
   animDbStats: simAnimDbStats,
   animDatabases: simAnimDatabases,
+  rigEntries: simRigEntries,
+  activeRigBones: simActiveRigBones,
+  activeRigParts: simActiveRigParts,
+  clipPoseSets: simClipPoseSets,
+  getClipGlbInfo: simGetClipGlbInfo,
+  listGlbAnimNames: simListGlbAnimNames,
   getClip: simGetClip,
   lookupClip: simLookupClip,
   isClipActive: simIsClipActive,
   listClipSets: simListClipSets,
   loadAnimsetJson: simLoadAnimsetJson,
+  loadAnimsetGlb: simLoadAnimsetGlb,
+  clearAnimsetGlb: simClearAnimsetGlb,
   clearClipLibrary: simClearClipLibrary,
+  loadRigJson: simLoadRigJson,
+  removeRig: simRemoveRig,
+  setActiveRig: simSetActiveRig,
+  clearRigLibrary: simClearRigLibrary,
+  setPoseInspectBones: simSetPoseInspectBones,
   loadAnimDatabaseJson: simLoadAnimDatabaseJson,
   clearAnimDatabaseLibrary: simClearAnimDatabaseLibrary,
   removeAnimDatabase: simRemoveAnimDatabase,
