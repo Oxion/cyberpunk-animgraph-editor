@@ -253,6 +253,7 @@
                 :set-active-rig="simSetActiveRig"
                 :clear-rig-library="simClearRigLibrary"
                 :set-pose-inspect-bones="simSetPoseInspectBones"
+                :selected-stack-focus="simSelectedStackFocus"
                 :load-anim-database-json="simLoadAnimDatabaseJson"
                 :remove-anim-database="simRemoveAnimDatabase"
                 :update-setup-entry="simUpdateSetupEntry"
@@ -820,6 +821,8 @@ import type { DirectChildrenLayoutMode } from './utils/graph/DirectChildrenLayou
 import { getConnectionKey } from './utils/graph/diagramModel'
 import { NodeDefinitionRegistry } from './utils/NodeDefinition'
 import { PixiGraphRenderer } from './utils/PixiGraphRenderer'
+import { buildStackPairing, readExtenderTransformNames } from './utils/sim/stackPairing'
+import { handleType } from './utils/sim/simDataUtils'
 import {
   buildStateMachineRingPresentation,
   DIAGRAM_CONDITIONAL_ENTRY_WRAPPER_TYPE,
@@ -1102,6 +1105,7 @@ const {
   setActiveRig: simSetActiveRig,
   clearRigLibrary: simClearRigLibrary,
   setPoseInspectBones: simSetPoseInspectBones,
+  setStackCaptureHandleIds: simSetStackCaptureHandleIds,
   loadAnimDatabaseJson: simLoadAnimDatabaseJson,
   clearAnimDatabaseLibrary: simClearAnimDatabaseLibrary,
   removeAnimDatabase: simRemoveAnimDatabase,
@@ -1114,6 +1118,47 @@ const {
   getProjectSimResources: simGetProjectSimResources,
   applyProjectSimResources: simApplyProjectSimResources,
 } = useAnimgraphSim()
+
+const simSelectedStackFocus = computed(() => {
+  const node = selectedNodeRef.value
+  const data = getActiveRenderData()
+  if (!node || !data) return null
+  const handleId = (node.data?.originalNodeId as string | undefined) ?? ''
+  if (!handleId) return null
+  const h = data.handlesRegistry.get(handleId)
+  if (!h) return null
+  const t = handleType(h)
+  if (t === 'animAnimNode_StackTransformsExtender') {
+    return {
+      kind: 'extender' as const,
+      handleId,
+      names: readExtenderTransformNames(h),
+      removeCount: 0,
+    }
+  }
+  if (t === 'animAnimNode_StackTransformsShrinker') {
+    const pairing = buildStackPairing(data.handlesRegistry)
+    return {
+      kind: 'shrinker' as const,
+      handleId,
+      names: [],
+      removeCount: pairing.shrinkRemoveCountByHandleId.get(handleId) ?? 0,
+    }
+  }
+  return null
+})
+
+watch(
+  () => {
+    const node = selectedNodeRef.value
+    const handleId = (node?.data?.originalNodeId as string | undefined) ?? ''
+    return handleId || null
+  },
+  (handleId) => {
+    simSetStackCaptureHandleIds(handleId ? [handleId] : [])
+  },
+  { immediate: true }
+)
 
 const directChildrenLayoutMode = ref<DirectChildrenLayoutMode>('tidy-tree')
 

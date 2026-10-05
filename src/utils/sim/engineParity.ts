@@ -8,7 +8,8 @@
  * - animNode_Blend2.cpp — CalculateWeightFromInputValue
  * - animNode_BlendOverride.cpp — BlendByMaskDynamic OnUpdate / ACTIVATION_THRESHOLD
  *
- * Offline sim implements Update (+ numeric weights). Sample/pose is stubbed.
+ * Offline sim implements Update (+ numeric weights) and Sample (glb pose).
+ * IK / motion extraction / sync TimeWarper remain out of scope.
  */
 
 /** animNode_StateMachine.cpp — instant transition chain cap */

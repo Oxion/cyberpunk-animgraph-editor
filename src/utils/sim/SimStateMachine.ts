@@ -357,6 +357,25 @@ export function findStateMachineHandles(
   return out
 }
 
+/**
+ * Preferred Output under a State (Update + Sample share this).
+ * Falls back to first child handle when no Output is present.
+ */
+export function findStateOutput(
+  state: AnimgraphNode,
+  handles: Map<string, AnimgraphNode>
+): AnimgraphNode | null {
+  const list = Array.isArray(state.Data?.nodes) ? state.Data.nodes : []
+  let fallback: AnimgraphNode | null = null
+  for (const ref of list) {
+    const h = resolveHandle(handles, ref)
+    if (!h) continue
+    if (handleType(h) === 'animAnimNode_Output') return h
+    if (!fallback) fallback = h
+  }
+  return fallback
+}
+
 export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   features: Array<{ feature: string; property: string }>
   /** Vector4 AnimFeatures (VectorInput) — one entry per group.name */

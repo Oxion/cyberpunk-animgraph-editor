@@ -367,7 +367,7 @@ export function useAnimgraphSim() {
     stepped: Set<string>,
     dt: number
   ): SimGraphSlotHost => ({
-    stepNested(slotName, parentPoseUpdate) {
+    stepNested(slotName, parentPoseUpdate, parentPoseSample) {
       const ids = listDiagramIds.value
       const diagramId = findDiagramIdBySlotName(ids, slotName)
       if (!diagramId) return null
@@ -386,6 +386,7 @@ export function useAnimgraphSim() {
             endBoardFrame: false,
             slotHost: makeSlotHost(snaps, stepped, dt),
             parentPoseUpdate,
+            parentPoseSample,
           }
         )
         snaps[diagramId] = snap
@@ -394,6 +395,12 @@ export function useAnimgraphSim() {
       } finally {
         nestStack.pop()
       }
+    },
+    getNestedPose(slotName) {
+      const ids = listDiagramIds.value
+      const diagramId = findDiagramIdBySlotName(ids, slotName)
+      if (!diagramId) return null
+      return ensureRunner(diagramId).getSampledPose()
     },
   })
 
@@ -897,6 +904,13 @@ export function useAnimgraphSim() {
     publish(0)
   }
 
+  const setStackCaptureHandleIds = (ids: string[]) => {
+    for (const runner of runners.values()) {
+      runner.setStackCaptureHandleIds(ids)
+    }
+    publish(0)
+  }
+
   const loadAnimDatabaseJson = (json: object, sourceLabel?: string): string => {
     const db = loadAnimDatabaseCsvJson(animDbLibrary.value, json, sourceLabel)
     if (!db.rows.length) {
@@ -1114,6 +1128,7 @@ export function useAnimgraphSim() {
     setActiveRig,
     clearRigLibrary,
     setPoseInspectBones,
+    setStackCaptureHandleIds,
     loadAnimDatabaseJson,
     loadAnimDatabaseLibraryJson,
     clearAnimDatabaseLibrary,

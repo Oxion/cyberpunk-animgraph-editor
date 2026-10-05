@@ -776,14 +776,59 @@
             {{ snapshot.poseStats.ok ? 'ok' : snapshot.poseStats.reason || 'off' }}
             · {{ snapshot.poseStats.boneCount }} bones
             · {{ snapshot.poseStats.sampleMs.toFixed(2) }}ms
+            <template v-if="snapshot.poseStats.stack?.count">
+              · stack {{ snapshot.poseStats.stack.count }}
+            </template>
+          </p>
+          <p
+            v-if="snapshot.poseStats?.missingGlb?.length"
+            class="font-data m-0 text-[10px] text-amber-400/90"
+            :title="snapshot.poseStats.missingGlb.join(', ')"
+          >
+            Missing glb ({{ snapshot.poseStats.missingGlb.length }}):
+            {{ snapshot.poseStats.missingGlb.slice(0, 4).join(', ') }}
+            <template v-if="snapshot.poseStats.missingGlb.length > 4">…</template>
           </p>
           <div
-            v-if="snapshot.poseStats?.inspect"
-            class="font-data max-h-24 overflow-y-auto text-[10px] text-muted-foreground"
+            v-if="snapshot.poseStats?.stack?.count"
+            class="flex max-h-28 flex-col gap-0.5 overflow-y-auto border-t border-border/40 pt-1"
           >
-            <div v-for="(trs, name) in snapshot.poseStats.inspect" :key="name">
-              {{ name }}:
-              t({{ trs.tx.toFixed(3) }}, {{ trs.ty.toFixed(3) }}, {{ trs.tz.toFixed(3) }})
+            <p class="m-0 text-[9px] uppercase tracking-wide text-muted-foreground/80">
+              Procedural (stack)
+              <template v-if="stackSelectionHint"> · {{ stackSelectionHint }}</template>
+              <template v-else-if="snapshot.poseStats?.stackSourceHandleId">
+                · captured
+              </template>
+            </p>
+            <button
+              v-for="name in snapshot.poseStats.stack.names"
+              :key="`stack-${name}`"
+              type="button"
+              class="flex w-full items-center gap-1 rounded-sm px-1 py-0.5 text-left hover:bg-muted/60"
+              :title="`Inspect ${name}`"
+              @click="inspectStackBone(name)"
+            >
+              <span class="font-data min-w-0 flex-1 truncate text-[11px] text-cyan-300/90">{{
+                name
+              }}</span>
+            </button>
+          </div>
+          <div
+            v-if="snapshot.poseStats?.inspect"
+            class="font-data max-h-36 overflow-y-auto text-[10px] text-muted-foreground"
+          >
+            <div
+              v-for="(entry, name) in snapshot.poseStats.inspect"
+              :key="name"
+              class="mb-1 border-b border-border/30 pb-1 last:mb-0 last:border-0 last:pb-0"
+            >
+              <div class="text-[11px] text-foreground/80">{{ name }}</div>
+              <div v-if="entry.atNode" class="pl-1 text-cyan-300/90">
+                at node: {{ formatInspectTrs(entry.atNode) }}
+              </div>
+              <div v-if="entry.result" class="pl-1">
+                result: {{ formatInspectTrs(entry.result) }}
+              </div>
             </div>
           </div>
         </TabsContent>
@@ -864,7 +909,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { PencilIcon, TrashIcon } from 'lucide-vue-next'
 import type {
   AnimSetupEntryView,
@@ -876,6 +921,7 @@ import type { ClipPoseSetView } from '../utils/sim/clipPoseLibrary'
 import type { RigEntryView } from '../utils/sim/rigResource'
 import { DEFAULT_SIM_FPS } from '../utils/sim/SimClock'
 import type { AnimDatabase, AnimDatabaseStats } from '../utils/sim/animDatabase'
+import type { BoneTrs } from '../utils/sim/pose'
 import type { SimSnapshot } from '../utils/sim/simTypes'
 import { SimInputBoard } from '../utils/sim/SimInputBoard'
 import AnimSetupEntryCard from '@/components/sim/AnimSetupEntryCard.vue'
@@ -950,6 +996,13 @@ const props = defineProps<{
   setActiveRig: (id: string | null) => void
   clearRigLibrary: () => void
   setPoseInspectBones: (names: string[]) => void
+  /** Selection-aware stack HUD focus (Extender/Shrinker). */
+  selectedStackFocus?: {
+    kind: 'extender' | 'shrinker'
+    handleId: string
+    names: string[]
+    removeCount: number
+  } | null
   loadAnimDatabaseJson: (json: object, sourceLabel?: string) => string
   removeAnimDatabase: (pathKey: string) => void
   updateSetupEntry: (
@@ -1506,6 +1559,60 @@ const applyPoseInspect = () => {
   const name = poseInspectDraft.value.trim()
   props.setPoseInspectBones(name ? [name] : [])
 }
+
+const formatInspectTrs = (trs: BoneTrs) =>
+  `t(${trs.tx.toFixed(3)}, ${trs.ty.toFixed(3)}, ${trs.tz.toFixed(3)})`
+
+const inspectStackBone = (name: string) => {
+  poseInspectDraft.value = name
+  props.setPoseInspectBones([name])
+}
+
+const stackSelectionHint = computed(() => {
+  const focus = props.selectedStackFocus
+  if (!focus) return ''
+  const st = props.snapshot.nodes[focus.handleId]
+  const active = st?.active === true
+  if (focus.kind === 'extender') {
+    return active ? `extender ×${focus.names.length}` : 'extender (inactive)'
+  }
+  return active
+    ? `shrinker remove ${focus.removeCount}`
+    : `shrinker remove ${focus.removeCount} (inactive)`
+})
+
+watch(
+  () => {
+    const focus = props.selectedStackFocus
+    const active = focus ? props.snapshot.nodes[focus.handleId]?.active === true : false
+    const stackNames = props.snapshot.poseStats?.stack?.names ?? []
+    return {
+      kind: focus?.kind ?? null,
+      handleId: focus?.handleId ?? null,
+      active,
+      namesKey: focus?.names.join('\0') ?? '',
+      stackKey: stackNames.join('\0'),
+      removeCount: focus?.removeCount ?? 0,
+    }
+  },
+  (cur) => {
+    const focus = props.selectedStackFocus
+    if (!focus || !cur.active) return
+    if (focus.kind === 'extender' && focus.names.length) {
+      poseInspectDraft.value = focus.names[0] ?? ''
+      props.setPoseInspectBones([...focus.names])
+      return
+    }
+    if (focus.kind === 'shrinker') {
+      const names = props.snapshot.poseStats?.stack?.names ?? []
+      if (names.length) {
+        poseInspectDraft.value = names[0] ?? ''
+        props.setPoseInspectBones([...names])
+      }
+    }
+  },
+  { flush: 'post' }
+)
 
 const onAnimDbFile = async (ev: Event) => {
   animDbError.value = ''

@@ -4,6 +4,7 @@
  */
 
 import type { Pose } from './pose'
+import { clearStack } from './pose'
 import type { RigEntry } from './rigResource'
 
 export type ClipPoseAnim = {
@@ -172,10 +173,11 @@ export class ClipPoseLibrary {
   ): boolean {
     const anim = this.findAnimation(name, setupEntryId)
     if (!anim) return false
-    // Start from reference pose
+    // Start from reference pose (leaf — no procedural stack)
     out.translation.set(rig.refTranslation.subarray(0, out.boneCount * 3))
     out.rotation.set(rig.refRotation.subarray(0, out.boneCount * 4))
     out.scale.set(rig.refScale.subarray(0, out.boneCount * 3))
+    clearStack(out)
     const dur = anim.duration > 0 ? anim.duration : 0
     let t = time
     if (dur > 0) {

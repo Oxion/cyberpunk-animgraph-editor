@@ -75,11 +75,13 @@ import {
 import type { ClipLibrary } from './clipLibrary'
 import type { ClipPoseLibrary } from './clipPoseLibrary'
 import type { RigEntry } from './rigResource'
-import { readBoneTrs, type Pose } from './pose'
-import { allocSampleScratch, sampleGraphPose } from './sampleWalk'
+import { readBoneTrs, readStackBoneTrs, copyPose, createPose, DEFAULT_STACK_CAPACITY, type Pose } from './pose'
+import { allocSampleScratch, sampleGraphPose, samplePoseFromNode } from './sampleWalk'
+import { buildStackPairing } from './stackPairing'
 import type { SimInputBoard } from './SimInputBoard'
 import {
   findStateMachineHandles,
+  findStateOutput,
   SimStateMachineRuntime,
   updateStateMachine,
 } from './SimStateMachine'
@@ -227,6 +229,13 @@ type WalkCtx = FloatEvalCtx & {
   slotHost?: SimGraphSlotHost
   /** GraphSlotInput → Update parent slot inputLink (engine m_parentGraphLink). */
   parentPoseUpdate?: () => void
+  /** GraphSlotInput → Sample parent slot inputLink pose. */
+  parentPoseSample?: (out: Pose) => boolean
+  /**
+   * Build parentPoseSample for a nested GraphSlot step (samples inputLink
+   * with this runner's Sample buffers / libraries).
+   */
+  makeParentPoseSample?: (inputLink: AnimgraphNode) => (out: Pose) => boolean
 }
 
 /** Project GraphSlot attach: resolve slot name → nested diagram Update. */
@@ -237,8 +246,11 @@ export type SimGraphSlotHost = {
    */
   stepNested(
     slotName: string,
-    parentPoseUpdate?: () => void
+    parentPoseUpdate?: () => void,
+    parentPoseSample?: (out: Pose) => boolean
   ): { diagramId: string; snap: SimSnapshot } | null
+  /** Latest nested Sample pose for slot (after stepNested this frame). */
+  getNestedPose(slotName: string): Pose | null
 }
 
 export type SimStepOptions = {
@@ -246,6 +258,7 @@ export type SimStepOptions = {
   endBoardFrame?: boolean
   slotHost?: SimGraphSlotHost
   parentPoseUpdate?: () => void
+  parentPoseSample?: (out: Pose) => boolean
 }
 
 function isGraphSlotType(t: string | null | undefined): boolean {
@@ -1322,24 +1335,9 @@ function findRootHandle(
   return null
 }
 
-function findStateOutput(
-  state: AnimgraphNode,
-  handles: Map<string, AnimgraphNode>
-): AnimgraphNode | null {
-  const list = Array.isArray(state.Data?.nodes) ? state.Data.nodes : []
-  let fallback: AnimgraphNode | null = null
-  for (const ref of list) {
-    const h = resolveHandle(handles, ref)
-    if (!h) continue
-    if (handleType(h) === 'animAnimNode_Output') return h
-    if (!fallback) fallback = h
-  }
-  return fallback
-}
-
 /**
  * Game-like Update walk: AnimGraph::Update → m_rootNode->Update, following pose links.
- * Sample/pose bones remain stubbed.
+ * Sample (numeric pose) runs after Update in SimGraphRunner.step.
  */
 function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   if (!node) return
@@ -1380,11 +1378,19 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const slotName = readCName(d.name)
     const inputLink = resolveHandle(handles, d.inputLink)
     const dontDeactivate = readBool(d.dontDeactivateInput)
+    const parentPoseSample =
+      inputLink && ctx.makeParentPoseSample
+        ? ctx.makeParentPoseSample(inputLink)
+        : undefined
     const nested =
       slotName && ctx.slotHost
-        ? ctx.slotHost.stepNested(slotName, () => {
-            if (inputLink) updateFromNode(inputLink, ctx)
-          })
+        ? ctx.slotHost.stepNested(
+            slotName,
+            () => {
+              if (inputLink) updateFromNode(inputLink, ctx)
+            },
+            parentPoseSample
+          )
         : null
 
     if (nested) {
@@ -1712,9 +1718,22 @@ export class SimGraphRunner {
   private activeRig: RigEntry | null = null
   /** Bone names to copy into poseStats.inspect each frame. */
   poseInspectBones: string[] = []
+  /**
+   * Handles whose full pose is snapshotted during Sample (at that node).
+   * Selection registers any node — inspect/stack HUD use the capture.
+   */
+  stackCaptureHandleIds = new Set<string>()
   private sampleOut: Pose | null = null
   private sampleScratchA: Pose | null = null
   private sampleScratchB: Pose | null = null
+  /** Pose stack capacity from Extender scan at bind. */
+  private stackCapacity = DEFAULT_STACK_CAPACITY
+  /** Shrinker handleId → remove count (tag pairing). */
+  private shrinkRemoveCountByHandleId = new Map<string, number>()
+  /** Pooled full-pose snapshots for capture handles. */
+  private capturedPoses = new Map<string, Pose>()
+  /** Handles captured this Sample pass. */
+  private capturedPoseThisFrame = new Set<string>()
   /** Loaded motion databases for AnimDatabase nodes. */
   private animDbLibrary: AnimDatabaseLibrary | null = null
   /** Per-SkAnim playback clocks */
@@ -1745,7 +1764,13 @@ export class SimGraphRunner {
       this.sampleScratchB = null
       return
     }
-    const buf = allocSampleScratch(rig)
+    this.reallocSampleBuffers()
+  }
+
+  private reallocSampleBuffers(): void {
+    const rig = this.activeRig
+    if (!rig) return
+    const buf = allocSampleScratch(rig, this.stackCapacity)
     this.sampleOut = buf.out
     this.sampleScratchA = buf.scratchA
     this.sampleScratchB = buf.scratchB
@@ -1754,6 +1779,88 @@ export class SimGraphRunner {
   /** Latest sampled pose (pooled) — not for reactive Vue binding. */
   getSampledPose(): Pose | null {
     return this.sampleOut
+  }
+
+  /** Bind-time shrink remove count for a Shrinker handle (HUD). */
+  getShrinkRemoveCount(handleId: string): number {
+    return this.shrinkRemoveCountByHandleId.get(handleId) ?? 0
+  }
+
+  /** Register handles whose full pose is snapshotted at Sample (replaces set). */
+  setStackCaptureHandleIds(ids: Iterable<string>): void {
+    this.stackCaptureHandleIds.clear()
+    for (const id of ids) {
+      const s = typeof id === 'string' ? id.trim() : ''
+      if (s) this.stackCaptureHandleIds.add(s)
+    }
+    for (const key of [...this.capturedPoses.keys()]) {
+      if (!this.stackCaptureHandleIds.has(key)) this.capturedPoses.delete(key)
+    }
+  }
+
+  private ensureCapturePose(handleId: string): Pose | null {
+    const rig = this.activeRig
+    if (!rig) return null
+    let pose = this.capturedPoses.get(handleId)
+    if (
+      !pose ||
+      pose.boneCount !== rig.boneNames.length ||
+      pose.stackCapacity !== this.stackCapacity
+    ) {
+      pose = createPose(rig.boneNames.length, rig.trackNames.length, this.stackCapacity)
+      this.capturedPoses.set(handleId, pose)
+    }
+    return pose
+  }
+
+  private beginPoseCaptures(): void {
+    this.capturedPoseThisFrame.clear()
+  }
+
+  private capturePoseFromSample(handleId: string, pose: Pose): void {
+    const dest = this.ensureCapturePose(handleId)
+    if (!dest) return
+    copyPose(dest, pose)
+    this.capturedPoseThisFrame.add(handleId)
+  }
+
+  /** Prefer captured pose for a registered handle; else final sampleOut. */
+  private resolveHudPose(): { pose: Pose; handleId: string | null } | null {
+    if (!this.sampleOut) return null
+    for (const id of this.stackCaptureHandleIds) {
+      if (!this.capturedPoseThisFrame.has(id)) continue
+      const captured = this.capturedPoses.get(id)
+      if (captured) return { pose: captured, handleId: id }
+    }
+    return { pose: this.sampleOut, handleId: null }
+  }
+
+  private buildStackStats(
+    pose: Pose
+  ): NonNullable<SimSnapshot['poseStats']>['stack'] | undefined {
+    if (pose.stackCount <= 0) return undefined
+    const names: string[] = []
+    const bones: Record<string, NonNullable<ReturnType<typeof readStackBoneTrs>>> = {}
+    for (let i = 0; i < pose.stackCount; i++) {
+      const n = pose.stackNames[i] || `stack_${i}`
+      names.push(n)
+      const trs = readStackBoneTrs(pose, i)
+      if (trs) bones[n] = trs
+    }
+    return { count: pose.stackCount, names, bones }
+  }
+
+  private readNamedTrs(pose: Pose, boneName: string): ReturnType<typeof readBoneTrs> {
+    const rig = this.activeRig
+    if (!rig) return null
+    const key = boneName.toLowerCase()
+    const idx = rig.boneIndexByName.get(key)
+    if (idx !== undefined) return readBoneTrs(pose, idx)
+    for (let si = 0; si < pose.stackCount; si++) {
+      if ((pose.stackNames[si] ?? '').toLowerCase() !== key) continue
+      return readStackBoneTrs(pose, si)
+    }
+    return null
   }
 
   /** Force StaticSwitch Init re-eval (entity tags / HasAnimation context changed). */
@@ -1778,6 +1885,12 @@ export class SimGraphRunner {
     this.staticSwitchResults.clear()
     this.staticSwitchDirty = true
     this.prevNodes = null
+    this.capturedPoses.clear()
+    this.capturedPoseThisFrame.clear()
+    const pairing = buildStackPairing(this.handles)
+    this.shrinkRemoveCountByHandleId = pairing.shrinkRemoveCountByHandleId
+    this.stackCapacity = pairing.suggestedStackCapacity
+    if (this.activeRig) this.reallocSampleBuffers()
     for (const sm of findStateMachineHandles(this.handles)) {
       const def = readNumber(sm.Data?.defaultStateIndex, 0)
       this.runtimes.set(sm.HandleId, new SimStateMachineRuntime(sm.HandleId, def))
@@ -1845,6 +1958,40 @@ export class SimGraphRunner {
     const signalUpdated = new Set<string>()
     const condCtx = { ...this.buildCondCtx(board), dt }
 
+    const makeParentPoseSample = (inputLink: AnimgraphNode) => (out: Pose): boolean => {
+      const rig = this.activeRig
+      if (
+        !rig ||
+        !this.clipPoseLibrary ||
+        !this.sampleScratchA ||
+        !this.sampleScratchB
+      ) {
+        return false
+      }
+      return samplePoseFromNode(
+        inputLink,
+        {
+          handles: this.handles,
+          board,
+          nodes,
+          clipClocks: this.clipClocks,
+          clipPoseLibrary: this.clipPoseLibrary,
+          clipLibrary: this.clipLibrary,
+          rig,
+          staticSwitchResults: this.staticSwitchResults,
+          runtimes: this.runtimes,
+          sampleNested: (slotName) => options?.slotHost?.getNestedPose(slotName) ?? null,
+          parentPoseSample: options?.parentPoseSample,
+          shrinkRemoveCountByHandleId: this.shrinkRemoveCountByHandleId,
+          stackCaptureHandleIds: this.stackCaptureHandleIds,
+          captureStack: (handleId, pose) => this.capturePoseFromSample(handleId, pose),
+          scratchA: this.sampleScratchA,
+          scratchB: this.sampleScratchB,
+        },
+        out
+      )
+    }
+
     const walkBase: Omit<WalkCtx, 'nodes' | 'visited'> = {
       handles: this.handles,
       board,
@@ -1866,6 +2013,8 @@ export class SimGraphRunner {
       speed,
       slotHost: options?.slotHost,
       parentPoseUpdate: options?.parentPoseUpdate,
+      parentPoseSample: options?.parentPoseSample,
+      makeParentPoseSample,
     }
 
     const root = findRootHandle(this.handles, this.originalAnimgraph)
@@ -1936,25 +2085,44 @@ export class SimGraphRunner {
     let poseStats: SimSnapshot['poseStats'] = null
     const rig = this.activeRig
     if (rig && this.clipPoseLibrary && this.sampleOut && this.sampleScratchA && this.sampleScratchB) {
-      const result = sampleGraphPose(root, {
-        handles: this.handles,
-        board,
-        nodes,
-        clipClocks: this.clipClocks,
-        clipPoseLibrary: this.clipPoseLibrary,
-        clipLibrary: this.clipLibrary,
-        rig,
-        staticSwitchResults: this.staticSwitchResults,
-        scratchA: this.sampleScratchA,
-        scratchB: this.sampleScratchB,
-      }, this.sampleOut)
+      this.beginPoseCaptures()
+      const result = sampleGraphPose(
+        root,
+        {
+          handles: this.handles,
+          board,
+          nodes,
+          clipClocks: this.clipClocks,
+          clipPoseLibrary: this.clipPoseLibrary,
+          clipLibrary: this.clipLibrary,
+          rig,
+          staticSwitchResults: this.staticSwitchResults,
+          runtimes: this.runtimes,
+          sampleNested: (slotName) => options?.slotHost?.getNestedPose(slotName) ?? null,
+          parentPoseSample: options?.parentPoseSample,
+          shrinkRemoveCountByHandleId: this.shrinkRemoveCountByHandleId,
+          stackCaptureHandleIds: this.stackCaptureHandleIds,
+          captureStack: (handleId, pose) => this.capturePoseFromSample(handleId, pose),
+          scratchA: this.sampleScratchA,
+          scratchB: this.sampleScratchB,
+          missingGlb: [],
+        },
+        this.sampleOut
+      )
+      const hud = this.resolveHudPose()
+      const atNodePose = hud?.handleId ? hud.pose : null
+      const resultPose = this.sampleOut
       const inspect: NonNullable<SimSnapshot['poseStats']>['inspect'] = {}
       for (const boneName of this.poseInspectBones) {
-        const idx = rig.boneIndexByName.get(boneName.toLowerCase())
-        if (idx === undefined) continue
-        const trs = readBoneTrs(this.sampleOut, idx)
-        if (trs) inspect[boneName] = trs
+        const atNode = atNodePose ? this.readNamedTrs(atNodePose, boneName) : undefined
+        const result = this.readNamedTrs(resultPose, boneName) ?? undefined
+        if (!atNode && !result) continue
+        inspect[boneName] = {
+          ...(atNode ? { atNode } : {}),
+          ...(result ? { result } : {}),
+        }
       }
+      const stackPose = atNodePose ?? resultPose
       poseStats = {
         ok: result.ok,
         reason: result.reason,
@@ -1962,6 +2130,9 @@ export class SimGraphRunner {
         trackCount: rig.trackNames.length,
         sampleMs: result.sampleMs,
         inspect: Object.keys(inspect).length ? inspect : undefined,
+        stack: this.buildStackStats(stackPose),
+        stackSourceHandleId: hud?.handleId ?? undefined,
+        missingGlb: result.missingGlb,
       }
     } else {
       poseStats = {

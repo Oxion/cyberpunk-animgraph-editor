@@ -20,15 +20,34 @@ import type { ClipLibrary } from './clipLibrary'
 import {
   blendAdditiveLocal,
   blendByMask,
+  clearStack,
+  copyPose,
   createPose,
+  DEFAULT_STACK_CAPACITY,
   identityPose,
   interpolatePose,
+  pushStackSlot,
+  shrinkStack,
   type Pose,
 } from './pose'
+import {
+  offsetBoneInSpace,
+  parseSnapMethod,
+  readQsTransform,
+  snapBoneToTarget,
+  type SnapMethod,
+} from './poseFk'
 import { getRigPartMask, type RigEntry } from './rigResource'
 import type { SimInputBoard } from './SimInputBoard'
+import { findStateOutput, type SimStateMachineRuntime } from './SimStateMachine'
 import { handleType, readBool, readCName, readNumber, resolveHandle } from './simDataUtils'
 import type { SimNodeState } from './simTypes'
+
+/**
+ * Sample support (partial): SkAnim, Blend2/Multiple/Additive/ByMask, Switch,
+ * Static/RuntimeSwitch, StateMachine, GraphSlot(+Input),
+ * StackTransformsExtender / Shrinker. Other OnePoseInput → passthrough.
+ */
 
 export type SampleCtx = {
   handles: Map<string, AnimgraphNode>
@@ -39,9 +58,26 @@ export type SampleCtx = {
   clipLibrary: ClipLibrary | null
   rig: RigEntry
   staticSwitchResults?: Map<string, boolean>
+  /** SM runtimes from Update this frame */
+  runtimes?: Map<string, SimStateMachineRuntime>
+  /** Nested GraphSlot pose after nested Update+Sample */
+  sampleNested?: (slotName: string) => Pose | null
+  /** Parent GraphSlot.inputLink sample for GraphSlotInput */
+  parentPoseSample?: (out: Pose) => boolean
+  /** Shrinker handleId → remove count (bind-time tag pairing) */
+  shrinkRemoveCountByHandleId?: Map<string, number>
+  /**
+   * HandleIds whose full pose should be snapshotted after Sample of that node (HUD).
+   * Survives later Shrinker / blends on the path to root.
+   */
+  stackCaptureHandleIds?: Set<string>
+  /** Copy live pose for a capture handle (runner-owned buffers). */
+  captureStack?: (handleId: string, pose: Pose) => void
   /** Scratch poses for blend temps */
   scratchA: Pose
   scratchB: Pose
+  /** Anim names that resolved clip but had no glb (mutated during walk) */
+  missingGlb?: string[]
 }
 
 export type SampleResult = {
@@ -49,10 +85,25 @@ export type SampleResult = {
   reason?: 'no-rig' | 'no-root' | 'empty'
   sampleMs: number
   bonesSampled: number
+  missingGlb?: string[]
 }
 
 function isActive(nodes: Record<string, SimNodeState>, id: string): boolean {
   return nodes[id]?.active === true
+}
+
+function noteMissingGlb(ctx: SampleCtx, animName: string): void {
+  if (!ctx.missingGlb) return
+  if (ctx.missingGlb.includes(animName)) return
+  ctx.missingGlb.push(animName)
+}
+
+function isGraphSlotType(t: string | null | undefined): boolean {
+  return (
+    t === 'animAnimNode_GraphSlot' ||
+    t === 'animAnimNode_GraphSlot_Test' ||
+    t === 'animAnimNode_GraphSlotConditions'
+  )
 }
 
 /**
@@ -65,9 +116,16 @@ export function sampleGraphPose(
 ): SampleResult {
   const t0 =
     typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()
+  if (!ctx.missingGlb) ctx.missingGlb = []
   if (!root) {
     identityPose(out)
-    return { ok: false, reason: 'no-root', sampleMs: 0, bonesSampled: out.boneCount }
+    return {
+      ok: false,
+      reason: 'no-root',
+      sampleMs: 0,
+      bonesSampled: out.boneCount,
+      missingGlb: ctx.missingGlb,
+    }
   }
   const visited = new Set<string>()
   const ok = sampleNode(root, ctx, out, visited)
@@ -78,16 +136,33 @@ export function sampleGraphPose(
     reason: ok ? undefined : 'empty',
     sampleMs: t1 - t0,
     bonesSampled: out.boneCount,
+    missingGlb: ctx.missingGlb.length ? ctx.missingGlb : undefined,
   }
 }
 
-export function allocSampleScratch(rig: RigEntry): { scratchA: Pose; scratchB: Pose; out: Pose } {
+/**
+ * Sample a subtree into `out` (e.g. parent GraphSlot.inputLink for nested GraphSlotInput).
+ */
+export function samplePoseFromNode(
+  node: AnimgraphNode | null,
+  ctx: SampleCtx,
+  out: Pose
+): boolean {
+  if (!ctx.missingGlb) ctx.missingGlb = []
+  return sampleNode(node, ctx, out, new Set())
+}
+
+export function allocSampleScratch(
+  rig: RigEntry,
+  stackCapacity = DEFAULT_STACK_CAPACITY
+): { scratchA: Pose; scratchB: Pose; out: Pose } {
   const n = rig.boneNames.length
   const t = rig.trackNames.length
+  const sc = Math.max(0, stackCapacity | 0)
   return {
-    out: createPose(n, t),
-    scratchA: createPose(n, t),
-    scratchB: createPose(n, t),
+    out: createPose(n, t, sc),
+    scratchA: createPose(n, t, sc),
+    scratchB: createPose(n, t, sc),
   }
 }
 
@@ -102,11 +177,22 @@ function sampleNode(
     return false
   }
   if (visited.has(node.HandleId)) {
-    // Cycle — leave out as-is
+    // Cycle — leave out as-is (already captured on first visit)
     return true
   }
   visited.add(node.HandleId)
 
+  const ok = sampleNodeDispatch(node, ctx, out, visited)
+  maybeCapturePose(node, ctx, out)
+  return ok
+}
+
+function sampleNodeDispatch(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
   const t = handleType(node)
   const d = node.Data ?? {}
   const { handles } = ctx
@@ -125,6 +211,26 @@ function sampleNode(
       out,
       visited
     )
+  }
+
+  if (t === 'animAnimNode_State' || t === 'animAnimNode_StateFrozen') {
+    return sampleNode(findStateOutput(node, handles), ctx, out, visited)
+  }
+
+  if (t === 'animAnimNode_StateMachine') {
+    return sampleStateMachine(node, ctx, out, visited)
+  }
+
+  if (t === 'animAnimNode_GraphSlotInput') {
+    if (ctx.parentPoseSample) {
+      return ctx.parentPoseSample(out)
+    }
+    identityFromRig(out, ctx.rig)
+    return false
+  }
+
+  if (isGraphSlotType(t)) {
+    return sampleGraphSlot(node, ctx, out, visited)
   }
 
   if (
@@ -159,6 +265,14 @@ function sampleNode(
     return sampleBlendByMaskDynamic(node, ctx, out, visited)
   }
 
+  if (t === 'animAnimNode_StackTransformsExtender') {
+    return sampleStackTransformsExtender(node, ctx, out, visited)
+  }
+
+  if (t === 'animAnimNode_StackTransformsShrinker') {
+    return sampleStackTransformsShrinker(node, ctx, out, visited)
+  }
+
   // Generic: first pose input
   const input =
     resolveHandle(handles, d.inputNode) ??
@@ -168,10 +282,68 @@ function sampleNode(
   if (input) return sampleNode(input, ctx, out, visited)
 
   // Identity fallback (reference pose already in out if caller set it)
-  out.translation.set(ctx.rig.refTranslation.subarray(0, out.boneCount * 3))
-  out.rotation.set(ctx.rig.refRotation.subarray(0, out.boneCount * 4))
-  out.scale.set(ctx.rig.refScale.subarray(0, out.boneCount * 3))
+  identityFromRig(out, ctx.rig)
   return true
+}
+
+function sampleStateMachine(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const d = node.Data ?? {}
+  const states = Array.isArray(d.states) ? d.states : []
+  const rt = ctx.runtimes?.get(node.HandleId)
+  if (!rt || !states.length) {
+    identityFromRig(out, ctx.rig)
+    return false
+  }
+  const activeState = resolveHandle(ctx.handles, states[rt.activeStateIndex])
+  const activeOut = activeState ? findStateOutput(activeState, ctx.handles) : null
+
+  const inTransition =
+    rt.isInTransition &&
+    rt.targetStateIndex != null &&
+    rt.transitionProgress > 0 &&
+    rt.transitionProgress < 1
+
+  if (inTransition) {
+    const targetState = resolveHandle(ctx.handles, states[rt.targetStateIndex!])
+    const targetOut = targetState ? findStateOutput(targetState, ctx.handles) : null
+    if (activeOut && targetOut) {
+      sampleNode(activeOut, ctx, ctx.scratchA, new Set(visited))
+      sampleNode(targetOut, ctx, ctx.scratchB, new Set(visited))
+      interpolatePose(out, ctx.scratchA, ctx.scratchB, rt.transitionProgress)
+      return true
+    }
+  }
+
+  if (!activeOut) {
+    identityFromRig(out, ctx.rig)
+    return false
+  }
+  return sampleNode(activeOut, ctx, out, visited)
+}
+
+function sampleGraphSlot(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const d = node.Data ?? {}
+  const slotName = readCName(d.name)
+  const inputLink = resolveHandle(ctx.handles, d.inputLink)
+  if (slotName && ctx.sampleNested) {
+    const nested = ctx.sampleNested(slotName)
+    if (nested && nested.boneCount === out.boneCount) {
+      copyPose(out, nested)
+      return true
+    }
+  }
+  // No attached graph — passthrough inputLink (engine fallback)
+  return sampleNode(inputLink, ctx, out, visited)
 }
 
 function sampleSkAnim(node: AnimgraphNode, ctx: SampleCtx, out: Pose): boolean {
@@ -183,21 +355,19 @@ function sampleSkAnim(node: AnimgraphNode, ctx: SampleCtx, out: Pose): boolean {
     ''
   const time = clock?.currTime ?? 0
   if (!animName || animName === 'None') {
-    out.translation.set(ctx.rig.refTranslation.subarray(0, out.boneCount * 3))
-    out.rotation.set(ctx.rig.refRotation.subarray(0, out.boneCount * 4))
-    out.scale.set(ctx.rig.refScale.subarray(0, out.boneCount * 3))
+    identityFromRig(out, ctx.rig)
     return false
   }
   // Same gating as Update clip resolve: active setup entry by wrappers + priority
   const isWrap = (n: string) => ctx.board.isWrapperActive(n)
   const winner = ctx.clipLibrary?.resolveClipEntry(animName, isWrap)
   if (!winner) {
-    out.translation.set(ctx.rig.refTranslation.subarray(0, out.boneCount * 3))
-    out.rotation.set(ctx.rig.refRotation.subarray(0, out.boneCount * 4))
-    out.scale.set(ctx.rig.refScale.subarray(0, out.boneCount * 3))
+    identityFromRig(out, ctx.rig)
     return false
   }
-  return ctx.clipPoseLibrary.sample(animName, time, ctx.rig, out, winner.entryId)
+  const ok = ctx.clipPoseLibrary.sample(animName, time, ctx.rig, out, winner.entryId)
+  if (!ok) noteMissingGlb(ctx, animName)
+  return ok
 }
 
 function sampleBlend2(
@@ -400,4 +570,124 @@ function identityFromRig(out: Pose, rig: RigEntry): void {
   out.translation.set(rig.refTranslation.subarray(0, out.boneCount * 3))
   out.rotation.set(rig.refRotation.subarray(0, out.boneCount * 4))
   out.scale.set(rig.refScale.subarray(0, out.boneCount * 3))
+  clearStack(out)
+}
+
+function unwrapData(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  if (o.Data && typeof o.Data === 'object') return o.Data as Record<string, unknown>
+  return o
+}
+
+function readArrayItem(arr: unknown, i: number): unknown {
+  return Array.isArray(arr) ? arr[i] : undefined
+}
+
+function resolveUnifiedName(pose: Pose, rig: RigEntry, name: string): number {
+  if (!name || name === 'None') return -1
+  const key = name.toLowerCase()
+  const bi = rig.boneIndexByName.get(key)
+  if (bi !== undefined) return bi
+  for (let i = 0; i < pose.stackCount; i++) {
+    if ((pose.stackNames[i] ?? '').toLowerCase() === key) return pose.boneCount + i
+  }
+  return -1
+}
+
+function sampleStackTransformsExtender(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const d = node.Data ?? {}
+  const input =
+    resolveHandle(ctx.handles, d.inputLink) ??
+    resolveHandle(ctx.handles, d.inputNode) ??
+    resolveHandle(ctx.handles, d.input)
+  const ok = sampleNode(input, ctx, out, visited)
+  const infos = Array.isArray(d.transformInfos) ? d.transformInfos : []
+  if (!infos.length) return ok
+
+  let capacityWarned = false
+  for (let i = 0; i < infos.length; i++) {
+    if (out.stackCount >= out.stackCapacity) {
+      if (!capacityWarned) {
+        capacityWarned = true
+        console.warn(
+          `[sim] StackTransformsExtender ${node.HandleId}: stack full (${out.stackCapacity}), skipping remaining`
+        )
+      }
+      break
+    }
+    const info = unwrapData(infos[i])
+    if (!info) continue
+    const name = readCName(info.name) || `stack_${i}`
+    const parentName = readCName(info.parentName)
+    const parentUnified = resolveUnifiedName(out, ctx.rig, parentName)
+    if (parentUnified < 0 && parentName && parentName !== 'None') {
+      // Missing parent — skip this slot (engine aborts whole extender; we clamp)
+      continue
+    }
+    const ref = readQsTransform(info.referenceTransformLs)
+    const slot = pushStackSlot(
+      out,
+      name,
+      parentUnified,
+      ref.tx,
+      ref.ty,
+      ref.tz,
+      ref.qx,
+      ref.qy,
+      ref.qz,
+      ref.qw,
+      ref.sx,
+      ref.sy,
+      ref.sz
+    )
+    if (slot < 0) break
+    const stackUnified = out.boneCount + slot
+
+    const snapMethod: SnapMethod = parseSnapMethod(readArrayItem(d.snapMethods, i))
+    const snapToRef = readBool(readArrayItem(d.snapToReferenceValues, i))
+    const snapTarget = unwrapData(readArrayItem(d.snapTargetBones, i))
+    const snapName = snapTarget ? readCName(snapTarget.name) : ''
+    const snapUnified = resolveUnifiedName(out, ctx.rig, snapName)
+    if (snapMethod !== 'NoSnapping' && snapUnified >= 0) {
+      snapBoneToTarget(out, ctx.rig, stackUnified, snapUnified, snapMethod, snapToRef)
+    }
+
+    const offsetSpace = unwrapData(readArrayItem(d.offsetSpaceBones, i))
+    const offsetSpaceName = offsetSpace ? readCName(offsetSpace.name) : ''
+    const offsetSpaceUnified = resolveUnifiedName(out, ctx.rig, offsetSpaceName)
+    if (offsetSpaceUnified >= 0) {
+      const offsetToRef = readBool(readArrayItem(d.offsetToReferenceValues, i))
+      const offset = readQsTransform(readArrayItem(d.offsets, i))
+      offsetBoneInSpace(out, ctx.rig, stackUnified, offsetSpaceUnified, offset, offsetToRef)
+    }
+  }
+  return ok
+}
+
+function sampleStackTransformsShrinker(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const d = node.Data ?? {}
+  const input =
+    resolveHandle(ctx.handles, d.inputLink) ??
+    resolveHandle(ctx.handles, d.inputNode) ??
+    resolveHandle(ctx.handles, d.input)
+  const ok = sampleNode(input, ctx, out, visited)
+  const remove = ctx.shrinkRemoveCountByHandleId?.get(node.HandleId) ?? 0
+  if (remove > 0) shrinkStack(out, remove)
+  return ok
+}
+
+function maybeCapturePose(node: AnimgraphNode, ctx: SampleCtx, out: Pose): void {
+  if (!ctx.stackCaptureHandleIds?.has(node.HandleId)) return
+  ctx.captureStack?.(node.HandleId, out)
 }

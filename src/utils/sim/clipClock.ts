@@ -1,6 +1,6 @@
 /**
  * Offline SkAnim clip clock — time advance, timeline CollectEvents, PushAnimEndEvent.
- * No bone Sample.
+ * Pose sampling lives in sampleWalk (glb), not here.
  */
 
 import type { ClipLibrary, ClipMeta } from './clipLibrary'

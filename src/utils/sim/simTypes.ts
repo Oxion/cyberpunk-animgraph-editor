@@ -76,14 +76,30 @@ export interface SimStatus {
   clips: SimActiveClip[]
 }
 
+/** Dual inspect: pose at selected node vs final root Sample. */
+export type SimBoneInspect = {
+  atNode?: import('./pose').BoneTrs
+  result?: import('./pose').BoneTrs
+}
+
 export interface SimPoseStats {
   ok: boolean
   reason?: string
   boneCount: number
   trackCount: number
   sampleMs: number
-  /** Selected bone TRS for HUD inspect (sparse) */
-  inspect?: Record<string, import('./pose').BoneTrs>
+  /** Selected bone TRS for HUD inspect (sparse); atNode from capture, result from root */
+  inspect?: Record<string, SimBoneInspect>
+  /** Procedural stack after Sample (prefer capture at selected node) */
+  stack?: {
+    count: number
+    names: string[]
+    bones: Record<string, import('./pose').BoneTrs>
+  }
+  /** HandleId of pose capture used for HUD (null/omit = final root pose) */
+  stackSourceHandleId?: string
+  /** Anim names on sample that resolved clip meta but had no glb in winning set */
+  missingGlb?: string[]
 }
 
 export interface SimSnapshot {
