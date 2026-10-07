@@ -28,11 +28,27 @@ import {
   type OverrideBoneWeight,
   type Pose,
 } from './pose'
+import type { BoneOpFrameCache } from './boneOpDyn'
+import { evalCurveFloatData } from './floatDyn'
 import {
+  applyRotationLimitLs,
+  applyTranslationLimit,
+  eulerDegToQuat,
+  getTransformMs,
   offsetBoneInSpace,
   parseSnapMethod,
+  parseTransformAxis,
+  quatToEulerDeg,
   readQsTransform,
+  resolveUnifiedName,
+  rotateBoneByAngle,
+  rotateBoneByQuaternion,
+  setBoneRotationMs,
+  setBoneTranslationMs,
   snapBoneToTarget,
+  translateBoneLocal,
+  writeBoneLs,
+  type Qs,
   type SnapMethod,
 } from './poseFk'
 import { getRigPartMask, type RigEntry } from './rigResource'
@@ -101,6 +117,13 @@ export type SampleCtx = {
    * Not on Pose (shared buffers). Default false; read after each child sample when warningsEnabled.
    */
   lastWrittenNull: boolean
+  /** Update→Sample values for procedural bone ops (Rotate/Translate/SetPosition/…). */
+  boneOpCache?: BoneOpFrameCache
+  /**
+   * Parent-transform stack (name → MS Qs). ParentTransform Sample reads this;
+   * falls back to pose unified MS when missing.
+   */
+  parentTransforms?: Map<string, Qs>
 }
 
 export type SampleResult = {
@@ -357,6 +380,29 @@ function sampleNodeDispatch(
 
     case 'animAnimNode_StackTransformsShrinker':
       return sampleStackTransformsShrinker(node, ctx, out, visited)
+
+    case 'animAnimNode_SetBoneTransform':
+      return sampleSetBoneTransform(node, ctx, out, visited)
+    case 'animAnimNode_SetBonePosition':
+      return sampleSetBonePosition(node, ctx, out, visited)
+    case 'animAnimNode_SetBoneOrientation':
+      return sampleSetBoneOrientation(node, ctx, out, visited)
+    case 'animAnimNode_RotateBone':
+      return sampleRotateBone(node, ctx, out, visited)
+    case 'animAnimNode_RotateBoneByQuaternion':
+      return sampleRotateBoneByQuaternion(node, ctx, out, visited)
+    case 'animAnimNode_TranslateBone':
+      return sampleTranslateBone(node, ctx, out, visited)
+    case 'animAnimNode_RotationLimit':
+      return sampleRotationLimit(node, ctx, out, visited)
+    case 'animAnimNode_TranslationLimit':
+      return sampleTranslationLimit(node, ctx, out, visited)
+    case 'animAnimNode_SetDrivenKey':
+      return sampleSetDrivenKey(node, ctx, out, visited)
+    case 'animAnimNode_AdditionalTransform':
+      return sampleAdditionalTransform(node, ctx, out, visited)
+    case 'animAnimNode_ParentTransform':
+      return sampleParentTransform(node, ctx, out, visited)
 
     // Identity = zero local TRS (additive no-op). Reference = rig A-pose.
     case 'animAnimNode_IdentityPoseTerminator':
@@ -826,15 +872,559 @@ function readArrayItem(arr: unknown, i: number): unknown {
   return Array.isArray(arr) ? arr[i] : undefined
 }
 
-function resolveUnifiedName(pose: Pose, rig: RigEntry, name: string): number {
+function readTransformIndexFromRaw(raw: unknown): string {
+  const ti = unwrapData(raw)
+  if (!ti) return readCName(raw)
+  return readCName(ti.name) || readCName(ti.bone) || ''
+}
+
+function warnBoneMissing(ctx: SampleCtx, handleId: string, boneName: string): void {
+  pushSampleWarning(ctx, {
+    code: 'bone-op-missing',
+    handleId,
+    message: `Bone op #${handleId} missing bone "${boneName || '?'}"`,
+  })
+}
+
+function sampleOnePoseChild(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>,
+  label: string
+): boolean {
+  const kids = updateKids(ctx, node.HandleId)
+  if (!kids.length) {
+    logMissingUpdateSucc(ctx, node, `${label} expected ≥1 child`)
+    writeRefPose(ctx, out)
+    return false
+  }
+  return sampleByHandleId(kids[0], ctx, out, visited)
+}
+
+function sampleSetBoneTransform(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'SetBoneTransform')
+  const entries = Array.isArray(node.Data?.entries) ? node.Data.entries : []
+  for (const raw of entries) {
+    const e = unwrapData(raw)
+    if (!e) continue
+    const changeName = readTransformIndexFromRaw(e.transformToChange)
+    const changeIdx = resolveUnifiedName(out, ctx.rig, changeName)
+    if (changeIdx < 0) {
+      if (changeName) warnBoneMissing(ctx, node.HandleId, changeName)
+      continue
+    }
+    const method = parseSnapMethod(e.setMethod)
+    const snapToRef = readBool(e.snapToReference)
+    const sourceName = readTransformIndexFromRaw(e.sourceBone)
+    const sourceIdx = resolveUnifiedName(out, ctx.rig, sourceName)
+    if (method !== 'NoSnapping' && sourceIdx >= 0) {
+      snapBoneToTarget(out, ctx.rig, changeIdx, sourceIdx, method, snapToRef)
+    }
+    const offsetSpaceName = readTransformIndexFromRaw(e.offsetSpaceBone)
+    const offsetSpaceIdx = resolveUnifiedName(out, ctx.rig, offsetSpaceName)
+    if (offsetSpaceIdx >= 0) {
+      const offsetToRef = readBool(e.offsetToReference)
+      const offset = readQsTransform(e.offset)
+      offsetBoneInSpace(out, ctx.rig, changeIdx, offsetSpaceIdx, offset, offsetToRef)
+    }
+  }
+  return ok
+}
+
+function sampleSetBonePosition(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'SetBonePosition')
+  const boneName = readTransformIndexFromRaw(node.Data?.bone)
+  const idx = resolveUnifiedName(out, ctx.rig, boneName)
+  if (idx < 0) {
+    if (boneName) warnBoneMissing(ctx, node.HandleId, boneName)
+    return ok
+  }
+  const pos = ctx.boneOpCache?.positionMs.get(node.HandleId)
+  if (!pos) return ok
+  setBoneTranslationMs(out, ctx.rig, idx, pos.x, pos.y, pos.z)
+  return ok
+}
+
+function sampleSetBoneOrientation(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'SetBoneOrientation')
+  const boneName = readTransformIndexFromRaw(node.Data?.bone)
+  const idx = resolveUnifiedName(out, ctx.rig, boneName)
+  if (idx < 0) {
+    if (boneName) warnBoneMissing(ctx, node.HandleId, boneName)
+    return ok
+  }
+  const q = ctx.boneOpCache?.orientationMs.get(node.HandleId)
+  if (!q) return ok
+  setBoneRotationMs(out, ctx.rig, idx, q.x, q.y, q.z, q.w)
+  return ok
+}
+
+function sampleRotateBone(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'RotateBone')
+  const d = node.Data ?? {}
+  const boneName = readTransformIndexFromRaw(d.bone)
+  const idx = resolveUnifiedName(out, ctx.rig, boneName)
+  if (idx < 0) {
+    if (boneName) warnBoneMissing(ctx, node.HandleId, boneName)
+    return ok
+  }
+  const angle = ctx.boneOpCache?.rotateAngleDeg.get(node.HandleId)
+  if (angle === undefined) return ok
+  const axis = parseTransformAxis(d.axis)
+  const inModelSpace = readBool(d.inModelSpace)
+  rotateBoneByAngle(out, ctx.rig, idx, axis, angle, inModelSpace)
+  return ok
+}
+
+function sampleRotateBoneByQuaternion(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'RotateBoneByQuaternion')
+  const boneName = readTransformIndexFromRaw(node.Data?.bone)
+  const idx = resolveUnifiedName(out, ctx.rig, boneName)
+  if (idx < 0) {
+    if (boneName) warnBoneMissing(ctx, node.HandleId, boneName)
+    return ok
+  }
+  const q = ctx.boneOpCache?.rotateQuat.get(node.HandleId)
+  if (!q) return ok
+  rotateBoneByQuaternion(out, idx, q.x, q.y, q.z, q.w)
+  return ok
+}
+
+function sampleTranslateBone(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'TranslateBone')
+  const boneName = readTransformIndexFromRaw(node.Data?.bone)
+  const idx = resolveUnifiedName(out, ctx.rig, boneName)
+  if (idx < 0) {
+    if (boneName) warnBoneMissing(ctx, node.HandleId, boneName)
+    return ok
+  }
+  const t = ctx.boneOpCache?.translate.get(node.HandleId)
+  if (!t) {
+    // No link compiled → bias only from Data
+    const bias = readVector3FromData(node.Data?.biasValue)
+    translateBoneLocal(out, idx, bias.x, bias.y, bias.z)
+    return ok
+  }
+  translateBoneLocal(out, idx, t.x, t.y, t.z)
+  return ok
+}
+
+function readVector3FromData(raw: unknown): { x: number; y: number; z: number } {
+  if (!raw || typeof raw !== 'object') return { x: 0, y: 0, z: 0 }
+  const o = raw as Record<string, unknown>
+  return {
+    x: readNumber(o.X ?? o.x, 0),
+    y: readNumber(o.Y ?? o.y, 0),
+    z: readNumber(o.Z ?? o.z, 0),
+  }
+}
+
+function readSmoothClamp(raw: unknown): { min: number; max: number; curve?: unknown } {
+  const o = unwrapData(raw)
+  if (!o) return { min: -180, max: 180 }
+  return {
+    min: readNumber(o.min, -180),
+    max: readNumber(o.max, 180),
+    curve: o.marginEaseOutCurve,
+  }
+}
+
+function readFloatClamp(raw: unknown): {
+  useMin: boolean
+  min: number
+  useMax: boolean
+  max: number
+} {
+  const o = unwrapData(raw)
+  if (!o) return { useMin: false, min: 0, useMax: false, max: 0 }
+  return {
+    useMin: readBool(o.useMin),
+    min: readNumber(o.min, 0),
+    useMax: readBool(o.useMax),
+    max: readNumber(o.max, 0),
+  }
+}
+
+function sampleRotationLimit(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'RotationLimit')
+  const d = node.Data ?? {}
+  const boneName = readTransformIndexFromRaw(d.constrainedTransform)
+  const idx = resolveUnifiedName(out, ctx.rig, boneName)
+  if (idx < 0) {
+    if (boneName) warnBoneMissing(ctx, node.HandleId, boneName)
+    return ok
+  }
+  const weight = ctx.boneOpCache?.limitWeight.get(node.HandleId) ?? 1
+  applyRotationLimitLs(
+    out,
+    idx,
+    readSmoothClamp(d.limitOnX),
+    readSmoothClamp(d.limitOnY),
+    readSmoothClamp(d.limitOnZ),
+    weight
+  )
+  return ok
+}
+
+function sampleTranslationLimit(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'TranslationLimit')
+  const d = node.Data ?? {}
+  const boneName = readTransformIndexFromRaw(d.constrainedTransform)
+  const idx = resolveUnifiedName(out, ctx.rig, boneName)
+  if (idx < 0) {
+    if (boneName) warnBoneMissing(ctx, node.HandleId, boneName)
+    return ok
+  }
+  const parentName = readTransformIndexFromRaw(d.parentTransform)
+  const parentIdx = parentName ? resolveUnifiedName(out, ctx.rig, parentName) : -1
+  applyTranslationLimit(
+    out,
+    ctx.rig,
+    idx,
+    parentIdx,
+    readFloatClamp(d.limitOnXAxis),
+    readFloatClamp(d.limitOnYAxis),
+    readFloatClamp(d.limitOnZAxis)
+  )
+  return ok
+}
+
+type DrivenChannelType =
+  | 'FloatTrack'
+  | 'TransX'
+  | 'TransY'
+  | 'TransZ'
+  | 'RotEulZ_Pitch'
+  | 'RotEulX_Roll'
+  | 'RotEulY_Yaw'
+  | 'ScaleX'
+  | 'ScaleY'
+  | 'ScaleZ'
+  | 'RotQuatX'
+  | 'RotQuatY'
+  | 'RotQuatZ'
+  | 'RotQuatW'
+
+function parseDrivenChannelType(raw: unknown): DrivenChannelType {
+  const s = String(raw ?? 'FloatTrack')
+  const known: DrivenChannelType[] = [
+    'FloatTrack',
+    'TransX',
+    'TransY',
+    'TransZ',
+    'RotEulZ_Pitch',
+    'RotEulX_Roll',
+    'RotEulY_Yaw',
+    'ScaleX',
+    'ScaleY',
+    'ScaleZ',
+    'RotQuatX',
+    'RotQuatY',
+    'RotQuatZ',
+    'RotQuatW',
+  ]
+  for (const k of known) {
+    if (s.includes(k) || s.endsWith(k)) return k
+  }
+  return 'FloatTrack'
+}
+
+function trackIndexByName(rig: RigEntry, name: string): number {
   if (!name || name === 'None') return -1
   const key = name.toLowerCase()
-  const bi = rig.boneIndexByName.get(key)
-  if (bi !== undefined) return bi
-  for (let i = 0; i < pose.stackCount; i++) {
-    if ((pose.stackNames[i] ?? '').toLowerCase() === key) return pose.boneCount + i
+  for (let i = 0; i < rig.trackNames.length; i++) {
+    if (rig.trackNames[i]!.toLowerCase() === key) return i
   }
   return -1
+}
+
+function readDrivenChannel(
+  pose: Pose,
+  rig: RigEntry,
+  channelName: string,
+  channelType: DrivenChannelType
+): number {
+  if (channelType === 'FloatTrack') {
+    const ti = trackIndexByName(rig, channelName)
+    if (ti < 0 || ti >= pose.trackCount) return 0
+    return pose.tracks[ti] ?? 0
+  }
+  const bi = resolveUnifiedName(pose, rig, channelName)
+  if (bi < 0 || bi >= pose.boneCount) return 0
+  const t = bi * 3
+  const r = bi * 4
+  switch (channelType) {
+    case 'TransX':
+      return pose.translation[t]!
+    case 'TransY':
+      return pose.translation[t + 1]!
+    case 'TransZ':
+      return pose.translation[t + 2]!
+    case 'ScaleX':
+      return pose.scale[t]!
+    case 'ScaleY':
+      return pose.scale[t + 1]!
+    case 'ScaleZ':
+      return pose.scale[t + 2]!
+    case 'RotQuatX':
+      return pose.rotation[r]!
+    case 'RotQuatY':
+      return pose.rotation[r + 1]!
+    case 'RotQuatZ':
+      return pose.rotation[r + 2]!
+    case 'RotQuatW':
+      return pose.rotation[r + 3]!
+    case 'RotEulZ_Pitch':
+    case 'RotEulX_Roll':
+    case 'RotEulY_Yaw': {
+      const e = quatToEulerDeg(
+        pose.rotation[r]!,
+        pose.rotation[r + 1]!,
+        pose.rotation[r + 2]!,
+        pose.rotation[r + 3]!
+      )
+      if (channelType === 'RotEulZ_Pitch') return e.pitch
+      if (channelType === 'RotEulX_Roll') return e.roll
+      return e.yaw
+    }
+    default:
+      return 0
+  }
+}
+
+function writeDrivenChannel(
+  pose: Pose,
+  rig: RigEntry,
+  channelName: string,
+  channelType: DrivenChannelType,
+  value: number
+): void {
+  if (channelType === 'FloatTrack') {
+    const ti = trackIndexByName(rig, channelName)
+    if (ti >= 0 && ti < pose.trackCount) pose.tracks[ti] = value
+    return
+  }
+  const bi = resolveUnifiedName(pose, rig, channelName)
+  if (bi < 0 || bi >= pose.boneCount) return
+  const t = bi * 3
+  const r = bi * 4
+  switch (channelType) {
+    case 'TransX':
+      pose.translation[t] = value
+      break
+    case 'TransY':
+      pose.translation[t + 1] = value
+      break
+    case 'TransZ':
+      pose.translation[t + 2] = value
+      break
+    case 'ScaleX':
+      pose.scale[t] = value
+      break
+    case 'ScaleY':
+      pose.scale[t + 1] = value
+      break
+    case 'ScaleZ':
+      pose.scale[t + 2] = value
+      break
+    case 'RotQuatX':
+      pose.rotation[r] = value
+      break
+    case 'RotQuatY':
+      pose.rotation[r + 1] = value
+      break
+    case 'RotQuatZ':
+      pose.rotation[r + 2] = value
+      break
+    case 'RotQuatW':
+      pose.rotation[r + 3] = value
+      break
+    case 'RotEulZ_Pitch':
+    case 'RotEulX_Roll':
+    case 'RotEulY_Yaw': {
+      const e = quatToEulerDeg(
+        pose.rotation[r]!,
+        pose.rotation[r + 1]!,
+        pose.rotation[r + 2]!,
+        pose.rotation[r + 3]!
+      )
+      if (channelType === 'RotEulZ_Pitch') e.pitch = value
+      else if (channelType === 'RotEulX_Roll') e.roll = value
+      else e.yaw = value
+      const q = eulerDegToQuat(e.pitch, e.roll, e.yaw)
+      pose.rotation[r] = q.qx
+      pose.rotation[r + 1] = q.qy
+      pose.rotation[r + 2] = q.qz
+      pose.rotation[r + 3] = q.qw
+      break
+    }
+  }
+}
+
+function sampleSetDrivenKey(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'SetDrivenKey')
+  const provider = unwrapData(node.Data?.provider)
+  const entries = Array.isArray(provider?.entries) ? provider.entries : []
+  for (const raw of entries) {
+    const e = unwrapData(raw)
+    if (!e) continue
+    const inName = readCName(e.inChannelName)
+    const outName = readCName(e.outChannelName)
+    const inType = parseDrivenChannelType(e.inChanelType ?? e.inChannelType)
+    const outType = parseDrivenChannelType(e.outChanelType ?? e.outChannelType)
+    const inVal = readDrivenChannel(out, ctx.rig, inName, inType)
+    const outVal = evalCurveFloatData(e.curve, inVal)
+    writeDrivenChannel(out, ctx.rig, outName, outType, outVal)
+  }
+  return ok
+}
+
+function sampleAdditionalTransform(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'AdditionalTransform')
+  const container = unwrapData(node.Data?.additionalTransforms)
+  const entries = Array.isArray(container?.entries)
+    ? container.entries
+    : Array.isArray(node.Data?.additionalTransforms)
+      ? (node.Data.additionalTransforms as unknown[])
+      : []
+  for (const raw of entries) {
+    const e = unwrapData(raw)
+    if (!e) continue
+    const info = unwrapData(e.transformInfo) ?? e
+    const name = readCName(info.name) || readCName(e.name)
+    if (!name || name === 'None') continue
+    const value = readQsTransform(e.value)
+    let idx = resolveUnifiedName(out, ctx.rig, name)
+    if (idx < 0) {
+      const parentName = readCName(info.parentName)
+      const parentUnified = resolveUnifiedName(out, ctx.rig, parentName)
+      const ref = readQsTransform(info.referenceTransformLs)
+      const slot = pushStackSlot(
+        out,
+        name,
+        parentUnified,
+        value.tx || ref.tx,
+        value.ty || ref.ty,
+        value.tz || ref.tz,
+        value.qx,
+        value.qy,
+        value.qz,
+        value.qw,
+        value.sx,
+        value.sy,
+        value.sz
+      )
+      if (slot < 0) continue
+      idx = out.boneCount + slot
+    }
+    writeBoneLs(out, idx, value)
+  }
+  return ok
+}
+
+function sampleParentTransform(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'ParentTransform')
+  const mapping = Array.isArray(node.Data?.mapping) ? node.Data.mapping : []
+  for (const raw of mapping) {
+    const e = unwrapData(raw)
+    if (!e) continue
+    const fromName = readCName(e.from)
+    const toName = readCName(e.to)
+    if (!toName || toName === 'None') continue
+    const toIdx = resolveUnifiedName(out, ctx.rig, toName)
+    if (toIdx < 0) {
+      warnBoneMissing(ctx, node.HandleId, toName)
+      continue
+    }
+    let fromQs: Qs | null = null
+    const cached = fromName ? ctx.parentTransforms?.get(fromName.toLowerCase()) : undefined
+    if (cached) {
+      fromQs = cached
+    } else {
+      const fromIdx = resolveUnifiedName(out, ctx.rig, fromName)
+      if (fromIdx >= 0) {
+        const ms: Qs = {
+          tx: 0,
+          ty: 0,
+          tz: 0,
+          qx: 0,
+          qy: 0,
+          qz: 0,
+          qw: 1,
+          sx: 1,
+          sy: 1,
+          sz: 1,
+        }
+        if (getTransformMs(out, ctx.rig, fromIdx, ms)) fromQs = ms
+      }
+    }
+    if (!fromQs) {
+      pushSampleWarning(ctx, {
+        code: 'bone-op-missing',
+        handleId: node.HandleId,
+        message: `ParentTransform #${node.HandleId} missing from "${fromName || '?'}"`,
+      })
+      continue
+    }
+    writeBoneLs(out, toIdx, fromQs)
+  }
+  return ok
 }
 
 function sampleStackTransformsExtender(

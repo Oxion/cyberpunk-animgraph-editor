@@ -62,6 +62,7 @@ export type SimSampleWarning = {
     | 'blend-mask-oob'
     | 'blend-mask-missing'
     | 'blend-mask-empty'
+    | 'bone-op-missing'
   handleId: string
   message: string
   weight?: number

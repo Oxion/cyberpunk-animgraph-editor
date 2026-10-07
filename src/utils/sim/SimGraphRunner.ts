@@ -27,6 +27,17 @@ import {
   type SimVec4,
 } from './evalAnimMathExpressionVector'
 import {
+  clearBoneOpFrameCache,
+  createBoneOpFrameCache,
+  IDENTITY_QUAT_STATE,
+  mulQuatState,
+  nlerpQuatState,
+  type BoneOpFrameCache,
+  type BoneOpQuatState,
+  type BoneOpRotateState,
+  type BoneOpTranslateState,
+} from './boneOpDyn'
+import {
   createFloatRandomState,
   createFloatSinusState,
   evalCurveFloatData,
@@ -78,6 +89,7 @@ import type { ClipLibrary } from './clipLibrary'
 import { DEFAULT_ANIM_FPS } from './clipLibrary'
 import type { ClipPoseLibrary } from './clipPoseLibrary'
 import type { RigEntry } from './rigResource'
+import type { Qs } from './poseFk'
 import { readBoneTrs, readStackBoneTrs, copyPose, createPose, DEFAULT_STACK_CAPACITY, type Pose } from './pose'
 import { allocSampleScratch, sampleGraphPose, samplePoseFromNode } from './sampleWalk'
 import {
@@ -328,6 +340,8 @@ type FloatEvalCtx = {
 
 type WalkCtx = FloatEvalCtx & {
   nodes: Record<string, SimNodeState>
+  /** Previous frame overlay — resetOnActivation for bone ops. */
+  prevNodes: Record<string, SimNodeState> | null
   visited: Set<string>
   runtimes: Map<string, SimStateMachineRuntime>
   condCtx: CheckConditionCtx
@@ -359,6 +373,10 @@ type WalkCtx = FloatEvalCtx & {
    * Value/weight links are not recorded — only followUpdate targets.
    */
   updateSucc: Map<string, string[]>
+  boneOpCache: BoneOpFrameCache
+  boneRotateDyn: Map<string, BoneOpRotateState>
+  boneQuatDyn: Map<string, BoneOpQuatState>
+  boneTranslateDyn: Map<string, BoneOpTranslateState>
 }
 
 /** Project GraphSlot attach: resolve slot name → nested diagram Update. */
@@ -418,7 +436,13 @@ function followUpdate(
 function isUpdateSuccTarget(node: AnimgraphNode): boolean {
   const t = handleType(node)
   if (!t.startsWith('animAnimNode_')) return false
-  if (isFloatValueNodeType(t) || isVectorValueNodeType(t)) return false
+  if (
+    isFloatValueNodeType(t) ||
+    isVectorValueNodeType(t) ||
+    isQuaternionValueNodeType(t)
+  ) {
+    return false
+  }
   return true
 }
 
@@ -1096,6 +1120,95 @@ function isVectorValueNodeType(t: string): boolean {
   )
 }
 
+function isQuaternionValueNodeType(t: string): boolean {
+  return (
+    t === 'animAnimNode_QuaternionConstant' ||
+    t === 'animAnimNode_QuaternionInput' ||
+    t === 'animAnimNode_QuaternionJoin' ||
+    t === 'animAnimNode_QuaternionInterpolation' ||
+    t === 'animAnimNode_QuaternionVariable' ||
+    t === 'animAnimNode_QuaternionLatch'
+  )
+}
+
+function readQuaternionValue(
+  raw: unknown,
+  fallback: BoneOpQuatState = IDENTITY_QUAT_STATE
+): BoneOpQuatState {
+  if (!raw || typeof raw !== 'object') return { ...fallback }
+  const o = raw as Record<string, unknown>
+  return {
+    x: readNumber(o.i ?? o.X ?? o.x, fallback.x),
+    y: readNumber(o.j ?? o.Y ?? o.y, fallback.y),
+    z: readNumber(o.k ?? o.Z ?? o.z, fallback.z),
+    w: readNumber(o.r ?? o.W ?? o.w, fallback.w),
+  }
+}
+
+/** Read quaternion from a quat source node. */
+function readQuatSource(
+  source: AnimgraphNode | null,
+  fctx: FloatEvalCtx,
+  fallback: BoneOpQuatState = IDENTITY_QUAT_STATE,
+  depth = 0
+): BoneOpQuatState {
+  if (!source || depth > 32) return { ...fallback }
+  const t = handleType(source)
+  const d = source.Data ?? {}
+  const { handles } = fctx
+
+  if (t === 'animAnimNode_QuaternionConstant') {
+    return readQuaternionValue(d.value, fallback)
+  }
+
+  if (t === 'animAnimNode_QuaternionJoin') {
+    const input = resolveHandle(handles, d.input)
+    if (input) return readQuatSource(input, fctx, fallback, depth + 1)
+    return { ...fallback }
+  }
+
+  if (t === 'animAnimNode_QuaternionInterpolation') {
+    const a = readQuatSource(resolveHandle(handles, d.firstInput), fctx, fallback, depth + 1)
+    const b = readQuatSource(resolveHandle(handles, d.secondInput), fctx, IDENTITY_QUAT_STATE, depth + 1)
+    const wNode = resolveHandle(handles, d.weight)
+    const w = wNode ? readFloatSource(wNode, fctx, 0, depth + 1) : 0
+    return nlerpQuatState(a, b, Math.min(1, Math.max(0, w)))
+  }
+
+  if (t === 'animAnimNode_QuaternionVariable') {
+    // No quat vars on board yet
+    return { ...fallback }
+  }
+
+  if (t === 'animAnimNode_QuaternionInput') {
+    // No quat AnimFeature map yet
+    return { ...fallback }
+  }
+
+  if (t === 'animAnimNode_QuaternionLatch') {
+    const input = resolveHandle(handles, d.input)
+    if (input) return readQuatSource(input, fctx, fallback, depth + 1)
+    return { ...fallback }
+  }
+
+  return { ...fallback }
+}
+
+function resolvePoseInputLink(
+  handles: Map<string, AnimgraphNode>,
+  d: Record<string, unknown>
+): AnimgraphNode | null {
+  return (
+    resolveHandle(handles, d.inputNode) ??
+    resolveHandle(handles, d.inputLink) ??
+    resolveHandle(handles, d.input)
+  )
+}
+
+function wasBoneOpActive(ctx: WalkCtx, handleId: string): boolean {
+  return !!ctx.prevNodes?.[handleId]?.active
+}
+
 function walkFloatValueInputs(node: AnimgraphNode, ctx: WalkCtx): void {
   forEachLinkedInput(node, ctx.handles, (linked) => updateFromNode(linked, ctx))
 }
@@ -1612,6 +1725,12 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
+  if (isQuaternionValueNodeType(t)) {
+    walkFloatValueInputs(node, ctx)
+    markActive(nodes, node.HandleId, { alpha: 1 })
+    return
+  }
+
   if (t === 'animAnimNode_StateMachine') {
     let rt = ctx.runtimes.get(node.HandleId)
     if (!rt) {
@@ -1914,6 +2033,183 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
+  // --- Procedural bone ops (pose child + value links → boneOpCache) ---
+  if (
+    t === 'animAnimNode_SetBoneTransform' ||
+    t === 'animAnimNode_SetDrivenKey' ||
+    t === 'animAnimNode_AdditionalTransform' ||
+    t === 'animAnimNode_ParentTransform' ||
+    t === 'animAnimNode_TranslationLimit'
+  ) {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    return
+  }
+
+  if (t === 'animAnimNode_SetBonePosition') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const posNode = resolveHandle(handles, d.positionMs)
+    if (posNode) updateFromNode(posNode, ctx)
+    const v = posNode ? readVectorSource(posNode, ctx) : ZERO_VEC4
+    ctx.boneOpCache.positionMs.set(node.HandleId, { x: v.x, y: v.y, z: v.z })
+    return
+  }
+
+  if (t === 'animAnimNode_SetBoneOrientation') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const oriNode = resolveHandle(handles, d.orientationMs)
+    if (oriNode) updateFromNode(oriNode, ctx)
+    const q = oriNode ? readQuatSource(oriNode, ctx) : IDENTITY_QUAT_STATE
+    ctx.boneOpCache.orientationMs.set(node.HandleId, { ...q })
+    return
+  }
+
+  if (t === 'animAnimNode_RotateBone') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const angleNode = resolveHandle(handles, d.angleNode)
+    const minNode = resolveHandle(handles, d.minValueNode)
+    const maxNode = resolveHandle(handles, d.maxValueNode)
+    if (angleNode) updateFromNode(angleNode, ctx)
+    if (minNode) updateFromNode(minNode, ctx)
+    if (maxNode) updateFromNode(maxNode, ctx)
+
+    const scale = readNumber(d.scale, 1)
+    const biasAngle = readNumber(d.biasAngle, 0)
+    const useIncremental = readBool(d.useIncrementalMode)
+    const resetOnAct = d.resetOnActivation === undefined ? true : readBool(d.resetOnActivation)
+    const clampRotation = readBool(d.clampRotation)
+    let minAngle = readNumber(d.minAngle, -90)
+    let maxAngle = readNumber(d.maxAngle, 90)
+    if (minNode) minAngle = readFloatSource(minNode, ctx, minAngle)
+    if (maxNode) maxAngle = readFloatSource(maxNode, ctx, maxAngle)
+
+    let state = ctx.boneRotateDyn.get(node.HandleId)
+    if (!state) {
+      state = { angleDeg: biasAngle }
+      ctx.boneRotateDyn.set(node.HandleId, state)
+    } else if (resetOnAct && !wasBoneOpActive(ctx, node.HandleId)) {
+      state.angleDeg = biasAngle
+    }
+
+    if (angleNode) {
+      const angle = readFloatSource(angleNode, ctx, 0)
+      if (useIncremental) state.angleDeg += angle * scale * ctx.dt
+      else state.angleDeg = angle * scale + biasAngle
+    } else {
+      state.angleDeg = biasAngle
+    }
+
+    if (clampRotation) {
+      state.angleDeg = Math.min(maxAngle, Math.max(minAngle, state.angleDeg))
+    } else {
+      state.angleDeg = state.angleDeg % 360
+      if (state.angleDeg < 0) state.angleDeg += 360
+    }
+
+    ctx.boneOpCache.rotateAngleDeg.set(node.HandleId, state.angleDeg)
+    markActive(nodes, node.HandleId, { weight: state.angleDeg })
+    return
+  }
+
+  if (t === 'animAnimNode_RotateBoneByQuaternion') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const quatNode = resolveHandle(handles, d.quaternionNode)
+    if (quatNode) updateFromNode(quatNode, ctx)
+    const useIncremental = readBool(d.useIncrementalMode)
+    const resetOnAct = d.resetOnActivation === undefined ? true : readBool(d.resetOnActivation)
+
+    let state = ctx.boneQuatDyn.get(node.HandleId)
+    if (!state) {
+      state = { ...IDENTITY_QUAT_STATE }
+      ctx.boneQuatDyn.set(node.HandleId, state)
+    } else if (resetOnAct && !wasBoneOpActive(ctx, node.HandleId)) {
+      state.x = 0
+      state.y = 0
+      state.z = 0
+      state.w = 1
+    }
+
+    if (quatNode) {
+      const value = readQuatSource(quatNode, ctx)
+      if (useIncremental) {
+        const step = nlerpQuatState(IDENTITY_QUAT_STATE, value, Math.min(1, Math.max(0, ctx.dt)))
+        const next = mulQuatState(state, step)
+        state.x = next.x
+        state.y = next.y
+        state.z = next.z
+        state.w = next.w
+      } else {
+        state.x = value.x
+        state.y = value.y
+        state.z = value.z
+        state.w = value.w
+      }
+    } else {
+      state.x = 0
+      state.y = 0
+      state.z = 0
+      state.w = 1
+    }
+
+    ctx.boneOpCache.rotateQuat.set(node.HandleId, { ...state })
+    return
+  }
+
+  if (t === 'animAnimNode_TranslateBone') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const transNode = resolveHandle(handles, d.inputTranslation)
+    if (transNode) updateFromNode(transNode, ctx)
+    const scale = readVector4(d.scale, { x: 1, y: 1, z: 1, w: 1 })
+    const bias = readVector4(d.biasValue, { x: 0, y: 0, z: 0, w: 0 })
+    const useIncremental = readBool(d.useIncrementalMode)
+    const resetOnAct = d.resetOnActivation === undefined ? true : readBool(d.resetOnActivation)
+
+    let state = ctx.boneTranslateDyn.get(node.HandleId)
+    if (!state) {
+      state = { x: bias.x, y: bias.y, z: bias.z }
+      ctx.boneTranslateDyn.set(node.HandleId, state)
+    } else if (resetOnAct && !wasBoneOpActive(ctx, node.HandleId)) {
+      state.x = bias.x
+      state.y = bias.y
+      state.z = bias.z
+    }
+
+    if (transNode) {
+      const v = readVectorSource(transNode, ctx)
+      if (useIncremental) {
+        state.x += v.x * scale.x * ctx.dt
+        state.y += v.y * scale.y * ctx.dt
+        state.z += v.z * scale.z * ctx.dt
+      } else {
+        state.x = v.x * scale.x + bias.x
+        state.y = v.y * scale.y + bias.y
+        state.z = v.z * scale.z + bias.z
+      }
+    } else {
+      state.x = bias.x
+      state.y = bias.y
+      state.z = bias.z
+    }
+
+    ctx.boneOpCache.translate.set(node.HandleId, { ...state })
+    return
+  }
+
+  if (t === 'animAnimNode_RotationLimit') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const useEyes = readBool(d.useEyesLookAtBlendWeight)
+    let weight = 1
+    if (!useEyes) {
+      const wNode = resolveHandle(handles, d.weightLink)
+      if (wNode) {
+        updateFromNode(wNode, ctx)
+        weight = Math.min(1, Math.max(0, readFloatSource(wNode, ctx, 1)))
+      }
+    }
+    ctx.boneOpCache.limitWeight.set(node.HandleId, weight)
+    markActive(nodes, node.HandleId, { weight })
+    return
+  }
+
   // Generic pose/value links — follow diagram pins; record only succ targets.
   forEachLinkedInput(node, handles, (linked) => {
     if (linked && isUpdateSuccTarget(linked)) followUpdate(node, linked, ctx)
@@ -1935,6 +2231,13 @@ export class SimGraphRunner {
   private sinusDyn = new Map<string, FloatSinusState>()
   /** Per-handle Signal latch / blend (cleared like floatDyn). */
   private signalDyn = new Map<string, SignalDynState>()
+  /** Incremental bone-op state (Rotate/Translate); cleared on bind/reset. */
+  private boneRotateDyn = new Map<string, BoneOpRotateState>()
+  private boneQuatDyn = new Map<string, BoneOpQuatState>()
+  private boneTranslateDyn = new Map<string, BoneOpTranslateState>()
+  private boneOpCache = createBoneOpFrameCache()
+  /** Optional parent-transform MS map for ParentTransform Sample. */
+  parentTransforms = new Map<string, Qs>()
   /** Anim setup / clip index for HasAnimation + SkAnim clock. */
   private clipLibrary: ClipLibrary | null = null
   /** Glb pose clips for Sample. */
@@ -2143,6 +2446,11 @@ export class SimGraphRunner {
     this.randomDyn.clear()
     this.sinusDyn.clear()
     this.signalDyn.clear()
+    this.boneRotateDyn.clear()
+    this.boneQuatDyn.clear()
+    this.boneTranslateDyn.clear()
+    clearBoneOpFrameCache(this.boneOpCache)
+    this.parentTransforms.clear()
     this.clipClocks.clear()
     this.conditionDyn.clear()
     this.staticSwitchResults.clear()
@@ -2166,6 +2474,11 @@ export class SimGraphRunner {
     this.randomDyn.clear()
     this.sinusDyn.clear()
     this.signalDyn.clear()
+    this.boneRotateDyn.clear()
+    this.boneQuatDyn.clear()
+    this.boneTranslateDyn.clear()
+    clearBoneOpFrameCache(this.boneOpCache)
+    this.parentTransforms.clear()
     this.clipClocks.clear()
     this.conditionDyn.clear()
     this.staticSwitchResults.clear()
@@ -2229,6 +2542,7 @@ export class SimGraphRunner {
       ? []
       : undefined
     this.updateSucc.clear()
+    clearBoneOpFrameCache(this.boneOpCache)
     if (sampleLog) {
       const caps = [...this.stackCaptureHandleIds]
       const known = caps.filter((id) => this.hasHandle(id))
@@ -2277,6 +2591,8 @@ export class SimGraphRunner {
           warningsEnabled: this.sampleWarningsEnabled,
           warnings: sampleWarnings,
           lastWrittenNull: false,
+          boneOpCache: this.boneOpCache,
+          parentTransforms: this.parentTransforms,
         },
         out
       )
@@ -2306,6 +2622,11 @@ export class SimGraphRunner {
       parentPoseSample: options?.parentPoseSample,
       makeParentPoseSample,
       updateSucc: this.updateSucc,
+      prevNodes: this.prevNodes,
+      boneOpCache: this.boneOpCache,
+      boneRotateDyn: this.boneRotateDyn,
+      boneQuatDyn: this.boneQuatDyn,
+      boneTranslateDyn: this.boneTranslateDyn,
     }
 
     const root = findRootHandle(this.handles, this.originalAnimgraph)
@@ -2411,6 +2732,8 @@ export class SimGraphRunner {
           warningsEnabled: this.sampleWarningsEnabled,
           warnings: sampleWarnings,
           lastWrittenNull: false,
+          boneOpCache: this.boneOpCache,
+          parentTransforms: this.parentTransforms,
         },
         this.sampleOut
       )
