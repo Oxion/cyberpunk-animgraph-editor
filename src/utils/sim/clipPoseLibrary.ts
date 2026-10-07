@@ -1,16 +1,31 @@
 /**
  * Clip pose library — sample bone TRS from WolvenKit .anims.glb companions.
  * Meta (events/duration) stays on ClipLibrary / .anims.json.
+ *
+ * On load:
+ * 1) If extras.animationType is additive, strip glTF node local (bind) — same as
+ *    WolvenKit AdditiveStripLocalTransform (engine stores deltas; GLB export bakes bind).
+ * 2) Convert channels glTF Y-up → RED Z-up for Sample / .rig.json space.
  */
 
 import type { Pose } from './pose'
 import { clearStack } from './pose'
 import type { RigEntry } from './rigResource'
 
+/** animAnimationType — Normal or Additive* (engine / WolvenKit extras). */
+export type AnimAnimationType =
+  | 'Normal'
+  | 'AdditiveFromRefPose'
+  | 'AdditiveFromFirstFrame'
+  | 'Additive'
+  | 'AdditiveWithoutFirstFrame'
+  | string
+
 export type ClipPoseAnim = {
   name: string
   duration: number
-  /** jointName → channel curves */
+  animationType: AnimAnimationType
+  /** jointName → channel curves (RED Z-up; additive clips already stripped to deltas) */
   channels: Map<string, JointChannels>
 }
 
@@ -99,9 +114,11 @@ export class ClipPoseLibrary {
   loadGlb(
     buffer: ArrayBuffer,
     sourceLabel: string,
-    setupEntryId: string | null = null
+    setupEntryId: string | null = null,
+    /** Optional name→animationType from .anims.json (overrides / fills GLB extras). */
+    animationTypes?: ReadonlyMap<string, string> | null
   ): { id: string; animCount: number } {
-    const parsed = parseGlbAnimations(buffer)
+    const parsed = parseGlbAnimations(buffer, animationTypes ?? null)
     const id = `pose_${nextPoseSetId++}`
     // Replace existing for same setup entry
     if (setupEntryId) {
@@ -273,10 +290,17 @@ function keyframeSpan(times: Float32Array, t: number): { i0: number; i1: number;
 }
 
 type GltfJson = {
-  nodes?: Array<{ name?: string; children?: number[]; translation?: number[]; rotation?: number[]; scale?: number[] }>
+  nodes?: Array<{
+    name?: string
+    children?: number[]
+    translation?: number[]
+    rotation?: number[]
+    scale?: number[]
+  }>
   skins?: Array<{ joints?: number[]; inverseBindMatrices?: number }>
   animations?: Array<{
     name?: string
+    extras?: unknown
     channels?: Array<{ sampler: number; target: { node: number; path: string } }>
     samplers?: Array<{ input: number; output: number; interpolation?: string }>
   }>
@@ -293,7 +317,31 @@ type GltfJson = {
   buffers?: Array<{ byteLength: number; uri?: string }>
 }
 
-function parseGlbAnimations(buffer: ArrayBuffer): {
+function readGltfAnimExtras(extras: unknown): { animationType: AnimAnimationType } {
+  let o = extras
+  if (typeof o === 'string') {
+    try {
+      o = JSON.parse(o)
+    } catch {
+      return { animationType: 'Normal' }
+    }
+  }
+  if (!o || typeof o !== 'object') return { animationType: 'Normal' }
+  const rec = o as Record<string, unknown>
+  const raw = rec.animationType ?? rec.AnimationType
+  const animationType = typeof raw === 'string' && raw.trim() ? raw.trim() : 'Normal'
+  return { animationType }
+}
+
+export function isAdditiveAnimationType(t: AnimAnimationType | undefined | null): boolean {
+  if (!t || t === 'Normal') return false
+  return t.startsWith('Additive')
+}
+
+function parseGlbAnimations(
+  buffer: ArrayBuffer,
+  animationTypes?: ReadonlyMap<string, string> | null
+): {
   animations: Map<string, ClipPoseAnim>
   jointNames: string[]
 } {
@@ -339,7 +387,6 @@ function parseGlbAnimations(buffer: ArrayBuffer): {
     if (acc.componentType === 5126) {
       return new Float32Array(binBuf, byteOffset, count)
     }
-    // Convert other types to float
     const out = new Float32Array(count)
     const dv = new DataView(binBuf, byteOffset)
     for (let i = 0; i < count; i++) {
@@ -356,6 +403,20 @@ function parseGlbAnimations(buffer: ArrayBuffer): {
   for (let ai = 0; ai < animList.length; ai++) {
     const a = animList[ai]!
     const name = (a.name && a.name.trim()) || `anim_${ai}`
+    const fromExtras = readGltfAnimExtras(a.extras).animationType
+    const fromMeta =
+      animationTypes?.get(name) ??
+      (() => {
+        if (!animationTypes) return undefined
+        const lower = name.toLowerCase()
+        for (const [k, v] of animationTypes) {
+          if (k.toLowerCase() === lower) return v
+        }
+        return undefined
+      })()
+    // Prefer .anims.json type when present (ground truth); else GLB extras.
+    const animationType = (fromMeta || fromExtras || 'Normal') as AnimAnimationType
+    const stripAdditive = isAdditiveAnimationType(animationType)
     const channels = new Map<string, JointChannels>()
     let duration = 0
     for (const ch of a.channels ?? []) {
@@ -372,14 +433,148 @@ function parseGlbAnimations(buffer: ArrayBuffer): {
         channels.set(joint, jc)
       }
       const path = ch.target.path
-      if (path === 'translation') jc.t = { times: Float32Array.from(times), values }
-      else if (path === 'rotation') jc.r = { times: Float32Array.from(times), values }
-      else if (path === 'scale') jc.s = { times: Float32Array.from(times), values }
+      if (path === 'translation') {
+        if (stripAdditive) {
+          const lt = node?.translation ?? [0, 0, 0]
+          stripAdditiveTranslationTrack(values, lt[0] ?? 0, lt[1] ?? 0, lt[2] ?? 0)
+        }
+        gltfTranslationTrackToRed(values)
+        jc.t = { times: Float32Array.from(times), values }
+      } else if (path === 'rotation') {
+        if (stripAdditive) {
+          const lr = node?.rotation ?? [0, 0, 0, 1]
+          stripAdditiveRotationTrack(values, lr[0] ?? 0, lr[1] ?? 0, lr[2] ?? 0, lr[3] ?? 1)
+        }
+        gltfRotationTrackToRed(values)
+        jc.r = { times: Float32Array.from(times), values }
+      } else if (path === 'scale') {
+        if (stripAdditive) {
+          const ls = node?.scale ?? [1, 1, 1]
+          stripAdditiveScaleTrack(values, ls[0] ?? 1, ls[1] ?? 1, ls[2] ?? 1)
+        }
+        gltfScaleTrackToRed(values)
+        jc.s = { times: Float32Array.from(times), values }
+      }
     }
-    animations.set(name, { name, duration, channels })
+    animations.set(name, { name, duration, animationType, channels })
   }
 
   return { animations, jointNames }
+}
+
+/** WolvenKit export: absT = localT + delta → strip delta = abs - local (glTF space). */
+function stripAdditiveTranslationTrack(
+  values: Float32Array,
+  lx: number,
+  ly: number,
+  lz: number
+): void {
+  for (let i = 0; i + 2 < values.length; i += 3) {
+    values[i]! -= lx
+    values[i + 1]! -= ly
+    values[i + 2]! -= lz
+  }
+}
+
+/** Export: absR = localR * delta → delta = inv(localR) * absR. */
+function stripAdditiveRotationTrack(
+  values: Float32Array,
+  lqx: number,
+  lqy: number,
+  lqz: number,
+  lqw: number
+): void {
+  const ix = -lqx
+  const iy = -lqy
+  const iz = -lqz
+  const iw = lqw
+  for (let i = 0; i + 3 < values.length; i += 4) {
+    const qx = values[i]!
+    const qy = values[i + 1]!
+    const qz = values[i + 2]!
+    const qw = values[i + 3]!
+    let rx = iw * qx + ix * qw + iy * qz - iz * qy
+    let ry = iw * qy - ix * qz + iy * qw + iz * qx
+    let rz = iw * qz + ix * qy - iy * qx + iz * qw
+    let rw = iw * qw - ix * qx - iy * qy - iz * qz
+    const len = Math.hypot(rx, ry, rz, rw) || 1
+    values[i] = rx / len
+    values[i + 1] = ry / len
+    values[i + 2] = rz / len
+    values[i + 3] = rw / len
+  }
+}
+
+/** Export: absS = localS * delta → delta = abs / local. */
+function stripAdditiveScaleTrack(
+  values: Float32Array,
+  lsx: number,
+  lsy: number,
+  lsz: number
+): void {
+  for (let i = 0; i + 2 < values.length; i += 3) {
+    values[i] = lsx !== 0 ? values[i]! / lsx : values[i]!
+    values[i + 1] = lsy !== 0 ? values[i + 1]! / lsy : values[i + 1]!
+    values[i + 2] = lsz !== 0 ? values[i + 2]! / lsz : values[i + 2]!
+  }
+}
+
+/**
+ * glTF Y-up → RED Z-up.
+ * Inverse of RED→glTF: (x,y,z)_RED → (x, z, -y)_glTF
+ * so (x,y,z)_RED = (x_g, -z_g, y_g).
+ */
+function gltfTranslationTrackToRed(values: Float32Array): void {
+  for (let i = 0; i + 2 < values.length; i += 3) {
+    const x = values[i]!
+    const y = values[i + 1]!
+    const z = values[i + 2]!
+    values[i] = x
+    values[i + 1] = -z
+    values[i + 2] = y
+  }
+}
+
+/** Scale axes follow the same remapping (no signs). */
+function gltfScaleTrackToRed(values: Float32Array): void {
+  for (let i = 0; i + 2 < values.length; i += 3) {
+    const sx = values[i]!
+    const sy = values[i + 1]!
+    const sz = values[i + 2]!
+    values[i] = sx
+    values[i + 1] = sz
+    values[i + 2] = sy
+  }
+}
+
+/** q_RED = q_Minv * q_glTF * q_M, M = Rx(-90°) maps RED vectors into glTF. */
+const Q_M_X = -Math.SQRT1_2
+const Q_M_W = Math.SQRT1_2
+const Q_MINV_X = Math.SQRT1_2
+const Q_MINV_W = Math.SQRT1_2
+
+function gltfRotationTrackToRed(values: Float32Array): void {
+  for (let i = 0; i + 3 < values.length; i += 4) {
+    const qx = values[i]!
+    const qy = values[i + 1]!
+    const qz = values[i + 2]!
+    const qw = values[i + 3]!
+    // t = q_g * q_M
+    const tx = qw * Q_M_X + qx * Q_M_W
+    const ty = qy * Q_M_W + qz * Q_M_X
+    const tz = -qy * Q_M_X + qz * Q_M_W
+    const tw = qw * Q_M_W - qx * Q_M_X
+    // q_r = q_Minv * t
+    let rx = Q_MINV_W * tx + Q_MINV_X * tw
+    let ry = Q_MINV_W * ty - Q_MINV_X * tz
+    let rz = Q_MINV_W * tz + Q_MINV_X * ty
+    let rw = Q_MINV_W * tw - Q_MINV_X * tx
+    const len = Math.hypot(rx, ry, rz, rw) || 1
+    values[i] = rx / len
+    values[i + 1] = ry / len
+    values[i + 2] = rz / len
+    values[i + 3] = rw / len
+  }
 }
 
 function accessorComponents(type: string): number {

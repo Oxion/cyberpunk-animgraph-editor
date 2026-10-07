@@ -45,6 +45,11 @@ const OPS: Record<AppWindowType, WindowPresentOps> = {
     preferredHeight: 440,
     afterReady: { id: 'size-to-content' },
   },
+  'sim-skeleton': {
+    placement: 'dialog',
+    preferredWidth: 640,
+    preferredHeight: 520,
+  },
 }
 
 export function getWindowPresentOps(type: AppWindowType): WindowPresentOps {

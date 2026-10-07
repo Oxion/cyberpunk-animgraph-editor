@@ -253,6 +253,8 @@
                 :set-active-rig="simSetActiveRig"
                 :clear-rig-library="simClearRigLibrary"
                 :set-pose-inspect-bones="simSetPoseInspectBones"
+                :sample-warnings-enabled="simSampleWarningsEnabled"
+                :set-sample-warnings-enabled="simSetSampleWarningsEnabled"
                 :selected-stack-focus="simSelectedStackFocus"
                 :load-anim-database-json="simLoadAnimDatabaseJson"
                 :remove-anim-database="simRemoveAnimDatabase"
@@ -282,6 +284,7 @@
                 @fire-anim-end="simFireAnimEnd"
                 @clear-clips="simClearClipLibrary"
                 @clear-anim-db="simClearAnimDatabaseLibrary"
+                @open-skeleton="openSimSkeletonFromPanel"
               />
             </SidebarPanel>
 
@@ -373,7 +376,7 @@
             Pin
           </button>
           <button
-            v-if="win.type !== 'settings' && win.type !== 'render-stats'"
+            v-if="win.type !== 'settings' && win.type !== 'render-stats' && win.type !== 'sim-skeleton'"
             type="button"
             class="app-window-toolbar-btn"
             title="Fit view"
@@ -405,6 +408,12 @@
           :target-label="win.payload.label"
           :get-stats="() => getRenderStatsForWindow(win)"
           @content-height="(h) => sizeWindowToContent(win.id, h)"
+        />
+        <SimSkeletonWindowContent
+          v-else-if="win.type === 'sim-skeleton'"
+          :diagram-id="win.payload.diagramId"
+          :minimized="win.minimized"
+          :get-pose="(source) => getSimSkeletonPose(source)"
         />
         <div
           v-else-if="win.type === 'lens' && windowRenderData(win.id) && windowLensTop(win.id)"
@@ -595,6 +604,7 @@ import GraphViewLayer from './components/GraphViewLayer.vue'
 import LensWindowContent from './components/LensWindowContent.vue'
 import NodeDetailsPanel from './components/NodeDetailsPanel.vue'
 import RenderStatsWindowContent from './components/RenderStatsWindowContent.vue'
+import SimSkeletonWindowContent from './components/SimSkeletonWindowContent.vue'
 import SettingsWindowContent from './components/SettingsWindowContent.vue'
 import SidebarPanel from './components/SidebarPanel.vue'
 import SimPanel from './components/SimPanel.vue'
@@ -661,6 +671,7 @@ import {
   focusWindow,
   minimizeWindow,
   openRenderStatsWindow,
+  openSimSkeletonWindow,
   openStateLinksWindow,
   pinWindow,
   sizeWindowToContent,
@@ -1105,6 +1116,8 @@ const {
   setActiveRig: simSetActiveRig,
   clearRigLibrary: simClearRigLibrary,
   setPoseInspectBones: simSetPoseInspectBones,
+  sampleWarningsEnabled: simSampleWarningsEnabled,
+  setSampleWarningsEnabled: simSetSampleWarningsEnabled,
   setStackCaptureHandleIds: simSetStackCaptureHandleIds,
   loadAnimDatabaseJson: simLoadAnimDatabaseJson,
   clearAnimDatabaseLibrary: simClearAnimDatabaseLibrary,
@@ -1117,6 +1130,7 @@ const {
   snapshotsByDiagram: simSnapshotsByDiagram,
   getProjectSimResources: simGetProjectSimResources,
   applyProjectSimResources: simApplyProjectSimResources,
+  getSkeletonViewPose: simGetSkeletonViewPose,
 } = useAnimgraphSim()
 
 const simSelectedStackFocus = computed(() => {
@@ -1362,7 +1376,27 @@ const openRenderStatsForActive = () => {
   if (!target) return
   openRenderStatsWindow(target)
 }
-    
+
+const getSimSkeletonPose = (source: 'full' | 'active' | 'atNode') => {
+  const handleId = (selectedNodeRef.value?.data?.originalNodeId as string | undefined) ?? null
+  return simGetSkeletonViewPose(source, {
+    activeDiagramId: requireActiveDiagramIdSafe(),
+    captureHandleId: handleId,
+  })
+}
+
+const requireActiveDiagramIdSafe = (): string | null => {
+  try {
+    return requireActiveDiagramId()
+  } catch {
+    return null
+  }
+}
+
+const openSimSkeletonFromPanel = () => {
+  openSimSkeletonWindow({ diagramId: requireActiveDiagramIdSafe() ?? 'main' })
+}
+
 // Connection settings
 const connectionSettings = reactive({
   highlightSelectedNodeConnections: true,

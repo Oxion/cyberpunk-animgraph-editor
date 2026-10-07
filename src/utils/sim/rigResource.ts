@@ -110,32 +110,169 @@ function buildBoneIndexMap(names: string[]): Map<string, number> {
   return m
 }
 
+/** WolvenKit CName: bare string or `{ $type:'CName', $value }`. */
+type WkitCNameJson = string | { $value?: string | number | null }
+
+/** anim::RigPartBone */
+type AnimRigPartBoneJson = {
+  bone?: WkitCNameJson
+  name?: WkitCNameJson
+  weight?: number | string
+}
+
+/** anim::RigPartBoneTree */
+type AnimRigPartBoneTreeJson = {
+  rootBone?: WkitCNameJson
+  bone?: WkitCNameJson
+  name?: WkitCNameJson
+  weight?: number | string
+  subtreesToChange?: AnimRigPartBoneTreeJson[]
+}
+
+/** anim::TransformMask (baked, rarely present — notSerialized in engine). */
+type AnimTransformMaskJson = {
+  index?: number | string
+  Index?: number | string
+  weight?: number | string
+  WeightValue?: number | string
+}
+
+/** anim::RigPart from .rig.json */
+type AnimRigPartJson = {
+  name?: WkitCNameJson
+  mask?: Array<number | AnimTransformMaskJson>
+  singleBones?: Array<AnimRigPartBoneJson | WkitCNameJson>
+  treeBones?: AnimRigPartBoneTreeJson[]
+}
+
+type WkitDataWrapper<T> = { Data: T }
+
+function isObject(value: object | string | number | boolean | null | undefined): value is object {
+  return value !== null && typeof value === 'object'
+}
+
+function unwrapDataWrapper<T extends object>(raw: object): T {
+  if ('Data' in raw && isObject((raw as WkitDataWrapper<object>).Data)) {
+    return (raw as WkitDataWrapper<T>).Data
+  }
+  return raw as T
+}
+
+function asAnimRigPart(raw: object): AnimRigPartJson {
+  return unwrapDataWrapper<AnimRigPartJson>(raw)
+}
+
+function asPartBone(raw: object): AnimRigPartBoneJson {
+  return unwrapDataWrapper<AnimRigPartBoneJson>(raw)
+}
+
+function asPartBoneTree(raw: object): AnimRigPartBoneTreeJson {
+  return unwrapDataWrapper<AnimRigPartBoneTreeJson>(raw)
+}
+
+function asTransformMask(raw: object): AnimTransformMaskJson {
+  return unwrapDataWrapper<AnimTransformMaskJson>(raw)
+}
+
+function readPartBoneEntry(raw: AnimRigPartBoneJson | WkitCNameJson): AnimRigPartBoneJson | null {
+  if (typeof raw === 'string') return { bone: raw, weight: 1 }
+  if (!isObject(raw)) return null
+  // CName object used as bare entry
+  if ('$value' in raw && !('bone' in raw) && !('name' in raw)) {
+    return { bone: raw as WkitCNameJson, weight: 1 }
+  }
+  return asPartBone(raw)
+}
+
+/** anim::RigPart FillTree — mark bone + all descendants. */
+function fillBoneTree(
+  rootIdx: number,
+  boneParents: number[],
+  mask: Uint8Array,
+  boneCount: number
+): void {
+  if (rootIdx < 0 || rootIdx >= boneCount) return
+  mask[rootIdx] = 1
+  for (let i = rootIdx + 1; i < boneCount; i++) {
+    if (boneParents[i] === rootIdx) fillBoneTree(i, boneParents, mask, boneCount)
+  }
+}
+
+/**
+ * Build per-bone 0/1 mask from animRig part.
+ * Engine: m_mask is notSerialized — WolvenKit JSON usually has singleBones/treeBones only.
+ * treeBones.rootBone expands to full subtree (RigPart::CacheData / FillTree).
+ */
 function parsePartMask(
-  partRaw: unknown,
+  partRaw: object | string | number | boolean | null | undefined,
   boneCount: number,
-  boneIndexByName: Map<string, number>
+  boneIndexByName: Map<string, number>,
+  boneParents: number[]
 ): RigPartMask | null {
-  const p = unwrap(partRaw) ?? (partRaw as Record<string, unknown> | null)
-  if (!p) return null
+  if (!isObject(partRaw)) return null
+  const p = asAnimRigPart(partRaw)
   const name = readCName(p.name) || 'None'
   const mask = new Uint8Array(boneCount)
+
   const maskArr = p.mask
   if (Array.isArray(maskArr) && maskArr.length > 0) {
-    for (let i = 0; i < Math.min(boneCount, maskArr.length); i++) {
-      const v = Number(maskArr[i])
-      mask[i] = Number.isFinite(v) && v > 0 ? 1 : 0
-    }
-  } else {
-    const tree = Array.isArray(p.treeBones) ? p.treeBones : []
-    const single = Array.isArray(p.singleBones) ? p.singleBones : []
-    for (const b of [...tree, ...single]) {
-      const bn = readCName(b)
-      if (!bn) continue
-      const idx = boneIndexByName.get(bn.toLowerCase())
-      if (idx !== undefined) mask[idx] = 1
+    const first = maskArr[0]
+    if (isObject(first)) {
+      for (const entry of maskArr) {
+        if (!isObject(entry)) continue
+        const e = asTransformMask(entry)
+        const idx = readNumber(e.index ?? e.Index, -1)
+        const w = readNumber(e.weight ?? e.WeightValue, 1)
+        if (idx >= 0 && idx < boneCount && w > 0) mask[idx] = 1
+      }
+    } else if (maskArr.length === boneCount || typeof first === 'number') {
+      for (let i = 0; i < Math.min(boneCount, maskArr.length); i++) {
+        const v = Number(maskArr[i])
+        mask[i] = Number.isFinite(v) && v > 0 ? 1 : 0
+      }
     }
   }
+
+  // Always apply singleBones / treeBones (source of truth when mask not serialized)
+  const singles = Array.isArray(p.singleBones) ? p.singleBones : []
+  for (const raw of singles) {
+    const e = readPartBoneEntry(raw)
+    if (!e) continue
+    const bn = readCName(e.bone ?? e.name)
+    const w = readNumber(e.weight, 1)
+    if (!bn || w <= 0) continue
+    const idx = boneIndexByName.get(bn.toLowerCase())
+    if (idx !== undefined) mask[idx] = 1
+  }
+
+  const trees = Array.isArray(p.treeBones) ? p.treeBones : []
+  for (const raw of trees) {
+    applyPartBoneTree(raw, boneIndexByName, boneParents, mask, boneCount)
+  }
+
   return { name, mask }
+}
+
+/** RigPartBoneTree: fill subtrees first, then rootBone + descendants. */
+function applyPartBoneTree(
+  raw: AnimRigPartBoneTreeJson | object,
+  boneIndexByName: Map<string, number>,
+  boneParents: number[],
+  mask: Uint8Array,
+  boneCount: number
+): void {
+  if (!isObject(raw)) return
+  const e = asPartBoneTree(raw)
+  const subs = Array.isArray(e.subtreesToChange) ? e.subtreesToChange : []
+  for (const sub of subs) {
+    applyPartBoneTree(sub, boneIndexByName, boneParents, mask, boneCount)
+  }
+  const rootName = readCName(e.rootBone ?? e.bone ?? e.name)
+  const w = readNumber(e.weight, 1)
+  if (!rootName || w <= 0) return
+  const idx = boneIndexByName.get(rootName.toLowerCase())
+  if (idx === undefined) return
+  fillBoneTree(idx, boneParents, mask, boneCount)
 }
 
 /** Parse WolvenKit .rig.json (animRig) into RigEntry fields (id assigned by library). */
@@ -185,7 +322,7 @@ export function parseRigJson(
   const parts: RigPartMask[] = []
   if (Array.isArray(root.parts)) {
     for (const pr of root.parts) {
-      const part = parsePartMask(pr, n, boneIndexByName)
+      const part = parsePartMask(pr, n, boneIndexByName, boneParents)
       if (part) parts.push(part)
     }
   }

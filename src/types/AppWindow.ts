@@ -1,4 +1,4 @@
-export type AppWindowType = 'lens' | 'sm-ring' | 'state-links' | 'settings' | 'render-stats'
+export type AppWindowType = 'lens' | 'sm-ring' | 'state-links' | 'settings' | 'render-stats' | 'sim-skeleton'
 
 export interface LensWindowPayload {
   rootNodeId: string
@@ -30,6 +30,11 @@ export interface RenderStatsWindowPayload {
   /** `main` | body view id | app window id */
   sourceId: string
   label: string
+}
+
+export interface SimSkeletonWindowPayload {
+  /** Root diagram Sample source (usually MAIN). */
+  diagramId: string
 }
 
 export interface AppWindowRect {
@@ -87,4 +92,8 @@ export type AppWindowState =
   | (AppWindowBase & {
       type: 'render-stats'
       payload: RenderStatsWindowPayload
+    })
+  | (AppWindowBase & {
+      type: 'sim-skeleton'
+      payload: SimSkeletonWindowPayload
     })

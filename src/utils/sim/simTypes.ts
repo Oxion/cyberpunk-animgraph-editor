@@ -55,6 +55,25 @@ export type SimClipResolve =
   /** AnimDatabase node but CSV / .csv.json not loaded */
   | 'no-db'
 
+/** Sample-path diagnostic (append-only collector when warningsEnabled). */
+export type SimSampleWarning = {
+  code:
+    | 'blend2-null-input'
+    | 'blend-mask-oob'
+    | 'blend-mask-missing'
+    | 'blend-mask-empty'
+  handleId: string
+  message: string
+  weight?: number
+  /** Which Blend2 input(s) were null */
+  side?: 'first' | 'second' | 'both'
+  maskIndex?: number
+  maskName?: string
+}
+
+/** Cap per Sample frame to keep HUD bounded. */
+export const SIM_SAMPLE_WARNINGS_MAX = 64
+
 /** Active SkAnim clip clock sample (all stepped clocks this frame). */
 export interface SimActiveClip {
   handleId: string
@@ -100,6 +119,8 @@ export interface SimPoseStats {
   stackSourceHandleId?: string
   /** Anim names on sample that resolved clip meta but had no glb in winning set */
   missingGlb?: string[]
+  /** Sample warnings this frame (only when detect enabled) */
+  warnings?: SimSampleWarning[]
 }
 
 export interface SimSnapshot {

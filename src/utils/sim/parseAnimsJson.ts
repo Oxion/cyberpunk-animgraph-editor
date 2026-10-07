@@ -109,7 +109,12 @@ function parseEntry(entryRaw: unknown, setTags: string[], source?: string): Clip
   const animTags = readCNameList(anim.tags)
   const tags = [...new Set([...setTags, ...animTags])]
   const events = parseEvents(entry.events, fps)
-  return { name, duration, events, tags, numFrames, source }
+  const animationTypeRaw = anim.animationType
+  const animationType =
+    typeof animationTypeRaw === 'string' && animationTypeRaw.trim()
+      ? animationTypeRaw.trim()
+      : 'Normal'
+  return { name, duration, events, tags, numFrames, source, animationType }
 }
 
 /**

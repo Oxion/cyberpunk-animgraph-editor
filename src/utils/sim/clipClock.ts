@@ -135,6 +135,8 @@ export type AdvanceClipClockResult = {
 
 /**
  * One Update tick for an active SkAnim-family node.
+ * @param targetPlaybackDuration — SkDurationAnim: stretch clip so clipped window
+ *   fits this many seconds (timeScale = clippedDur / duration). Omit for 1:1 dt.
  */
 export function advanceClipClock(
   state: ClipClockState,
@@ -142,7 +144,8 @@ export function advanceClipClock(
   dt: number,
   library: ClipLibrary | null,
   board: SimInputBoard,
-  isWrapperActive: (name: string) => boolean
+  isWrapperActive: (name: string) => boolean,
+  targetPlaybackDuration?: number
 ): AdvanceClipClockResult {
   if (state.stepped) {
     return {
@@ -209,8 +212,16 @@ export function advanceClipClock(
     state.wasActive = true
   }
 
+  // SkDurationAnim: timeScale = clippedDur / durationLink (1 if duration ≤ 0)
+  let playDt = Math.max(0, dt)
+  if (targetPlaybackDuration !== undefined) {
+    const dur = Math.max(0, targetPlaybackDuration)
+    const timeScale = dur > 0 && clippedDur > 0 ? clippedDur / dur : 1
+    playDt *= timeScale
+  }
+
   state.prevTime = state.currTime
-  state.currTime += Math.max(0, dt)
+  state.currTime += playDt
 
   let loops = 0
   let ended = false

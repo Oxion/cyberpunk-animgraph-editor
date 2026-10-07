@@ -6,7 +6,8 @@
  * - animNode_StateMachine.cpp — CheckTransitions / FireTransition / progress
  * - animStateTransition.h — CheckConditionContext, IAnimStateTransitionCondition
  * - animNode_Blend2.cpp — CalculateWeightFromInputValue
- * - animNode_BlendOverride.cpp — BlendByMaskDynamic OnUpdate / ACTIVATION_THRESHOLD
+ * - animNode_BlendOverride.cpp — BlendOverride / BlendByMaskDynamic OnUpdate / ACTIVATION_THRESHOLD
+ * - PoseBlendMethod_Mask / BoneBranch — Sample blend
  *
  * Offline sim implements Update (+ numeric weights) and Sample (glb pose).
  * IK / motion extraction / sync TimeWarper remain out of scope.
@@ -58,6 +59,9 @@ export function blend2SecondInputActive(weight: number): boolean {
 /** AnimNode_BlendByMaskDynamic::ACTIVATION_THRESHOLD */
 export const BLEND_BY_MASK_DYNAMIC_ACTIVATION = 0.01
 
+/** AnimNode_BlendOverride::ACTIVATION_THRESHOLD */
+export const BLEND_OVERRIDE_ACTIVATION = 0.01
+
 /**
  * OnUpdate: blend pose is updated only when weight is above threshold
  * and mask index is in range of `masks`.
@@ -73,6 +77,11 @@ export function blendByMaskDynamicBlendActive(
     maskIndex >= 0 &&
     maskIndex < masksCount
   )
+}
+
+/** Override input Update/Sample when control weight exceeds threshold. */
+export function blendOverrideInputActive(weight: number): boolean {
+  return weight > BLEND_OVERRIDE_ACTIVATION
 }
 
 /** AnimNode_BlendMultiple::NORMALIZED_WEIGHT_THRESHOLD */

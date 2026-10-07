@@ -28,15 +28,40 @@
       >
         Reset
       </Button>
-      <Button
-        type="button"
-        size="sm"
-        :variant="active ? 'default' : 'secondary'"
-        class="ml-auto h-7 rounded-sm px-2.5 text-xs"
-        @click="emit('toggle-active')"
-      >
-        {{ active ? 'Deactivate' : 'Activate' }}
-      </Button>
+      <div class="ml-auto flex shrink-0 items-center gap-1">
+        <Button
+          type="button"
+          size="sm"
+          :variant="active ? 'default' : 'secondary'"
+          class="h-7 rounded-sm px-2.5 text-xs"
+          @click="emit('toggle-active')"
+        >
+          {{ active ? 'Deactivate' : 'Activate' }}
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger as-child>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              class="h-7 w-7 shrink-0 rounded-sm px-0"
+              title="Sim options"
+            >
+              <EllipsisVertical class="size-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" class="min-w-48">
+            <DropdownMenuItem
+              class="gap-2 text-xs"
+              @select="setSampleWarningsEnabled?.(!sampleWarningsEnabled)"
+            >
+              <TriangleAlert class="size-3.5" />
+              Sample warnings
+              <Check v-if="sampleWarningsEnabled" class="ml-auto size-3.5 opacity-80" />
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
 
     <div class="flex shrink-0 flex-wrap items-center gap-3 text-muted-foreground">
@@ -90,6 +115,28 @@
           {{ chip }}
         </span>
       </div>
+      <div
+        v-if="sampleWarningsEnabled && snapshot.poseStats?.warnings?.length"
+        class="mt-1 border-t border-border/60 pt-1 font-data text-[10px] text-amber-400/90"
+      >
+        <p class="m-0 mb-0.5 text-[9px] uppercase tracking-wide text-muted-foreground/80">
+          Warnings ({{ snapshot.poseStats.warnings.length }})
+        </p>
+        <p
+          v-for="(w, i) in snapshot.poseStats.warnings"
+          :key="`${w.code}-${w.handleId}-${i}`"
+          class="m-0 truncate"
+          :title="w.message"
+        >
+          {{ w.message }}
+        </p>
+      </div>
+      <p
+        v-else-if="sampleWarningsEnabled && snapshot.poseStats"
+        class="mt-1 border-t border-border/60 pt-1 text-[10px] text-muted-foreground/70"
+      >
+        No sample warnings this frame
+      </p>
     </div>
 
     <Tabs v-model="activeTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
@@ -673,6 +720,17 @@
             >
               Clear rigs
             </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              class="h-7 rounded-sm px-2 text-xs"
+              :disabled="!activeRigBones.length"
+              title="Open stick skeleton 3D window"
+              @click="emit('openSkeleton')"
+            >
+              Skeleton 3D
+            </Button>
           </div>
           <p v-if="rigError" class="m-0 text-[11px] text-destructive">{{ rigError }}</p>
           <p class="font-data m-0 text-[11px] text-muted-foreground">
@@ -924,6 +982,7 @@ import type { AnimDatabase, AnimDatabaseStats } from '../utils/sim/animDatabase'
 import type { BoneTrs } from '../utils/sim/pose'
 import type { SimSnapshot } from '../utils/sim/simTypes'
 import { SimInputBoard } from '../utils/sim/SimInputBoard'
+import { Check, EllipsisVertical, TriangleAlert } from '@lucide/vue'
 import AnimSetupEntryCard from '@/components/sim/AnimSetupEntryCard.vue'
 import {
   PropertyBoolToggle,
@@ -932,6 +991,12 @@ import {
   PropertyVecBlock,
 } from '@/components/nodeDetails'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
@@ -996,6 +1061,8 @@ const props = defineProps<{
   setActiveRig: (id: string | null) => void
   clearRigLibrary: () => void
   setPoseInspectBones: (names: string[]) => void
+  sampleWarningsEnabled?: boolean
+  setSampleWarningsEnabled?: (on: boolean) => void
   /** Selection-aware stack HUD focus (Extender/Shrinker). */
   selectedStackFocus?: {
     kind: 'extender' | 'shrinker'
@@ -1045,6 +1112,7 @@ const emit = defineEmits<{
   fireAnimEnd: []
   clearClips: []
   clearAnimDb: []
+  openSkeleton: []
 }>()
 
 const activeTab = ref<'events' | 'values' | 'resources'>('events')

@@ -4,6 +4,7 @@ import {
   activeDiagramId,
   getRenderData,
   listDiagramIds,
+  mainDiagramId,
   projectRef,
 } from '../stores/graphProject'
 import {
@@ -37,11 +38,14 @@ import { SimInputBoard, type SimVec4 } from '../utils/sim/SimInputBoard'
 import { ZERO_VEC4 } from '../utils/sim/evalAnimMathExpressionVector'
 import { collectDiscoveredInputs } from '../utils/sim/SimStateMachine'
 import { emptySimSnapshot, type SimSnapshot } from '../utils/sim/simTypes'
+import { isSimSampleLogEnabled } from '../utils/sim/simSampleLog'
 import { RigLibrary, type RigLibraryJson, type RigEntryView } from '../utils/sim/rigResource'
 import { ClipPoseLibrary, type ClipPoseSetView } from '../utils/sim/clipPoseLibrary'
 
 function resolveRootDiagramId(ids: string[]): string | null {
   if (!ids.length) return null
+  const mainId = mainDiagramId.value
+  if (mainId && ids.includes(mainId)) return mainId
   if (ids.includes(MAIN_DIAGRAM_ID)) return MAIN_DIAGRAM_ID
   return ids[0] ?? null
 }
@@ -90,6 +94,8 @@ export function useAnimgraphSim() {
   const entityTagDrafts = ref<Record<string, boolean>>({})
   /** SetAnimWrapperWeight mock: name → weight (active if >= 0.5) */
   const wrapperWeightDrafts = ref<Record<string, number>>({})
+  /** Sample-path diagnostics (Blend2 null inputs, …). Off by default. */
+  const sampleWarningsEnabled = ref(false)
 
   let raf = 0
   let lastTs = 0
@@ -132,10 +138,12 @@ export function useAnimgraphSim() {
       r = new SimGraphRunner()
       runners.set(diagramId, r)
     }
+    r.diagramId = diagramId
     r.setClipLibrary(clipLibrary.value)
     r.setAnimDatabaseLibrary(animDbLibrary.value)
     r.setClipPoseLibrary(clipPoseLibrary.value)
     r.setActiveRig(rigLibrary.value.getActive())
+    r.sampleWarningsEnabled = sampleWarningsEnabled.value
     return r
   }
 
@@ -362,10 +370,14 @@ export function useAnimgraphSim() {
     }
   }
 
+  /** Nested GraphSlot poses from last publish (survives until next publish). */
+  let lastNestedPoseBySlot = new Map<string, import('../utils/sim/pose').Pose>()
+
   const makeSlotHost = (
     snaps: Record<string, SimSnapshot>,
     stepped: Set<string>,
-    dt: number
+    dt: number,
+    nestedPoseBySlot: Map<string, import('../utils/sim/pose').Pose>
   ): SimGraphSlotHost => ({
     stepNested(slotName, parentPoseUpdate, parentPoseSample) {
       const ids = listDiagramIds.value
@@ -384,23 +396,34 @@ export function useAnimgraphSim() {
           clock.value.speed,
           {
             endBoardFrame: false,
-            slotHost: makeSlotHost(snaps, stepped, dt),
+            slotHost: makeSlotHost(snaps, stepped, dt, nestedPoseBySlot),
             parentPoseUpdate,
             parentPoseSample,
           }
         )
         snaps[diagramId] = snap
         stepped.add(diagramId)
+        const pose = runner.getSampledPose()
+        if (pose) {
+          nestedPoseBySlot.set(slotName, pose)
+          const lower = slotName.trim().toLowerCase()
+          if (lower && lower !== slotName) nestedPoseBySlot.set(lower, pose)
+        }
         return { diagramId, snap }
       } finally {
         nestStack.pop()
       }
     },
     getNestedPose(slotName) {
+      const want = slotName.trim()
+      if (!want || want === 'None') return null
+      const cached =
+        nestedPoseBySlot.get(want) ?? nestedPoseBySlot.get(want.toLowerCase())
+      if (cached) return cached
       const ids = listDiagramIds.value
-      const diagramId = findDiagramIdBySlotName(ids, slotName)
+      const diagramId = findDiagramIdBySlotName(ids, want)
       if (!diagramId) return null
-      return ensureRunner(diagramId).getSampledPose()
+      return runners.get(diagramId)?.getSampledPose() ?? null
     },
   })
 
@@ -426,7 +449,8 @@ export function useAnimgraphSim() {
     applyDraftsToBoard()
     const snaps: Record<string, SimSnapshot> = {}
     const stepped = new Set<string>()
-    const slotHost = makeSlotHost(snaps, stepped, dt)
+    lastNestedPoseBySlot = new Map()
+    const slotHost = makeSlotHost(snaps, stepped, dt, lastNestedPoseBySlot)
     const rootId = resolveRootDiagramId(listDiagramIds.value)
 
     // Only root Update; slotted diagrams tick solely when GraphSlot is on the active path.
@@ -843,10 +867,12 @@ export function useAnimgraphSim() {
       console.warn('loadAnimsetGlb requires setupEntryId')
       return 0
     }
+    const typesFromJson = clipLibrary.value.getAnimationTypesForEntry(setupEntryId)
     const { animCount } = clipPoseLibrary.value.loadGlb(
       buffer,
       sourceLabel,
-      setupEntryId
+      setupEntryId,
+      typesFromJson
     )
     bumpClipPose()
     syncSampleResourcesToRunners()
@@ -904,9 +930,19 @@ export function useAnimgraphSim() {
     publish(0)
   }
 
-  const setStackCaptureHandleIds = (ids: string[]) => {
+  const setSampleWarningsEnabled = (on: boolean) => {
+    sampleWarningsEnabled.value = on
     for (const runner of runners.values()) {
-      runner.setStackCaptureHandleIds(ids)
+      runner.sampleWarningsEnabled = on
+    }
+    publish(0)
+  }
+
+  const setStackCaptureHandleIds = (ids: string[]) => {
+    const cleaned = ids.map((id) => id.trim()).filter(Boolean)
+    for (const runner of runners.values()) {
+      // Only capture on diagrams that own the handle (avoid ranged looking for player_base ids).
+      runner.setStackCaptureHandleIds(cleaned.filter((id) => runner.hasHandle(id)))
     }
     publish(0)
   }
@@ -1082,12 +1118,79 @@ export function useAnimgraphSim() {
     return snapshotsByDiagram.value[diagramId]
   }
 
+  /**
+   * Pooled pose + rig for skeleton viewport (not reactive — call each frame).
+   * - full: root diagram sampleOut
+   * - active: open diagram sampleOut
+   * - atNode: Sample capture at selected handle (fallback → active/full)
+   */
+  const getSkeletonViewPose = (
+    source: 'full' | 'active' | 'atNode',
+    options?: {
+      activeDiagramId?: string | null
+      captureHandleId?: string | null
+    }
+  ): { pose: import('../utils/sim/pose').Pose; rig: import('../utils/sim/rigResource').RigEntry } | null => {
+    const rootId = resolveRootDiagramId(listDiagramIds.value)
+    const activeId =
+      options?.activeDiagramId ?? activeDiagramId.value ?? rootId
+    const pick = (diagramId: string | null | undefined) => {
+      if (!diagramId) return null
+      const runner = runners.get(diagramId) ?? ensureRunner(diagramId)
+      const rig = runner.getActiveRig() ?? rigLibrary.value.getActive()
+      const pose = runner.getSampledPose()
+      if (!rig || !pose) return null
+      return { pose, rig }
+    }
+
+    if (source === 'full') return pick(rootId)
+
+    if (source === 'active') return pick(activeId)
+
+    // atNode
+    const hid = options?.captureHandleId?.trim()
+    if (hid) {
+      const tryCapture = (diagramId: string | null | undefined) => {
+        if (!diagramId) return null
+        const runner = runners.get(diagramId)
+        if (!runner) return null
+        const pose = runner.getCapturedPose(hid)
+        const rig = runner.getActiveRig() ?? rigLibrary.value.getActive()
+        if (!pose || !rig) return null
+        return { pose, rig }
+      }
+      const fromActive = tryCapture(activeId)
+      if (fromActive) {
+        if (isSimSampleLogEnabled()) {
+          console.log(`[sim-sample] viewport atNode=${hid} source=capture diagram=${activeId}`)
+        }
+        return fromActive
+      }
+      for (const id of runners.keys()) {
+        const hit = tryCapture(id)
+        if (hit) {
+          if (isSimSampleLogEnabled()) {
+            console.log(`[sim-sample] viewport atNode=${hid} source=capture diagram=${id}`)
+          }
+          return hit
+        }
+      }
+      if (isSimSampleLogEnabled()) {
+        console.log(
+          `[sim-sample] viewport atNode=${hid} source=FALLBACK-sampleOut active=${activeId} root=${rootId}`
+        )
+      }
+    }
+    return pick(activeId) ?? pick(rootId)
+  }
+
   return {
     enabled,
     active,
     snapshot,
     snapshotsByDiagram,
     snapshotForDiagram,
+    getSkeletonViewPose,
     discovered,
     eventDraft,
     featureDrafts,
@@ -1128,6 +1231,8 @@ export function useAnimgraphSim() {
     setActiveRig,
     clearRigLibrary,
     setPoseInspectBones,
+    sampleWarningsEnabled,
+    setSampleWarningsEnabled,
     setStackCaptureHandleIds,
     loadAnimDatabaseJson,
     loadAnimDatabaseLibraryJson,

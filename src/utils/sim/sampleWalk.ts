@@ -1,26 +1,23 @@
 /**
- * Offline Sample walk — uses Update weights/clocks; fills pooled Pose.
+ * Offline Sample walk — follows Update `updateSucc` + overlay weights/clocks.
  */
 
 import type { AnimgraphNode } from '../graph/animgraphTypes'
 import {
-  blend2FirstInputActive,
-  blend2SecondInputActive,
-  blend2WeightFromInput,
+  BLEND_BY_MASK_DYNAMIC_ACTIVATION,
   blendByMaskDynamicBlendActive,
-  blendMultipleFirstInputActive,
-  blendMultipleSecondInputActive,
-  buildBlendMultipleSlots,
-  selectBlendMultipleInputs,
+  blendOverrideInputActive,
 } from './engineParity'
-import { checkRuntimeCondition } from './checkCondition'
 import type { ClipPoseLibrary } from './clipPoseLibrary'
 import type { ClipClockState } from './clipClock'
 import type { ClipLibrary } from './clipLibrary'
 import {
+  applyOverrideBlendBones,
   blendAdditiveLocal,
   blendByMask,
+  blendOverrideBoneBranch,
   clearStack,
+  convertAbsoluteToAdditiveFromRig,
   copyPose,
   createPose,
   DEFAULT_STACK_CAPACITY,
@@ -28,6 +25,7 @@ import {
   interpolatePose,
   pushStackSlot,
   shrinkStack,
+  type OverrideBoneWeight,
   type Pose,
 } from './pose'
 import {
@@ -39,14 +37,18 @@ import {
 } from './poseFk'
 import { getRigPartMask, type RigEntry } from './rigResource'
 import type { SimInputBoard } from './SimInputBoard'
-import { findStateOutput, type SimStateMachineRuntime } from './SimStateMachine'
-import { handleType, readBool, readCName, readNumber, resolveHandle } from './simDataUtils'
-import type { SimNodeState } from './simTypes'
+import type { SimStateMachineRuntime } from './SimStateMachine'
+import { handleType, readBool, readCName, readNumber } from './simDataUtils'
+import {
+  simSampleLogLine,
+  type SimSampleLog,
+} from './simSampleLog'
+import type { SimNodeState, SimSampleWarning } from './simTypes'
+import { SIM_SAMPLE_WARNINGS_MAX } from './simTypes'
 
 /**
- * Sample support (partial): SkAnim, Blend2/Multiple/Additive/ByMask, Switch,
- * Static/RuntimeSwitch, StateMachine, GraphSlot(+Input),
- * StackTransformsExtender / Shrinker. Other OnePoseInput → passthrough.
+ * Sample support: follows Update `updateSucc` only (no Data pose rediscovery).
+ * Leaves (SkAnim / Identity) may have 0 successors.
  */
 
 export type SampleCtx = {
@@ -78,6 +80,27 @@ export type SampleCtx = {
   scratchB: Pose
   /** Anim names that resolved clip but had no glb (mutated during walk) */
   missingGlb?: string[]
+  /** Optional Sample-path debug (see simSampleLog.ts). */
+  sampleLog?: SimSampleLog | null
+  /** All handles entered this Sample ctx (incl. side-sample / fresh visited sets). */
+  sampleVisitedAll?: Set<string>
+  /**
+   * Update-traversal successors (parent → child ids in visit/role order).
+   * When present, Sample follows this instead of rediscovering Data pins.
+   */
+  updateSucc?: Map<string, string[]>
+  /**
+   * When true, Sample appends diagnostics into `warnings` (null-pose blends, …).
+   * Off → zero cost beyond lastWrittenNull bookkeeping used only if enabled.
+   */
+  warningsEnabled?: boolean
+  /** Append-only Sample warnings for this frame (shared with nested samples). */
+  warnings?: SimSampleWarning[]
+  /**
+   * Set by every Sample write into the current `out` buffer: true = null/zero local pose.
+   * Not on Pose (shared buffers). Default false; read after each child sample when warningsEnabled.
+   */
+  lastWrittenNull: boolean
 }
 
 export type SampleResult = {
@@ -86,10 +109,27 @@ export type SampleResult = {
   sampleMs: number
   bonesSampled: number
   missingGlb?: string[]
+  warnings?: SimSampleWarning[]
 }
 
-function isActive(nodes: Record<string, SimNodeState>, id: string): boolean {
-  return nodes[id]?.active === true
+function noteWrittenNull(ctx: SampleCtx, isNull: boolean): void {
+  if (ctx.warningsEnabled) ctx.lastWrittenNull = isNull
+}
+
+function pushSampleWarning(ctx: SampleCtx, w: SimSampleWarning): void {
+  if (!ctx.warningsEnabled || !ctx.warnings) return
+  if (ctx.warnings.length >= SIM_SAMPLE_WARNINGS_MAX) return
+  ctx.warnings.push(w)
+}
+
+function writeNullPose(ctx: SampleCtx, out: Pose): void {
+  identityPose(out)
+  noteWrittenNull(ctx, true)
+}
+
+function writeRefPose(ctx: SampleCtx, out: Pose): void {
+  identityFromRig(out, ctx.rig)
+  noteWrittenNull(ctx, false)
 }
 
 function noteMissingGlb(ctx: SampleCtx, animName: string): void {
@@ -98,12 +138,52 @@ function noteMissingGlb(ctx: SampleCtx, animName: string): void {
   ctx.missingGlb.push(animName)
 }
 
-function isGraphSlotType(t: string | null | undefined): boolean {
-  return (
-    t === 'animAnimNode_GraphSlot' ||
-    t === 'animAnimNode_GraphSlot_Test' ||
-    t === 'animAnimNode_GraphSlotConditions'
+const EMPTY_SUCC: string[] = []
+
+function updateKids(ctx: SampleCtx, handleId: string): string[] {
+  return ctx.updateSucc?.get(handleId) ?? EMPTY_SUCC
+}
+
+/** Debug-only (when `__SIM_SAMPLE_LOG`); no console.warn — leaves vs holes share 0-succ. */
+function logMissingUpdateSucc(
+  ctx: SampleCtx,
+  node: AnimgraphNode,
+  detail: string
+): void {
+  simSampleLogLine(
+    ctx.sampleLog,
+    `missing-succ ${detail} at ${node.HandleId} ${handleType(node)}`
   )
+}
+
+function sampleByHandleId(
+  handleId: string | undefined,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  if (!handleId) {
+    writeRefPose(ctx, out)
+    return false
+  }
+  return sampleNode(ctx.handles.get(handleId) ?? null, ctx, out, visited)
+}
+
+/** Require ≥1 Update successor; no Data rediscovery. */
+function sampleRequiredSucc(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const kids = updateKids(ctx, node.HandleId)
+  if (!kids.length) {
+    logMissingUpdateSucc(ctx, node, 'expected ≥1 child')
+    writeRefPose(ctx, out)
+    return false
+  }
+  simSampleLogLine(ctx.sampleLog, `succ ${node.HandleId} → [${kids.join(',')}]`)
+  return sampleByHandleId(kids[0], ctx, out, visited)
 }
 
 /**
@@ -117,18 +197,38 @@ export function sampleGraphPose(
   const t0 =
     typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()
   if (!ctx.missingGlb) ctx.missingGlb = []
+  if (ctx.warningsEnabled && !ctx.warnings) ctx.warnings = []
+  ctx.lastWrittenNull = false
+  if (!ctx.updateSucc) {
+    simSampleLogLine(ctx.sampleLog, 'sampleGraphPose without updateSucc map')
+  }
   if (!root) {
-    identityPose(out)
+    writeNullPose(ctx, out)
     return {
       ok: false,
       reason: 'no-root',
       sampleMs: 0,
       bonesSampled: out.boneCount,
       missingGlb: ctx.missingGlb,
+      warnings: ctx.warnings?.length ? ctx.warnings : undefined,
     }
   }
   const visited = new Set<string>()
   const ok = sampleNode(root, ctx, out, visited)
+  if (ctx.sampleLog) {
+    const want = [...(ctx.stackCaptureHandleIds ?? [])]
+    const all = ctx.sampleVisitedAll
+    for (const id of want) {
+      simSampleLogLine(
+        ctx.sampleLog,
+        `capture-target ${id}: main=${visited.has(id) ? 1 : 0} any=${all?.has(id) ? 1 : 0}`
+      )
+    }
+    simSampleLogLine(
+      ctx.sampleLog,
+      `visited-count main=${visited.size} any=${all?.size ?? 0} ok=${ok}`
+    )
+  }
   const t1 =
     typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()
   return {
@@ -137,6 +237,7 @@ export function sampleGraphPose(
     sampleMs: t1 - t0,
     bonesSampled: out.boneCount,
     missingGlb: ctx.missingGlb.length ? ctx.missingGlb : undefined,
+    warnings: ctx.warnings?.length ? ctx.warnings : undefined,
   }
 }
 
@@ -149,6 +250,7 @@ export function samplePoseFromNode(
   out: Pose
 ): boolean {
   if (!ctx.missingGlb) ctx.missingGlb = []
+  ctx.lastWrittenNull = false
   return sampleNode(node, ctx, out, new Set())
 }
 
@@ -173,14 +275,19 @@ function sampleNode(
   visited: Set<string>
 ): boolean {
   if (!node) {
-    identityPose(out)
+    writeNullPose(ctx, out)
+    simSampleLogLine(ctx.sampleLog, 'sample null → identity')
     return false
   }
   if (visited.has(node.HandleId)) {
     // Cycle — leave out as-is (already captured on first visit)
+    simSampleLogLine(ctx.sampleLog, `REVISIT ${node.HandleId} skip`)
     return true
   }
   visited.add(node.HandleId)
+  ctx.sampleVisitedAll?.add(node.HandleId)
+  const t = handleType(node)
+  simSampleLogLine(ctx.sampleLog, `ENTER ${node.HandleId} ${t}`)
 
   const ok = sampleNodeDispatch(node, ctx, out, visited)
   maybeCapturePose(node, ctx, out)
@@ -194,96 +301,89 @@ function sampleNodeDispatch(
   visited: Set<string>
 ): boolean {
   const t = handleType(node)
-  const d = node.Data ?? {}
-  const { handles } = ctx
 
-  if (t === 'animAnimNode_Root') {
-    const child =
-      resolveHandle(handles, d.outputNode) ??
-      (Array.isArray(d.nodes) ? resolveHandle(handles, d.nodes[0]) : null)
-    return sampleNode(child, ctx, out, visited)
+  switch (t) {
+    case 'animAnimNode_Root':
+    case 'animAnimNode_Output':
+    case 'animAnimNode_State':
+    case 'animAnimNode_StateFrozen':
+      return sampleRequiredSucc(node, ctx, out, visited)
+
+    case 'animAnimNode_StateMachine':
+      return sampleStateMachine(node, ctx, out, visited)
+
+    case 'animAnimNode_GraphSlotInput':
+      if (ctx.parentPoseSample) {
+        return ctx.parentPoseSample(out)
+      }
+      writeRefPose(ctx, out)
+      return false
+
+    case 'animAnimNode_GraphSlot':
+    case 'animAnimNode_GraphSlot_Test':
+    case 'animAnimNode_GraphSlotConditions':
+      return sampleGraphSlot(node, ctx, out, visited)
+
+    case 'animAnimNode_SkDurationAnim':
+    case 'animAnimNode_SkAnim':
+      return sampleSkAnim(node, ctx, out)
+
+    case 'animAnimNode_Blend2':
+      return sampleBlend2(node, ctx, out, visited)
+
+    case 'animAnimNode_BlendMultiple':
+      return sampleBlendMultiple(node, ctx, out, visited)
+
+    case 'animAnimNode_Switch':
+      return sampleSwitch(node, ctx, out, visited)
+
+    case 'animAnimNode_StaticSwitch':
+      return sampleBoolSwitch(node, ctx, out, visited, true)
+
+    case 'animAnimNode_RuntimeSwitch':
+      return sampleBoolSwitch(node, ctx, out, visited, false)
+
+    case 'animAnimNode_BlendAdditive':
+      return sampleBlendAdditive(node, ctx, out, visited)
+
+    case 'animAnimNode_BlendOverride':
+      return sampleBlendOverride(node, ctx, out, visited)
+
+    case 'animAnimNode_BlendByMaskDynamic':
+      return sampleBlendByMaskDynamic(node, ctx, out, visited)
+
+    case 'animAnimNode_StackTransformsExtender':
+      return sampleStackTransformsExtender(node, ctx, out, visited)
+
+    case 'animAnimNode_StackTransformsShrinker':
+      return sampleStackTransformsShrinker(node, ctx, out, visited)
+
+    // Identity = zero local TRS (additive no-op). Reference = rig A-pose.
+    case 'animAnimNode_IdentityPoseTerminator':
+      writeNullPose(ctx, out)
+      return true
+
+    case 'animAnimNode_ReferencePoseTerminator':
+      writeRefPose(ctx, out)
+      return true
+
+    default:
+      // Other Sk*Anim variants (SkFrameAnim, …)
+      if (t != null && t.startsWith('animAnimNode_Sk') && t.includes('Anim')) {
+        return sampleSkAnim(node, ctx, out)
+      }
+      // Generic OnePoseInput / passthrough / pose leaves — only Update successors.
+      {
+        const kids = updateKids(ctx, node.HandleId)
+        if (kids.length) {
+          simSampleLogLine(ctx.sampleLog, `succ ${node.HandleId} → [${kids.join(',')}]`)
+          return sampleByHandleId(kids[0], ctx, out, visited)
+        }
+        logMissingUpdateSucc(ctx, node, '0 children (leaf or missing succ)')
+        writeRefPose(ctx, out)
+        return true
+      }
   }
-
-  if (t === 'animAnimNode_Output') {
-    return sampleNode(
-      resolveHandle(handles, d.inputNode ?? d.input ?? d.node),
-      ctx,
-      out,
-      visited
-    )
-  }
-
-  if (t === 'animAnimNode_State' || t === 'animAnimNode_StateFrozen') {
-    return sampleNode(findStateOutput(node, handles), ctx, out, visited)
-  }
-
-  if (t === 'animAnimNode_StateMachine') {
-    return sampleStateMachine(node, ctx, out, visited)
-  }
-
-  if (t === 'animAnimNode_GraphSlotInput') {
-    if (ctx.parentPoseSample) {
-      return ctx.parentPoseSample(out)
-    }
-    identityFromRig(out, ctx.rig)
-    return false
-  }
-
-  if (isGraphSlotType(t)) {
-    return sampleGraphSlot(node, ctx, out, visited)
-  }
-
-  if (
-    t === 'animAnimNode_SkDurationAnim' ||
-    t === 'animAnimNode_SkAnim' ||
-    (t != null && t.startsWith('animAnimNode_Sk') && t.includes('Anim'))
-  ) {
-    return sampleSkAnim(node, ctx, out)
-  }
-
-  if (t === 'animAnimNode_Blend2') {
-    return sampleBlend2(node, ctx, out, visited)
-  }
-
-  if (t === 'animAnimNode_BlendMultiple') {
-    return sampleBlendMultiple(node, ctx, out, visited)
-  }
-
-  if (t === 'animAnimNode_Switch') {
-    return sampleSwitch(node, ctx, out, visited)
-  }
-
-  if (t === 'animAnimNode_StaticSwitch' || t === 'animAnimNode_RuntimeSwitch') {
-    return sampleBoolSwitch(node, ctx, out, visited, t === 'animAnimNode_StaticSwitch')
-  }
-
-  if (t === 'animAnimNode_BlendAdditive') {
-    return sampleBlendAdditive(node, ctx, out, visited)
-  }
-
-  if (t === 'animAnimNode_BlendByMaskDynamic') {
-    return sampleBlendByMaskDynamic(node, ctx, out, visited)
-  }
-
-  if (t === 'animAnimNode_StackTransformsExtender') {
-    return sampleStackTransformsExtender(node, ctx, out, visited)
-  }
-
-  if (t === 'animAnimNode_StackTransformsShrinker') {
-    return sampleStackTransformsShrinker(node, ctx, out, visited)
-  }
-
-  // Generic: first pose input
-  const input =
-    resolveHandle(handles, d.inputNode) ??
-    resolveHandle(handles, d.input) ??
-    resolveHandle(handles, d.inputLink) ??
-    resolveHandle(handles, d.node)
-  if (input) return sampleNode(input, ctx, out, visited)
-
-  // Identity fallback (reference pose already in out if caller set it)
-  identityFromRig(out, ctx.rig)
-  return true
 }
 
 function sampleStateMachine(
@@ -292,38 +392,25 @@ function sampleStateMachine(
   out: Pose,
   visited: Set<string>
 ): boolean {
-  const d = node.Data ?? {}
-  const states = Array.isArray(d.states) ? d.states : []
-  const rt = ctx.runtimes?.get(node.HandleId)
-  if (!rt || !states.length) {
-    identityFromRig(out, ctx.rig)
-    return false
-  }
-  const activeState = resolveHandle(ctx.handles, states[rt.activeStateIndex])
-  const activeOut = activeState ? findStateOutput(activeState, ctx.handles) : null
-
-  const inTransition =
-    rt.isInTransition &&
-    rt.targetStateIndex != null &&
-    rt.transitionProgress > 0 &&
-    rt.transitionProgress < 1
-
-  if (inTransition) {
-    const targetState = resolveHandle(ctx.handles, states[rt.targetStateIndex!])
-    const targetOut = targetState ? findStateOutput(targetState, ctx.handles) : null
-    if (activeOut && targetOut) {
-      sampleNode(activeOut, ctx, ctx.scratchA, new Set(visited))
-      sampleNode(targetOut, ctx, ctx.scratchB, new Set(visited))
-      interpolatePose(out, ctx.scratchA, ctx.scratchB, rt.transitionProgress)
-      return true
+  const kids = updateKids(ctx, node.HandleId)
+  if (kids.length === 1) return sampleByHandleId(kids[0], ctx, out, visited)
+  if (kids.length >= 2) {
+    // Transition: Update recorded active then target output.
+    const rt = ctx.runtimes?.get(node.HandleId)
+    const alpha = rt?.transitionProgress ?? 0
+    sampleByHandleId(kids[0], ctx, ctx.scratchA, new Set(visited))
+    const aNull = ctx.lastWrittenNull
+    sampleByHandleId(kids[1], ctx, ctx.scratchB, new Set(visited))
+    const bNull = ctx.lastWrittenNull
+    interpolatePose(out, ctx.scratchA, ctx.scratchB, alpha)
+    if (ctx.warningsEnabled) {
+      noteWrittenNull(ctx, alpha <= 0 ? aNull : alpha >= 1 ? bNull : aNull && bNull)
     }
+    return true
   }
-
-  if (!activeOut) {
-    identityFromRig(out, ctx.rig)
-    return false
-  }
-  return sampleNode(activeOut, ctx, out, visited)
+  logMissingUpdateSucc(ctx, node, 'StateMachine expected ≥1 child')
+  writeRefPose(ctx, out)
+  return false
 }
 
 function sampleGraphSlot(
@@ -334,16 +421,48 @@ function sampleGraphSlot(
 ): boolean {
   const d = node.Data ?? {}
   const slotName = readCName(d.name)
-  const inputLink = resolveHandle(ctx.handles, d.inputLink)
+  const dontDeactivate = readBool(d.dontDeactivateInput)
+  const kids = updateKids(ctx, node.HandleId)
   if (slotName && ctx.sampleNested) {
     const nested = ctx.sampleNested(slotName)
-    if (nested && nested.boneCount === out.boneCount) {
+    if (nested && nested.boneCount > 0 && out.boneCount > 0) {
       copyPose(out, nested)
+      noteWrittenNull(ctx, false)
+      simSampleLogLine(
+        ctx.sampleLog,
+        `GraphSlot ${node.HandleId} "${slotName}" nestedOK bones=${nested.boneCount} dontDeact=${dontDeactivate ? 1 : 0}`
+      )
+      // Side-sample Update successors (inputLink path) for captures only.
+      if (dontDeactivate) {
+        if (!kids.length) {
+          logMissingUpdateSucc(ctx, node, 'dontDeactivate but 0 updateSucc kids')
+        } else {
+          const savedNull = ctx.lastWrittenNull
+          const temp = out === ctx.scratchA ? ctx.scratchB : ctx.scratchA
+          simSampleLogLine(
+            ctx.sampleLog,
+            `GraphSlot ${node.HandleId} side-sample kids=[${kids.join(',')}]`
+          )
+          for (const id of kids) {
+            sampleByHandleId(id, ctx, temp, new Set())
+          }
+          if (ctx.warningsEnabled) ctx.lastWrittenNull = savedNull
+        }
+      }
       return true
     }
+    simSampleLogLine(
+      ctx.sampleLog,
+      `GraphSlot ${node.HandleId} "${slotName}" nestedMISS nestedBones=${nested?.boneCount ?? -1} outBones=${out.boneCount}`
+    )
   }
-  // No attached graph — passthrough inputLink (engine fallback)
-  return sampleNode(inputLink, ctx, out, visited)
+  // No nested pose — passthrough via Update successors only.
+  if (!kids.length) {
+    logMissingUpdateSucc(ctx, node, 'GraphSlot passthrough with 0 children')
+    writeRefPose(ctx, out)
+    return false
+  }
+  return sampleByHandleId(kids[0], ctx, out, visited)
 }
 
 function sampleSkAnim(node: AnimgraphNode, ctx: SampleCtx, out: Pose): boolean {
@@ -354,20 +473,31 @@ function sampleSkAnim(node: AnimgraphNode, ctx: SampleCtx, out: Pose): boolean {
     readCName(node.Data?.animationName) ||
     ''
   const time = clock?.currTime ?? 0
+  // Missing / gated / no-glb → null local pose (additive no-op), not A-pose/T-pose.
   if (!animName || animName === 'None') {
-    identityFromRig(out, ctx.rig)
+    writeNullPose(ctx, out)
     return false
   }
   // Same gating as Update clip resolve: active setup entry by wrappers + priority
   const isWrap = (n: string) => ctx.board.isWrapperActive(n)
   const winner = ctx.clipLibrary?.resolveClipEntry(animName, isWrap)
   if (!winner) {
-    identityFromRig(out, ctx.rig)
+    writeNullPose(ctx, out)
     return false
   }
   const ok = ctx.clipPoseLibrary.sample(animName, time, ctx.rig, out, winner.entryId)
-  if (!ok) noteMissingGlb(ctx, animName)
-  return ok
+  if (!ok) {
+    noteMissingGlb(ctx, animName)
+    writeNullPose(ctx, out)
+    return false
+  }
+  // SkAnim.convertToAdditive: absolute sample → delta vs rig ref
+  const cta = node.Data?.convertToAdditive
+  if (cta === 1 || cta === true) {
+    convertAbsoluteToAdditiveFromRig(out, ctx.rig)
+  }
+  noteWrittenNull(ctx, false)
+  return true
 }
 
 function sampleBlend2(
@@ -376,37 +506,43 @@ function sampleBlend2(
   out: Pose,
   visited: Set<string>
 ): boolean {
-  const d = node.Data ?? {}
-  const first = resolveHandle(ctx.handles, d.firstInputNode)
-  const second = resolveHandle(ctx.handles, d.secondInputNode)
-  const minV = readNumber(d.minInputValue, 0)
-  const maxV = readNumber(d.maxInputValue, 1)
-  const wNode = resolveHandle(ctx.handles, d.weightNode)
-  let inputW = 0
-  if (wNode && isActive(ctx.nodes, wNode.HandleId)) {
-    inputW = ctx.nodes[wNode.HandleId]?.weight ?? 0
-  } else if (wNode) {
-    inputW = ctx.nodes[wNode.HandleId]?.weight ?? 0
+  const kids = updateKids(ctx, node.HandleId)
+  const weight = ctx.nodes[node.HandleId]?.weight ?? 0
+  if (kids.length === 1) return sampleByHandleId(kids[0], ctx, out, visited)
+  if (kids.length >= 2) {
+    sampleByHandleId(kids[0], ctx, ctx.scratchA, new Set(visited))
+    const aNull = ctx.lastWrittenNull
+    sampleByHandleId(kids[1], ctx, ctx.scratchB, new Set(visited))
+    const bNull = ctx.lastWrittenNull
+    interpolatePose(out, ctx.scratchA, ctx.scratchB, weight)
+    if (ctx.warningsEnabled) {
+      let side: 'first' | 'second' | 'both' | null = null
+      if (weight <= 0) {
+        if (aNull) side = 'first'
+      } else if (weight >= 1) {
+        if (bNull) side = 'second'
+      } else if (aNull || bNull) {
+        side = aNull && bNull ? 'both' : aNull ? 'first' : 'second'
+      }
+      if (side) {
+        pushSampleWarning(ctx, {
+          code: 'blend2-null-input',
+          handleId: node.HandleId,
+          weight,
+          side,
+          message: `Blend2 #${node.HandleId} weight=${weight.toFixed(3)} null ${side}`,
+        })
+      }
+      noteWrittenNull(
+        ctx,
+        weight <= 0 ? aNull : weight >= 1 ? bNull : aNull && bNull
+      )
+    }
+    return true
   }
-  // Prefer node overlay weight from Update
-  const nodeW = ctx.nodes[node.HandleId]?.weight
-  const weight =
-    typeof nodeW === 'number' && Number.isFinite(nodeW)
-      ? nodeW
-      : blend2WeightFromInput(inputW, minV, maxV)
-
-  const aOk = blend2FirstInputActive(weight)
-  const bOk = blend2SecondInputActive(weight)
-  if (aOk && !bOk) return sampleNode(first, ctx, out, visited)
-  if (!aOk && bOk) return sampleNode(second, ctx, out, visited)
-  if (!aOk && !bOk) {
-    identityFromRig(out, ctx.rig)
-    return false
-  }
-  sampleNode(first, ctx, ctx.scratchA, new Set(visited))
-  sampleNode(second, ctx, ctx.scratchB, new Set(visited))
-  interpolatePose(out, ctx.scratchA, ctx.scratchB, weight)
-  return true
+  logMissingUpdateSucc(ctx, node, 'Blend2 expected ≥1 child')
+  writeRefPose(ctx, out)
+  return false
 }
 
 function sampleBlendMultiple(
@@ -415,36 +551,23 @@ function sampleBlendMultiple(
   out: Pose,
   visited: Set<string>
 ): boolean {
-  const d = node.Data ?? {}
-  const inputNodes = Array.isArray(d.inputNodes) ? d.inputNodes : []
-  const slots = buildBlendMultipleSlots(d.inputValues, d.sortedInputValues, inputNodes)
-  const wNode = resolveHandle(ctx.handles, d.weightNode)
-  let inputWeight = ctx.nodes[node.HandleId]?.weight ?? 0
-  if (wNode && typeof ctx.nodes[wNode.HandleId]?.weight === 'number') {
-    inputWeight = ctx.nodes[wNode.HandleId]!.weight!
+  const kids = updateKids(ctx, node.HandleId)
+  const alpha = ctx.nodes[node.HandleId]?.alpha ?? 0
+  if (kids.length === 1) return sampleByHandleId(kids[0], ctx, out, visited)
+  if (kids.length >= 2) {
+    sampleByHandleId(kids[0], ctx, ctx.scratchA, new Set(visited))
+    const aNull = ctx.lastWrittenNull
+    sampleByHandleId(kids[1], ctx, ctx.scratchB, new Set(visited))
+    const bNull = ctx.lastWrittenNull
+    interpolatePose(out, ctx.scratchA, ctx.scratchB, alpha)
+    if (ctx.warningsEnabled) {
+      noteWrittenNull(ctx, alpha <= 0 ? aNull : alpha >= 1 ? bNull : aNull && bNull)
+    }
+    return true
   }
-  const minW = readNumber(d.minWeight, slots.values[0] ?? 0)
-  const maxW = readNumber(d.maxWeight, slots.values[slots.values.length - 1] ?? 1)
-  const radial = readBool(d.radialBlending)
-  const select = selectBlendMultipleInputs(
-    inputWeight,
-    slots.values,
-    minW,
-    maxW,
-    radial
-  )
-  const firstRef = slots.refs[select.firstIndex]
-  const secondRef = slots.refs[select.secondIndex]
-  const first = resolveHandle(ctx.handles, firstRef)
-  const second = resolveHandle(ctx.handles, secondRef)
-  const aOk = blendMultipleFirstInputActive(select.alpha)
-  const bOk = blendMultipleSecondInputActive(select.alpha)
-  if (aOk && !bOk) return sampleNode(first, ctx, out, visited)
-  if (!aOk && bOk) return sampleNode(second, ctx, out, visited)
-  sampleNode(first, ctx, ctx.scratchA, new Set(visited))
-  sampleNode(second, ctx, ctx.scratchB, new Set(visited))
-  interpolatePose(out, ctx.scratchA, ctx.scratchB, select.alpha)
-  return true
+  logMissingUpdateSucc(ctx, node, 'BlendMultiple expected ≥1 child')
+  writeRefPose(ctx, out)
+  return false
 }
 
 function sampleSwitch(
@@ -453,44 +576,14 @@ function sampleSwitch(
   out: Pose,
   visited: Set<string>
 ): boolean {
-  // Reuse BlendMultiple-style select stored on node weight/alpha from Update
-  const d = node.Data ?? {}
-  const inputs = Array.isArray(d.inputs) ? d.inputs : Array.isArray(d.inputNodes) ? d.inputNodes : []
-  const alpha = ctx.nodes[node.HandleId]?.alpha ?? 0
-  const weight = ctx.nodes[node.HandleId]?.weight ?? 0
-  // weight often encodes selected index blend; prefer Update's marked active children
-  let chosen: AnimgraphNode | null = null
-  for (const ref of inputs) {
-    const h = resolveHandle(ctx.handles, ref)
-    if (h && isActive(ctx.nodes, h.HandleId)) {
-      chosen = h
-      break
-    }
+  const kids = updateKids(ctx, node.HandleId)
+  if (kids.length) {
+    simSampleLogLine(ctx.sampleLog, `Switch ${node.HandleId} succ → ${kids[0]}`)
+    return sampleByHandleId(kids[0], ctx, out, visited)
   }
-  if (!chosen && inputs.length) {
-    const idx = Math.max(0, Math.min(inputs.length - 1, Math.round(weight)))
-    chosen = resolveHandle(ctx.handles, inputs[idx])
-  }
-  if (!chosen) {
-    identityFromRig(out, ctx.rig)
-    return false
-  }
-  // If two neighbors active, blend by alpha
-  const i0 = inputs.findIndex((ref: unknown) => {
-    const h = resolveHandle(ctx.handles, ref)
-    return h && isActive(ctx.nodes, h.HandleId)
-  })
-  if (i0 >= 0 && i0 + 1 < inputs.length) {
-    const a = resolveHandle(ctx.handles, inputs[i0])
-    const b = resolveHandle(ctx.handles, inputs[i0 + 1])
-    if (a && b && isActive(ctx.nodes, b.HandleId) && alpha > 0 && alpha < 1) {
-      sampleNode(a, ctx, ctx.scratchA, new Set(visited))
-      sampleNode(b, ctx, ctx.scratchB, new Set(visited))
-      interpolatePose(out, ctx.scratchA, ctx.scratchB, alpha)
-      return true
-    }
-  }
-  return sampleNode(chosen, ctx, out, visited)
+  logMissingUpdateSucc(ctx, node, 'Switch expected 1 child')
+  writeRefPose(ctx, out)
+  return false
 }
 
 function sampleBoolSwitch(
@@ -498,25 +591,13 @@ function sampleBoolSwitch(
   ctx: SampleCtx,
   out: Pose,
   visited: Set<string>,
-  isStatic: boolean
+  _isStatic: boolean
 ): boolean {
-  const d = node.Data ?? {}
-  let useTrue: boolean
-  if (isStatic) {
-    useTrue =
-      ctx.staticSwitchResults?.get(node.HandleId) ??
-      (ctx.nodes[node.HandleId]?.weight ?? 1) >= 0.5
-  } else {
-    const cond = resolveHandle(ctx.handles, d.condition)
-    useTrue = checkRuntimeCondition(cond, ctx.board, {
-      clipLibrary: ctx.clipLibrary,
-      isWrapperActive: (n) => ctx.board.isWrapperActive(n),
-    })
-  }
-  const branch = useTrue
-    ? resolveHandle(ctx.handles, d.True ?? d.true)
-    : resolveHandle(ctx.handles, d.False ?? d.false)
-  return sampleNode(branch, ctx, out, visited)
+  const kids = updateKids(ctx, node.HandleId)
+  if (kids.length) return sampleByHandleId(kids[0], ctx, out, visited)
+  logMissingUpdateSucc(ctx, node, 'BoolSwitch expected 1 child')
+  writeRefPose(ctx, out)
+  return false
 }
 
 function sampleBlendAdditive(
@@ -526,16 +607,133 @@ function sampleBlendAdditive(
   visited: Set<string>
 ): boolean {
   const d = node.Data ?? {}
-  const base = resolveHandle(ctx.handles, d.inputNode)
-  const add = resolveHandle(ctx.handles, d.addedInputNode)
+  const kids = updateKids(ctx, node.HandleId)
   const weight = ctx.nodes[node.HandleId]?.weight ?? 0
-  sampleNode(base, ctx, out, visited)
-  if (!(weight > 0.01) || !add || !isActive(ctx.nodes, add.HandleId)) return true
-  sampleNode(add, ctx, ctx.scratchA, new Set(visited))
-  const maskName = readCName(d.maskName)
-  const mask = maskName ? getRigPartMask(ctx.rig, maskName) : null
-  blendAdditiveLocal(out, out, ctx.scratchA, weight, mask)
+  if (!kids.length) {
+    logMissingUpdateSucc(ctx, node, 'BlendAdditive expected ≥1 child')
+    writeRefPose(ctx, out)
+    return false
+  }
+  sampleByHandleId(kids[0], ctx, out, visited)
+  if (kids.length >= 2 && Math.abs(weight) > 0.01) {
+    const baseNull = ctx.lastWrittenNull
+    sampleByHandleId(kids[1], ctx, ctx.scratchA, new Set(visited))
+    // Engine: accumulate local deltas only. Additive clips must already be deltas
+    // (native buffer / GLB strip on load). Do not subtract ref here.
+    const maskName = readCName(d.maskName)
+    const mask = maskName ? getRigPartMask(ctx.rig, maskName) : null
+    blendAdditiveLocal(out, out, ctx.scratchA, weight, mask)
+    // Additive on null base still yields null locals if add is identity-delta.
+    if (ctx.warningsEnabled) noteWrittenNull(ctx, baseNull && ctx.lastWrittenNull)
+  }
   return true
+}
+
+/**
+ * animNode_BlendOverride::OnSample — base always; override when weight > threshold;
+ * blendMethod (Mask / BoneBranch) then legacy m_bones.
+ */
+function sampleBlendOverride(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const kids = updateKids(ctx, node.HandleId)
+  const weight = ctx.nodes[node.HandleId]?.weight ?? 0
+  if (!kids.length) {
+    logMissingUpdateSucc(ctx, node, 'BlendOverride expected ≥1 child')
+    writeRefPose(ctx, out)
+    return false
+  }
+  sampleByHandleId(kids[0], ctx, out, visited)
+  if (!blendOverrideInputActive(weight) || kids.length < 2) {
+    return true
+  }
+  const baseNull = ctx.lastWrittenNull
+  sampleByHandleId(kids[1], ctx, ctx.scratchA, new Set(visited))
+  applyBlendOverrideMethods(node, ctx, out, ctx.scratchA, weight)
+  if (ctx.warningsEnabled) noteWrittenNull(ctx, baseNull && ctx.lastWrittenNull)
+  return true
+}
+
+function applyBlendOverrideMethods(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  baseOut: Pose,
+  overridePose: Pose,
+  alpha: number
+): void {
+  const d = node.Data ?? {}
+  const method = unwrapEmbedded(d.blendMethod)
+  const methodType =
+    method && typeof method.$type === 'string' ? (method.$type as string) : ''
+
+  if (methodType === 'animPoseBlendMethod_Mask') {
+    const maskName = readCName(method!.maskName)
+    const mask = maskName ? getRigPartMask(ctx.rig, maskName) : null
+    if (mask) blendByMask(baseOut, baseOut, overridePose, alpha, mask)
+  } else if (methodType === 'animPoseBlendMethod_BoneBranch') {
+    const overrides = readOverrideBoneWeights(method!.bones, ctx.rig)
+    blendOverrideBoneBranch(
+      baseOut,
+      baseOut,
+      overridePose,
+      alpha,
+      ctx.rig.boneParents,
+      overrides
+    )
+  }
+
+  // Legacy m_bones on the BlendOverride node itself
+  const legacy = readOverrideBoneWeights(d.bones, ctx.rig)
+  if (legacy.length) applyOverrideBlendBones(baseOut, overridePose, alpha, legacy)
+}
+
+function unwrapEmbedded(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  if (o.Data && typeof o.Data === 'object') return o.Data as Record<string, unknown>
+  return o
+}
+
+function readOverrideBoneWeights(
+  raw: unknown,
+  rig: RigEntry
+): OverrideBoneWeight[] {
+  if (!Array.isArray(raw)) return []
+  const out: OverrideBoneWeight[] = []
+  for (const item of raw) {
+    const info = unwrapEmbedded(item)
+    if (!info) continue
+    const name = readTransformIndexName(info.transformIndex)
+    const boneIndex = name ? (rig.boneIndexByName.get(name.toLowerCase()) ?? -1) : -1
+    const weight = readNumber(info.weight, 1)
+    if (boneIndex >= 0) out.push({ boneIndex, weight })
+  }
+  return out
+}
+
+function readTransformIndexName(raw: unknown): string {
+  const ti = unwrapEmbedded(raw)
+  if (!ti) return ''
+  return readCName(ti.name) || readCName(ti.bone) || ''
+}
+
+function maskHasAnyBone(mask: Uint8Array): boolean {
+  for (let i = 0; i < mask.length; i++) {
+    if (mask[i]) return true
+  }
+  return false
+}
+
+function readMaskListEntryName(maskEntry: unknown): string {
+  return (
+    readCName(maskEntry) ||
+    (maskEntry && typeof maskEntry === 'object'
+      ? readCName((maskEntry as { name?: unknown }).name)
+      : '')
+  )
 }
 
 function sampleBlendByMaskDynamic(
@@ -545,24 +743,68 @@ function sampleBlendByMaskDynamic(
   visited: Set<string>
 ): boolean {
   const d = node.Data ?? {}
-  const base = resolveHandle(ctx.handles, d.base)
-  const blend = resolveHandle(ctx.handles, d.blend)
+  const kids = updateKids(ctx, node.HandleId)
   const weight = ctx.nodes[node.HandleId]?.weight ?? 0
   const maskIndex = Math.trunc(ctx.nodes[node.HandleId]?.alpha ?? -1)
-  sampleNode(base, ctx, out, visited)
   const masks = Array.isArray(d.masks) ? d.masks : []
-  if (!blendByMaskDynamicBlendActive(weight, maskIndex, masks.length)) return true
-  if (!blend || !isActive(ctx.nodes, blend.HandleId)) return true
-  sampleNode(blend, ctx, ctx.scratchA, new Set(visited))
-  const maskEntry = masks[maskIndex]
-  const maskName =
-    readCName(maskEntry) ||
-    (maskEntry && typeof maskEntry === 'object'
-      ? readCName((maskEntry as { name?: unknown }).name)
-      : '')
-  const mask = maskName ? getRigPartMask(ctx.rig, maskName) : null
-  if (mask) blendByMask(out, out, ctx.scratchA, weight, mask)
-  else interpolatePose(out, out, ctx.scratchA, weight)
+
+  if (!kids.length) {
+    logMissingUpdateSucc(ctx, node, 'BlendByMaskDynamic expected ≥1 child')
+    writeRefPose(ctx, out)
+    return false
+  }
+  sampleByHandleId(kids[0], ctx, out, visited)
+
+  const wantBlend = weight > BLEND_BY_MASK_DYNAMIC_ACTIVATION
+  if (ctx.warningsEnabled && wantBlend) {
+    if (maskIndex < 0 || maskIndex >= masks.length) {
+      pushSampleWarning(ctx, {
+        code: 'blend-mask-oob',
+        handleId: node.HandleId,
+        weight,
+        maskIndex,
+        message: `BlendByMaskDynamic #${node.HandleId} mask=${maskIndex} oob (masks=${masks.length})`,
+      })
+    } else {
+      const maskName = readMaskListEntryName(masks[maskIndex])
+      const mask = maskName ? getRigPartMask(ctx.rig, maskName) : null
+      if (!mask) {
+        pushSampleWarning(ctx, {
+          code: 'blend-mask-missing',
+          handleId: node.HandleId,
+          weight,
+          maskIndex,
+          maskName,
+          message: `BlendByMaskDynamic #${node.HandleId} part "${maskName || '?'}" not on active rig`,
+        })
+      } else if (!maskHasAnyBone(mask)) {
+        pushSampleWarning(ctx, {
+          code: 'blend-mask-empty',
+          handleId: node.HandleId,
+          weight,
+          maskIndex,
+          maskName,
+          message: `BlendByMaskDynamic #${node.HandleId} part "${maskName}" has empty bone mask`,
+        })
+      }
+    }
+  }
+
+  if (
+    kids.length >= 2 &&
+    blendByMaskDynamicBlendActive(weight, maskIndex, masks.length)
+  ) {
+    const aNull = ctx.lastWrittenNull
+    sampleByHandleId(kids[1], ctx, ctx.scratchA, new Set(visited))
+    const bNull = ctx.lastWrittenNull
+    const maskName = readMaskListEntryName(masks[maskIndex])
+    const mask = maskName ? getRigPartMask(ctx.rig, maskName) : null
+    // Engine: FindRigPartByName miss → keep base only (no full-body interpolate)
+    if (mask) blendByMask(out, out, ctx.scratchA, weight, mask)
+    if (ctx.warningsEnabled) {
+      noteWrittenNull(ctx, weight <= 0 ? aNull : weight >= 1 ? bNull : aNull && bNull)
+    }
+  }
   return true
 }
 
@@ -602,11 +844,13 @@ function sampleStackTransformsExtender(
   visited: Set<string>
 ): boolean {
   const d = node.Data ?? {}
-  const input =
-    resolveHandle(ctx.handles, d.inputLink) ??
-    resolveHandle(ctx.handles, d.inputNode) ??
-    resolveHandle(ctx.handles, d.input)
-  const ok = sampleNode(input, ctx, out, visited)
+  const kids = updateKids(ctx, node.HandleId)
+  if (!kids.length) {
+    logMissingUpdateSucc(ctx, node, 'StackExtender expected 1 child')
+    writeRefPose(ctx, out)
+    return false
+  }
+  const ok = sampleByHandleId(kids[0], ctx, out, visited)
   const infos = Array.isArray(d.transformInfos) ? d.transformInfos : []
   if (!infos.length) return ok
 
@@ -676,12 +920,13 @@ function sampleStackTransformsShrinker(
   out: Pose,
   visited: Set<string>
 ): boolean {
-  const d = node.Data ?? {}
-  const input =
-    resolveHandle(ctx.handles, d.inputLink) ??
-    resolveHandle(ctx.handles, d.inputNode) ??
-    resolveHandle(ctx.handles, d.input)
-  const ok = sampleNode(input, ctx, out, visited)
+  const kids = updateKids(ctx, node.HandleId)
+  if (!kids.length) {
+    logMissingUpdateSucc(ctx, node, 'StackShrinker expected 1 child')
+    writeRefPose(ctx, out)
+    return false
+  }
+  const ok = sampleByHandleId(kids[0], ctx, out, visited)
   const remove = ctx.shrinkRemoveCountByHandleId?.get(node.HandleId) ?? 0
   if (remove > 0) shrinkStack(out, remove)
   return ok
@@ -689,5 +934,9 @@ function sampleStackTransformsShrinker(
 
 function maybeCapturePose(node: AnimgraphNode, ctx: SampleCtx, out: Pose): void {
   if (!ctx.stackCaptureHandleIds?.has(node.HandleId)) return
+  simSampleLogLine(
+    ctx.sampleLog,
+    `CAPTURE ${node.HandleId} bones=${out.boneCount} tx0=${out.translation[0]?.toFixed(4) ?? '?'} ty0=${out.translation[1]?.toFixed(4) ?? '?'} tz0=${out.translation[2]?.toFixed(4) ?? '?'}`
+  )
   ctx.captureStack?.(node.HandleId, out)
 }

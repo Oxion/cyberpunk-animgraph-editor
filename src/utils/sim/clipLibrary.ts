@@ -26,6 +26,8 @@ export type ClipMeta = {
   numFrames?: number
   /** Animset file / label this clip came from */
   source?: string
+  /** animAnimationType from .anims.json (Normal / Additive*) */
+  animationType?: string
 }
 
 /** One animAnimSetupEntry: animSet + priority + wrapper gates. */
@@ -125,6 +127,17 @@ export class ClipLibrary {
       clipCount: e.clips.size,
       active: isWrapperActive ? this.isEntryActive(e, isWrapperActive) : this.isEntryActiveDefault(e),
     }))
+  }
+
+  /** Clip name → animationType for a setup entry (from .anims.json). */
+  getAnimationTypesForEntry(setupEntryId: string): Map<string, string> {
+    const out = new Map<string, string>()
+    const e = this.entries.find((x) => x.id === setupEntryId)
+    if (!e) return out
+    for (const clip of e.clips.values()) {
+      if (clip.animationType) out.set(clip.name, clip.animationType)
+    }
+    return out
   }
 
   /** Empty vars → always on; else AND of all wrapper names. */

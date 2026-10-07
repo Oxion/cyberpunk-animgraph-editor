@@ -6,6 +6,7 @@ import type {
   AppWindowType,
   LensWindowPayload,
   RenderStatsWindowPayload,
+  SimSkeletonWindowPayload,
   SmRingWindowPayload,
   StateLinksWindowPayload,
 } from '../types/AppWindow'
@@ -313,6 +314,36 @@ export const openRenderStatsWindow = (payload: RenderStatsWindowPayload) => {
   return id
 }
 
+export const openSimSkeletonWindow = (payload?: Partial<SimSkeletonWindowPayload>) => {
+  const diagramId = payload?.diagramId || activeDiagramId.value || 'main'
+  const existing = windows.value.find((w) => w.type === 'sim-skeleton')
+  if (existing && existing.type === 'sim-skeleton') {
+    existing.payload = { diagramId }
+    existing.title = 'Sim Skeleton'
+    activateWindow(existing)
+    return existing.id
+  }
+  const id = 'win_sim_skeleton'
+  const rect = openRectFor('sim-skeleton')
+  const win: AppWindowState = {
+    id,
+    type: 'sim-skeleton',
+    title: 'Sim Skeleton',
+    x: rect.x,
+    y: rect.y,
+    width: Math.max(rect.width, 480),
+    height: Math.max(rect.height, 400),
+    zIndex: bumpZ(),
+    minimized: false,
+    preview: false,
+    maximized: false,
+    payload: { diagramId },
+  }
+  windows.value.push(win)
+  activeWindowId.value = id
+  return id
+}
+
 export const closeWindow = (id: string) => {
   windows.value = windows.value.filter((w) => w.id !== id)
   clearWindowStack(id)
@@ -420,12 +451,14 @@ export const pinWindow = (id: string) => {
 }
 
 export const clearWindows = () => {
-  // Keep Settings / Render Stats across graph reloads.
+  // Keep Settings / Render Stats / Sim Skeleton across graph reloads.
   const kept = windows.value.filter(
-    (w) => w.type === 'settings' || w.type === 'render-stats'
+    (w) => w.type === 'settings' || w.type === 'render-stats' || w.type === 'sim-skeleton'
   )
   for (const w of windows.value) {
-    if (w.type !== 'settings' && w.type !== 'render-stats') clearWindowStack(w.id)
+    if (w.type !== 'settings' && w.type !== 'render-stats' && w.type !== 'sim-skeleton') {
+      clearWindowStack(w.id)
+    }
   }
   windows.value = kept
   if (!windows.value.some((w) => w.id === activeWindowId.value)) {

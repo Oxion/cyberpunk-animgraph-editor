@@ -6,6 +6,8 @@
  * parents in unified space: 0..boneCount-1 = rig, boneCount+i = stack slot i.
  */
 
+import type { RigEntry } from './rigResource'
+
 export type Pose = {
   boneCount: number
   trackCount: number
@@ -179,7 +181,9 @@ export function interpolatePose(dst: Pose, a: Pose, b: Pose, alpha: number): voi
   }
 }
 
-/** Additive local: dst = base + weight * add (translation/scale add, rotation mul). */
+/** Additive local: dst = base + weight * add (translation/scale add, rotation mul).
+ * `add` must already be additive deltas (near identity), not an absolute pose.
+ */
 export function blendAdditiveLocal(
   dst: Pose,
   base: Pose,
@@ -223,6 +227,40 @@ export function blendAdditiveLocal(
   }
 }
 
+/**
+ * Absolute local pose → additive delta vs reference (rig A-pose / bind).
+ * t' = t - ref.t, q' = inv(ref.q) * q, s' = s / ref.s
+ * Required before blendAdditiveLocal when the added input is a normal SkAnim pose
+ * (GLB / convertToAdditive=0 still export absolute channels).
+ */
+export function convertAbsoluteToAdditiveFromRig(pose: Pose, rig: RigEntry): void {
+  const n = Math.min(pose.boneCount, Math.floor(rig.refTranslation.length / 3))
+  const inv = scratchQuat
+  const tmp = scratchQuatB
+  for (let i = 0; i < n; i++) {
+    const ti = i * 3
+    const ri = i * 4
+    pose.translation[ti]! -= rig.refTranslation[ti]!
+    pose.translation[ti + 1]! -= rig.refTranslation[ti + 1]!
+    pose.translation[ti + 2]! -= rig.refTranslation[ti + 2]!
+    inv[0] = -rig.refRotation[ri]!
+    inv[1] = -rig.refRotation[ri + 1]!
+    inv[2] = -rig.refRotation[ri + 2]!
+    inv[3] = rig.refRotation[ri + 3]!
+    mulQuat(tmp, 0, inv, 0, pose.rotation, ri)
+    pose.rotation[ri] = tmp[0]!
+    pose.rotation[ri + 1] = tmp[1]!
+    pose.rotation[ri + 2] = tmp[2]!
+    pose.rotation[ri + 3] = tmp[3]!
+    const rsx = rig.refScale[ti]!
+    const rsy = rig.refScale[ti + 1]!
+    const rsz = rig.refScale[ti + 2]!
+    pose.scale[ti] = rsx !== 0 ? pose.scale[ti]! / rsx : pose.scale[ti]!
+    pose.scale[ti + 1] = rsy !== 0 ? pose.scale[ti + 1]! / rsy : pose.scale[ti + 1]!
+    pose.scale[ti + 2] = rsz !== 0 ? pose.scale[ti + 2]! / rsz : pose.scale[ti + 2]!
+  }
+}
+
 /** Per-bone lerp using 0/1 mask (BlendByMask / override). */
 export function blendByMask(
   dst: Pose,
@@ -237,17 +275,127 @@ export function blendByMask(
   if (!(t > 0)) return
   for (let i = 0; i < n; i++) {
     if (!mask[i]) continue
-    const ti = i * 3
-    const ri = i * 4
-    const u = 1 - t
-    dst.translation[ti] = base.translation[ti]! * u + overlay.translation[ti]! * t
-    dst.translation[ti + 1] = base.translation[ti + 1]! * u + overlay.translation[ti + 1]! * t
-    dst.translation[ti + 2] = base.translation[ti + 2]! * u + overlay.translation[ti + 2]! * t
-    dst.scale[ti] = base.scale[ti]! * u + overlay.scale[ti]! * t
-    dst.scale[ti + 1] = base.scale[ti + 1]! * u + overlay.scale[ti + 1]! * t
-    dst.scale[ti + 2] = base.scale[ti + 2]! * u + overlay.scale[ti + 2]! * t
-    nlerpQuat(dst.rotation, ri, base.rotation, ri, overlay.rotation, ri, t)
+    lerpBoneLocal(dst, base, overlay, i, t)
   }
+}
+
+export type OverrideBoneWeight = { boneIndex: number; weight: number }
+
+/**
+ * PoseBlendMethod_BoneBranch::Blend — per-bone slerp with
+ * alpha * branch weight (closest override ancestor; default 0).
+ */
+export function blendOverrideBoneBranch(
+  dst: Pose,
+  base: Pose,
+  overlay: Pose,
+  alpha: number,
+  boneParents: number[],
+  overrides: OverrideBoneWeight[]
+): void {
+  copyPose(dst, base)
+  if (!(alpha > 0) || !overrides.length) return
+  const byBone = new Map<number, number>()
+  for (const o of overrides) {
+    if (o.boneIndex >= 0) byBone.set(o.boneIndex, o.weight)
+  }
+  const n = Math.min(dst.boneCount, base.boneCount, overlay.boneCount)
+  for (let i = 0; i < n; i++) {
+    const branchW = findBranchOverrideWeight(i, boneParents, byBone, 0)
+    const w = alpha * branchW
+    if (w <= 1e-4) continue
+    if (w >= 1 - 1e-4) copyBoneLocal(dst, overlay, i)
+    else lerpBoneLocal(dst, base, overlay, i, w)
+  }
+}
+
+/**
+ * Legacy AnimNode_BlendOverride::m_bones after blendMethod —
+ * per listed bone: slerp(base, overlay, bone.weight * alpha).
+ */
+export function applyOverrideBlendBones(
+  dst: Pose,
+  overlay: Pose,
+  alpha: number,
+  bones: OverrideBoneWeight[]
+): void {
+  if (!(alpha > 0) || !bones.length) return
+  for (const b of bones) {
+    if (b.boneIndex < 0 || b.boneIndex >= dst.boneCount) continue
+    if (b.boneIndex >= overlay.boneCount) continue
+    const w = b.weight * alpha
+    if (w <= 0) continue
+    if (w >= 1) copyBoneLocal(dst, overlay, b.boneIndex)
+    else {
+      // dst already holds blended base; lerp dst↔overlay in place via temp from dst
+      lerpBoneLocalInPlace(dst, overlay, b.boneIndex, w)
+    }
+  }
+}
+
+function findBranchOverrideWeight(
+  bone: number,
+  parents: number[],
+  byBone: Map<number, number>,
+  defaultWeight: number
+): number {
+  let b = bone
+  for (let guard = 0; guard < 256 && b >= 0; guard++) {
+    const w = byBone.get(b)
+    if (w !== undefined) return w
+    if (b >= parents.length) return defaultWeight
+    const p = parents[b]!
+    if (p < 0 || p === b) return defaultWeight
+    b = p
+  }
+  return defaultWeight
+}
+
+function copyBoneLocal(dst: Pose, src: Pose, i: number): void {
+  const ti = i * 3
+  const ri = i * 4
+  dst.translation[ti] = src.translation[ti]!
+  dst.translation[ti + 1] = src.translation[ti + 1]!
+  dst.translation[ti + 2] = src.translation[ti + 2]!
+  dst.scale[ti] = src.scale[ti]!
+  dst.scale[ti + 1] = src.scale[ti + 1]!
+  dst.scale[ti + 2] = src.scale[ti + 2]!
+  dst.rotation[ri] = src.rotation[ri]!
+  dst.rotation[ri + 1] = src.rotation[ri + 1]!
+  dst.rotation[ri + 2] = src.rotation[ri + 2]!
+  dst.rotation[ri + 3] = src.rotation[ri + 3]!
+}
+
+function lerpBoneLocal(dst: Pose, a: Pose, b: Pose, i: number, t: number): void {
+  const ti = i * 3
+  const ri = i * 4
+  const u = 1 - t
+  dst.translation[ti] = a.translation[ti]! * u + b.translation[ti]! * t
+  dst.translation[ti + 1] = a.translation[ti + 1]! * u + b.translation[ti + 1]! * t
+  dst.translation[ti + 2] = a.translation[ti + 2]! * u + b.translation[ti + 2]! * t
+  dst.scale[ti] = a.scale[ti]! * u + b.scale[ti]! * t
+  dst.scale[ti + 1] = a.scale[ti + 1]! * u + b.scale[ti + 1]! * t
+  dst.scale[ti + 2] = a.scale[ti + 2]! * u + b.scale[ti + 2]! * t
+  nlerpQuat(dst.rotation, ri, a.rotation, ri, b.rotation, ri, t)
+}
+
+/** Lerp dst bone toward overlay (dst is both base and output). */
+function lerpBoneLocalInPlace(dst: Pose, overlay: Pose, i: number, t: number): void {
+  const ti = i * 3
+  const ri = i * 4
+  const u = 1 - t
+  dst.translation[ti] = dst.translation[ti]! * u + overlay.translation[ti]! * t
+  dst.translation[ti + 1] = dst.translation[ti + 1]! * u + overlay.translation[ti + 1]! * t
+  dst.translation[ti + 2] = dst.translation[ti + 2]! * u + overlay.translation[ti + 2]! * t
+  dst.scale[ti] = dst.scale[ti]! * u + overlay.scale[ti]! * t
+  dst.scale[ti + 1] = dst.scale[ti + 1]! * u + overlay.scale[ti + 1]! * t
+  dst.scale[ti + 2] = dst.scale[ti + 2]! * u + overlay.scale[ti + 2]! * t
+  const tmp = scratchQuat
+  nlerpQuat(tmp, 0, dst.rotation, ri, overlay.rotation, ri, t)
+  dst.rotation[ri] = tmp[0]!
+  dst.rotation[ri + 1] = tmp[1]!
+  dst.rotation[ri + 2] = tmp[2]!
+  dst.rotation[ri + 3] = tmp[3]!
 }
 
 export type BoneTrs = {
@@ -348,6 +496,7 @@ export function shrinkStack(pose: Pose, removeCount: number): void {
 
 const IDENTITY_QUAT = new Float32Array([0, 0, 0, 1])
 const scratchQuat = new Float32Array(4)
+const scratchQuatB = new Float32Array(4)
 
 export function nlerpQuat(
   dest: Float32Array,

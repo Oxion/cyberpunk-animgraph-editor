@@ -14,6 +14,7 @@ import {
   blendByMaskDynamicBlendActive,
   blendMultipleFirstInputActive,
   blendMultipleSecondInputActive,
+  blendOverrideInputActive,
   buildBlendMultipleSlots,
   selectBlendMultipleInputs,
 } from './engineParity'
@@ -52,6 +53,7 @@ import {
 import {
   advanceClipClock,
   beginClipClockStep,
+  clipWindow,
   createClipClockState,
   deactivateClipClock,
   type ClipClockState,
@@ -73,10 +75,16 @@ import {
   resolveHandle,
 } from './simDataUtils'
 import type { ClipLibrary } from './clipLibrary'
+import { DEFAULT_ANIM_FPS } from './clipLibrary'
 import type { ClipPoseLibrary } from './clipPoseLibrary'
 import type { RigEntry } from './rigResource'
 import { readBoneTrs, readStackBoneTrs, copyPose, createPose, DEFAULT_STACK_CAPACITY, type Pose } from './pose'
 import { allocSampleScratch, sampleGraphPose, samplePoseFromNode } from './sampleWalk'
+import {
+  createSimSampleLog,
+  flushSimSampleLog,
+  simSampleLogLine,
+} from './simSampleLog'
 import { buildStackPairing } from './stackPairing'
 import type { SimInputBoard } from './SimInputBoard'
 import {
@@ -85,7 +93,7 @@ import {
   SimStateMachineRuntime,
   updateStateMachine,
 } from './SimStateMachine'
-import type { SimNodeState, SimSnapshot, SimActiveClip, SimClipResolve } from './simTypes'
+import type { SimNodeState, SimSnapshot, SimActiveClip, SimClipResolve, SimSampleWarning } from './simTypes'
 import { diffSimNodeStates, emptySimSnapshot } from './simTypes'
 
 /** Classify SkAnim clip lookup for HUD (ok / empty / no-lib / missing / gated). */
@@ -105,12 +113,12 @@ function classifyClipResolve(
  * Mark SkAnim clock for HUD; advance only when a ClipLibrary is loaded
  * (avoids AnimEnd spam with empty library).
  */
-function runSkAnimClipClock(node: AnimgraphNode, ctx: WalkCtx) {
+function runSkAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
   const d = (node.Data ?? {}) as Record<string, unknown>
   const fields = readSkAnimClockFields(d)
   const clock = ensureClipClock(ctx.clipClocks, node.HandleId)
   if (ctx.clipLibrary && ctx.clipLibrary.entryCount > 0) {
-    advanceClipClock(
+    const result = advanceClipClock(
       clock,
       fields,
       ctx.dt,
@@ -118,13 +126,122 @@ function runSkAnimClipClock(node: AnimgraphNode, ctx: WalkCtx) {
       ctx.board,
       (n) => ctx.board.isWrapperActive(n)
     )
-    return
+    return result.progress
   }
   // No library: still expose active clip name in status (no time / no AnimEnd)
-  if (clock.stepped) return
+  if (clock.stepped) return 0
   clock.stepped = true
   clock.animName = fields.animation || 'None'
   clock.wasActive = true
+  return 0
+}
+
+/**
+ * SkDurationAnim: stretch playback so clipped clip fits durationLink seconds.
+ * No durationLink → same as SkAnim. Registers clip clock for status HUD.
+ */
+function runSkDurationAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
+  const d = (node.Data ?? {}) as Record<string, unknown>
+  const durationH = resolveHandle(ctx.handles, d.durationLink)
+  if (durationH) updateFromNode(durationH, ctx)
+
+  const fields = readSkAnimClockFields(d)
+  const clock = ensureClipClock(ctx.clipClocks, node.HandleId)
+  const isWrap = (n: string) => ctx.board.isWrapperActive(n)
+
+  if (!durationH) {
+    // Engine: no durationLink → normal SkAnim UpdateRuntimeData
+    runSkAnimClipClock(node, ctx)
+  } else if (!clock.stepped) {
+    const rawDur = readFloatSource(durationH, ctx, 0)
+    const targetDuration = Number.isFinite(rawDur) ? Math.max(0, rawDur) : 0
+    if (ctx.clipLibrary && ctx.clipLibrary.entryCount > 0) {
+      advanceClipClock(
+        clock,
+        fields,
+        ctx.dt,
+        ctx.clipLibrary,
+        ctx.board,
+        isWrap,
+        targetDuration
+      )
+    } else {
+      clock.stepped = true
+      clock.animName = fields.animation || 'None'
+      clock.wasActive = true
+      if (!clock.animName || clock.animName === 'None') clock.resolveHint = 'empty'
+      else clock.resolveHint = 'no-lib'
+    }
+  }
+
+  // Progress from clock even if already stepped this frame (tick then Update).
+  const animName = clock.animName || fields.animation || 'None'
+  const clip =
+    ctx.clipLibrary && ctx.clipLibrary.entryCount > 0
+      ? ctx.clipLibrary.resolveClip(animName, isWrap)
+      : undefined
+  if (!clip || clip.duration <= 0) return 0
+  const { front, clippedDur } = clipWindow(clip, fields.clipFront, fields.clipEnd)
+  if (clippedDur <= 1e-8) return 0
+  return Math.max(0, Math.min(1, (clock.currTime - front) / clippedDur))
+}
+
+/**
+ * SkFrameAnim: scrub by progressLink (0..1) / timeLink (sec) / frameLink (frame).
+ * Still registers a clip clock so HUD status lists the anim (unlike time-driven SkAnim).
+ */
+function runSkFrameAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
+  const d = (node.Data ?? {}) as Record<string, unknown>
+  for (const key of ['progressLink', 'timeLink', 'frameLink'] as const) {
+    const h = resolveHandle(ctx.handles, d[key])
+    if (h) updateFromNode(h, ctx)
+  }
+  const fields = readSkAnimClockFields(d)
+  const clock = ensureClipClock(ctx.clipClocks, node.HandleId)
+  const animName = fields.animation || 'None'
+  clock.stepped = true
+  clock.wasActive = true
+  clock.animName = animName
+
+  const isWrap = (n: string) => ctx.board.isWrapperActive(n)
+  const clip =
+    ctx.clipLibrary && ctx.clipLibrary.entryCount > 0
+      ? ctx.clipLibrary.resolveClip(animName, isWrap)
+      : undefined
+  const duration = clip && clip.duration > 0 ? clip.duration : 0
+  const front = Math.max(0, fields.clipFront)
+  const endPad = Math.max(0, fields.clipEnd)
+  const window = Math.max(0, duration - front - endPad)
+
+  let currTime = front
+  const progressH = resolveHandle(ctx.handles, d.progressLink)
+  const timeH = resolveHandle(ctx.handles, d.timeLink)
+  const frameH = resolveHandle(ctx.handles, d.frameLink)
+  // Engine: progress / time / frame are alternate drivers (progress preferred when linked).
+  if (progressH) {
+    const p = readFloatSource(progressH, ctx, 0)
+    const u = Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : 0
+    currTime = front + u * window
+  } else if (timeH) {
+    const t = readFloatSource(timeH, ctx, 0)
+    currTime = Number.isFinite(t) ? Math.max(0, t) : front
+  } else if (frameH) {
+    const frame = readFloatSource(frameH, ctx, 0)
+    const fps =
+      clip?.numFrames && duration > 0 ? clip.numFrames / duration : DEFAULT_ANIM_FPS
+    currTime = Number.isFinite(frame) ? frame / Math.max(1e-6, fps) : front
+  }
+
+  clock.prevTime = clock.currTime
+  clock.currTime = currTime
+  if (!ctx.clipLibrary || ctx.clipLibrary.entryCount === 0) {
+    clock.resolveHint = animName && animName !== 'None' ? 'no-lib' : 'empty'
+  } else if (!clip) {
+    clock.resolveHint = ctx.clipLibrary.hasClipAnywhere(animName) ? 'gated' : 'missing'
+  }
+
+  const progress = window > 1e-8 ? (currTime - front) / window : 0
+  return Math.max(0, Math.min(1, progress))
 }
 
 /** Resolve AnimDatabase CSV row → animation CName, then run clip clock. */
@@ -236,6 +353,12 @@ type WalkCtx = FloatEvalCtx & {
    * with this runner's Sample buffers / libraries).
    */
   makeParentPoseSample?: (inputLink: AnimgraphNode) => (out: Pose) => boolean
+  /**
+   * Update-traversal successors this frame: parentHandleId → childHandleIds
+   * in visit order (role order for blends: base/first then blend/second).
+   * Value/weight links are not recorded — only followUpdate targets.
+   */
+  updateSucc: Map<string, string[]>
 }
 
 /** Project GraphSlot attach: resolve slot name → nested diagram Update. */
@@ -269,13 +392,51 @@ function isGraphSlotType(t: string | null | undefined): boolean {
   )
 }
 
+/** Record Update walk edge (deduped). Not for weight/value links. */
+function recordUpdateSucc(ctx: WalkCtx, parentId: string, childId: string): void {
+  let arr = ctx.updateSucc.get(parentId)
+  if (!arr) {
+    arr = []
+    ctx.updateSucc.set(parentId, arr)
+  }
+  if (arr.includes(childId)) return
+  arr.push(childId)
+}
+
+/** Follow a graph successor during Update and record the edge for Sample. */
+function followUpdate(
+  parent: AnimgraphNode,
+  child: AnimgraphNode | null | undefined,
+  ctx: WalkCtx
+): void {
+  if (!child) return
+  recordUpdateSucc(ctx, parent.HandleId, child.HandleId)
+  updateFromNode(child, ctx)
+}
+
+/** Successors worth recording (skip pure value sources). */
+function isUpdateSuccTarget(node: AnimgraphNode): boolean {
+  const t = handleType(node)
+  if (!t.startsWith('animAnimNode_')) return false
+  if (isFloatValueNodeType(t) || isVectorValueNodeType(t)) return false
+  return true
+}
+
 /** SkAnim playback clock (exclude frame/duration-driven + AnimDatabase). */
 function isClipClockSkAnimType(t: string | null | undefined): boolean {
   if (!t || !isAnimType(t, 'animAnimNode_SkAnim')) return false
-  if (t.includes('SkFrameAnim')) return false
+  if (isSkFrameAnimType(t)) return false
   if (t === 'animAnimNode_SkDurationAnim') return false
   if (t === 'animAnimNode_AnimDatabase') return false
   return true
+}
+
+function isSkFrameAnimType(t: string | null | undefined): boolean {
+  return t === 'animAnimNode_SkFrameAnim' || t === 'animAnimNode_SkFrameAnimByTrack'
+}
+
+function isSkDurationAnimType(t: string | null | undefined): boolean {
+  return t === 'animAnimNode_SkDurationAnim'
 }
 
 function isAnimDatabaseType(t: string | null | undefined): boolean {
@@ -348,10 +509,20 @@ function tickClipClocksAlongPose(
     return
   }
 
+  if (isSkDurationAnimType(t)) {
+    runSkDurationAnimClipClock(node, ctx)
+    return
+  }
+
+  if (isSkFrameAnimType(t)) {
+    runSkFrameAnimClipClock(node, ctx)
+    return
+  }
+
   // Follow same pose branching heuristics as updateFromNode for common mixers
   if (t === 'animAnimNode_Blend2') {
     const weightNode = resolveHandle(handles, d.weightNode)
-    let weight = 0.5
+    let weight = 0
     if (weightNode) {
       const raw = readFloatSource(weightNode, ctx, NaN)
       if (Number.isFinite(raw)) {
@@ -439,6 +610,18 @@ function tickClipClocksAlongPose(
     if (wNode) w = readFloatSource(wNode, ctx, 0)
     if (isBlendAdditiveInputActive(w)) {
       tickClipClocksAlongPose(resolveHandle(handles, d.addedInputNode), ctx, clockVisited)
+    }
+    return
+  }
+
+  if (t === 'animAnimNode_BlendOverride') {
+    // Always tick base; override only when control weight > ACTIVATION_THRESHOLD.
+    tickClipClocksAlongPose(resolveHandle(handles, d.inputNode), ctx, clockVisited)
+    const wNode = resolveHandle(handles, d.weightNode)
+    const raw = wNode ? readFloatSource(wNode, ctx, 0) : 0
+    const weight = Math.min(1, Math.max(0, raw))
+    if (blendOverrideInputActive(weight)) {
+      tickClipClocksAlongPose(resolveHandle(handles, d.overrideInputNode), ctx, clockVisited)
     }
     return
   }
@@ -992,6 +1175,13 @@ function readFloatSource(
     return fallback
   }
 
+  if (t === 'animAnimNode_FloatVariable') {
+    const name = readCName(d.variableName)
+    if (!name || name === 'None') return fallback
+    // Unset board var → 0 (engine default); UI often shows ??0 without seeding the map.
+    return boardFloat(board, name, 0)
+  }
+
   if (t === 'animAnimNode_BoolVariable') {
     const name = readCName(d.variableName)
     if (name && board.boolVars.has(name)) return board.boolVars.get(name) ? 1 : 0
@@ -1352,18 +1542,18 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   if (t === 'animAnimNode_Root') {
     const out = resolveHandle(handles, d.outputNode)
     if (out) {
-      updateFromNode(out, ctx)
+      followUpdate(node, out, ctx)
       return
     }
     const children = Array.isArray(d.nodes) ? d.nodes : []
     if (children.length > 0) {
-      updateFromNode(resolveHandle(handles, children[0]), ctx)
+      followUpdate(node, resolveHandle(handles, children[0]), ctx)
     }
     return
   }
 
   if (t === 'animAnimNode_Output') {
-    updateFromNode(resolveHandle(handles, d.inputNode ?? d.input ?? d.node), ctx)
+    followUpdate(node, resolveHandle(handles, d.inputNode ?? d.input ?? d.node), ctx)
     return
   }
 
@@ -1387,7 +1577,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
         ? ctx.slotHost.stepNested(
             slotName,
             () => {
-              if (inputLink) updateFromNode(inputLink, ctx)
+              followUpdate(node, inputLink, ctx)
             },
             parentPoseSample
           )
@@ -1396,13 +1586,13 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     if (nested) {
       markActive(nodes, node.HandleId, { alpha: 1 })
       // Engine: when dontDeactivateInput, also Update inputLink from the slot itself.
-      if (dontDeactivate && inputLink) updateFromNode(inputLink, ctx)
+      if (dontDeactivate) followUpdate(node, inputLink, ctx)
       return
     }
 
     // No attached graph — passthrough inputLink (engine fallback).
     markActive(nodes, node.HandleId)
-    if (inputLink) updateFromNode(inputLink, ctx)
+    followUpdate(node, inputLink, ctx)
     return
   }
 
@@ -1445,14 +1635,14 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     if (active) {
       markActive(nodes, active.HandleId)
       const out = findStateOutput(active, handles)
-      updateFromNode(out, ctx)
+      followUpdate(node, out, ctx)
     }
     if (rt.isInTransition && rt.targetStateIndex != null) {
       const target = resolveHandle(handles, states[rt.targetStateIndex])
       if (target) {
         markActive(nodes, target.HandleId)
         const out = findStateOutput(target, handles)
-        updateFromNode(out, ctx)
+        followUpdate(node, out, ctx)
       }
     }
     // Explicit inactive: missing snapshot keys stay alpha 1 in overlay — SM
@@ -1538,35 +1728,47 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
+  if (isSkDurationAnimType(t)) {
+    const progress = runSkDurationAnimClipClock(node, ctx)
+    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    return
+  }
+
+  if (isSkFrameAnimType(t)) {
+    const progress = runSkFrameAnimClipClock(node, ctx)
+    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    return
+  }
+
   if (t === 'animAnimNode_State' || t === 'animAnimNode_StateFrozen') {
     const out = findStateOutput(node, handles)
-    updateFromNode(out, ctx)
+    followUpdate(node, out, ctx)
     return
   }
 
   if (t === 'animAnimNode_Blend2') {
     const weightNode = resolveHandle(handles, d.weightNode)
-    let weight = 0.5
+    // Unset / unreadable weight → 0 (first input only). Never default to 0.5:
+    // UI may show floatVars[name]??0 while board has no key → NaN → old 0.5 bug.
+    let weight = 0
     if (weightNode) {
       updateFromNode(weightNode, ctx)
-      const raw = readFloatSource(weightNode, ctx, NaN)
-      if (Number.isFinite(raw)) {
-        weight = blend2WeightFromInput(
-          raw,
-          readNumber(d.minInputValue, 0),
-          readNumber(d.maxInputValue, 1)
-        )
-      }
+      const raw = readFloatSource(weightNode, ctx, 0)
+      weight = blend2WeightFromInput(
+        raw,
+        readNumber(d.minInputValue, 0),
+        readNumber(d.maxInputValue, 1)
+      )
     }
     markActive(nodes, node.HandleId, { weight, alpha: weight })
     const first = resolveHandle(handles, d.firstInputNode)
     const second = resolveHandle(handles, d.secondInputNode)
     if (first) {
-      if (weight < 1) updateFromNode(first, ctx)
+      if (weight < 1) followUpdate(node, first, ctx)
       else markInactiveBranch(first, handles, nodes, new Set(), ctx.visited)
     }
     if (second) {
-      if (weight > 0) updateFromNode(second, ctx)
+      if (weight > 0) followUpdate(node, second, ctx)
       else markInactiveBranch(second, handles, nodes, new Set(), ctx.visited)
     }
     return
@@ -1587,7 +1789,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
         i === select.firstIndex && blendMultipleFirstInputActive(select.alpha)
       const activeSecond =
         i === select.secondIndex && blendMultipleSecondInputActive(select.alpha)
-      if (activeFirst || activeSecond) updateFromNode(h, ctx)
+      if (activeFirst || activeSecond) followUpdate(node, h, ctx)
       else markInactiveBranch(h, handles, nodes, new Set(), ctx.visited)
     })
     return
@@ -1608,7 +1810,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     inputs.forEach((ref, i) => {
       const h = resolveHandle(handles, ref)
       if (!h) return
-      if (i === index) updateFromNode(h, ctx)
+      if (i === index) followUpdate(node, h, ctx)
       else markInactiveBranch(h, handles, nodes, new Set(), ctx.visited)
     })
     return
@@ -1635,10 +1837,10 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const trueIn = resolveHandle(handles, d.True ?? d.true)
     const falseIn = resolveHandle(handles, d.False ?? d.false)
     if (useTrue) {
-      if (trueIn) updateFromNode(trueIn, ctx)
+      followUpdate(node, trueIn, ctx)
       if (falseIn) markInactiveBranch(falseIn, handles, nodes, new Set(), ctx.visited)
     } else {
-      if (falseIn) updateFromNode(falseIn, ctx)
+      followUpdate(node, falseIn, ctx)
       if (trueIn) markInactiveBranch(trueIn, handles, nodes, new Set(), ctx.visited)
     }
     return
@@ -1659,10 +1861,28 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const base = resolveHandle(handles, d.inputNode)
     const additive = resolveHandle(handles, d.addedInputNode ?? d.additiveInputNode)
     // Base pose always updates (engine always LinkSafeUpdate inputNode)
-    if (base) updateFromNode(base, ctx)
+    followUpdate(node, base, ctx)
     if (additive) {
-      if (isBlendAdditiveInputActive(alpha)) updateFromNode(additive, ctx)
+      if (isBlendAdditiveInputActive(alpha)) followUpdate(node, additive, ctx)
       else markInactiveBranch(additive, handles, nodes, new Set(), ctx.visited)
+    }
+    return
+  }
+
+  if (t === 'animAnimNode_BlendOverride') {
+    // animNode_BlendOverride.cpp OnUpdate:
+    // always Update input + weight; clamp control 0..1; Update override if > 0.01.
+    const weightNode = resolveHandle(handles, d.weightNode)
+    if (weightNode) updateFromNode(weightNode, ctx)
+    const raw = weightNode ? readFloatSource(weightNode, ctx, 0) : 0
+    const weight = Math.min(1, Math.max(0, Number.isFinite(raw) ? raw : 0))
+    markActive(nodes, node.HandleId, { weight, alpha: weight })
+    const base = resolveHandle(handles, d.inputNode)
+    const overrideIn = resolveHandle(handles, d.overrideInputNode)
+    followUpdate(node, base, ctx)
+    if (overrideIn) {
+      if (blendOverrideInputActive(weight)) followUpdate(node, overrideIn, ctx)
+      else markInactiveBranch(overrideIn, handles, nodes, new Set(), ctx.visited)
     }
     return
   }
@@ -1686,19 +1906,24 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     markActive(nodes, node.HandleId, { weight, alpha: maskIndex })
     const base = resolveHandle(handles, d.base)
     const blend = resolveHandle(handles, d.blend)
-    if (base) updateFromNode(base, ctx)
+    followUpdate(node, base, ctx)
     if (blend) {
-      if (blendActive) updateFromNode(blend, ctx)
+      if (blendActive) followUpdate(node, blend, ctx)
       else markInactiveBranch(blend, handles, nodes, new Set(), ctx.visited)
     }
     return
   }
 
-  // Generic pose/value links — follow diagram pins
-  forEachLinkedInput(node, handles, (linked) => updateFromNode(linked, ctx))
+  // Generic pose/value links — follow diagram pins; record only succ targets.
+  forEachLinkedInput(node, handles, (linked) => {
+    if (linked && isUpdateSuccTarget(linked)) followUpdate(node, linked, ctx)
+    else updateFromNode(linked, ctx)
+  })
 }
 
 export class SimGraphRunner {
+  /** Set by host when runner is created for a diagram. */
+  diagramId = ''
   private runtimes = new Map<string, SimStateMachineRuntime>()
   private handles: Map<string, AnimgraphNode> = new Map()
   private originalAnimgraph: RenderData['originalAnimgraph'] | null = null
@@ -1719,6 +1944,11 @@ export class SimGraphRunner {
   /** Bone names to copy into poseStats.inspect each frame. */
   poseInspectBones: string[] = []
   /**
+   * When true, Sample appends diagnostics (null-pose Blend2, …) into poseStats.warnings.
+   * Off by default — lastWrittenNull bookkeeping skipped.
+   */
+  sampleWarningsEnabled = false
+  /**
    * Handles whose full pose is snapshotted during Sample (at that node).
    * Selection registers any node — inspect/stack HUD use the capture.
    */
@@ -1726,6 +1956,8 @@ export class SimGraphRunner {
   private sampleOut: Pose | null = null
   private sampleScratchA: Pose | null = null
   private sampleScratchB: Pose | null = null
+  /** Update-traversal successors for Sample (cleared each step). */
+  private updateSucc = new Map<string, string[]>()
   /** Pose stack capacity from Extender scan at bind. */
   private stackCapacity = DEFAULT_STACK_CAPACITY
   /** Shrinker handleId → remove count (tag pairing). */
@@ -1757,13 +1989,25 @@ export class SimGraphRunner {
   }
 
   setActiveRig(rig: RigEntry | null): void {
-    this.activeRig = rig
     if (!rig) {
+      this.activeRig = null
       this.sampleOut = null
       this.sampleScratchA = null
       this.sampleScratchB = null
       return
     }
+    // Same rig + live buffers → keep sampleOut (ensureRunner used to wipe nested poses).
+    if (
+      rig === this.activeRig &&
+      this.sampleOut &&
+      this.sampleScratchA &&
+      this.sampleScratchB &&
+      this.sampleOut.boneCount === rig.boneNames.length &&
+      this.sampleOut.stackCapacity === this.stackCapacity
+    ) {
+      return
+    }
+    this.activeRig = rig
     this.reallocSampleBuffers()
   }
 
@@ -1776,9 +2020,28 @@ export class SimGraphRunner {
     this.sampleScratchB = buf.scratchB
   }
 
+  /** Whether this graph owns a handle (for capture / debug scoping). */
+  hasHandle(handleId: string): boolean {
+    return this.handles.has(handleId.trim())
+  }
+
   /** Latest sampled pose (pooled) — not for reactive Vue binding. */
   getSampledPose(): Pose | null {
     return this.sampleOut
+  }
+
+  /**
+   * Full pose snapshotted at a capture handle this Sample frame.
+   * Not for reactive Vue binding.
+   */
+  getCapturedPose(handleId: string): Pose | null {
+    if (!handleId || !this.capturedPoseThisFrame.has(handleId)) return null
+    return this.capturedPoses.get(handleId) ?? null
+  }
+
+  /** Active rig used for Sample buffers (pooled reference). */
+  getActiveRig(): RigEntry | null {
+    return this.activeRig
   }
 
   /** Bind-time shrink remove count for a Shrinker handle (HUD). */
@@ -1953,10 +2216,27 @@ export class SimGraphRunner {
     const nodes: Record<string, SimNodeState> = {}
     this.conditionDyn.beginStep()
     beginClipClockStep(this.clipClocks)
+    // Captures may happen during nested parentPoseSample (Update) and Root Sample —
+    // clear once at frame start so mid-step captures are not wiped before Root Sample.
+    this.beginPoseCaptures()
     if (this.staticSwitchDirty) this.recomputeStaticSwitches(board)
     const floatUpdated = new Set<string>()
     const signalUpdated = new Set<string>()
     const condCtx = { ...this.buildCondCtx(board), dt }
+    const sampleLog = createSimSampleLog(`diagram=${this.diagramId || '?'}`)
+    const sampleVisitedAll = sampleLog ? new Set<string>() : undefined
+    const sampleWarnings: SimSampleWarning[] | undefined = this.sampleWarningsEnabled
+      ? []
+      : undefined
+    this.updateSucc.clear()
+    if (sampleLog) {
+      const caps = [...this.stackCaptureHandleIds]
+      const known = caps.filter((id) => this.hasHandle(id))
+      simSampleLogLine(
+        sampleLog,
+        `begin diagram=${this.diagramId || '?'} captures=[${caps.join(',')}] knownInGraph=[${known.join(',')}] slotHost=${options?.slotHost ? 1 : 0}`
+      )
+    }
 
     const makeParentPoseSample = (inputLink: AnimgraphNode) => (out: Pose): boolean => {
       const rig = this.activeRig
@@ -1968,6 +2248,10 @@ export class SimGraphRunner {
       ) {
         return false
       }
+      simSampleLogLine(
+        sampleLog,
+        `parentPoseSample inputLink=${inputLink.HandleId}`
+      )
       return samplePoseFromNode(
         inputLink,
         {
@@ -1987,6 +2271,12 @@ export class SimGraphRunner {
           captureStack: (handleId, pose) => this.capturePoseFromSample(handleId, pose),
           scratchA: this.sampleScratchA,
           scratchB: this.sampleScratchB,
+          sampleLog,
+          sampleVisitedAll,
+          updateSucc: this.updateSucc,
+          warningsEnabled: this.sampleWarningsEnabled,
+          warnings: sampleWarnings,
+          lastWrittenNull: false,
         },
         out
       )
@@ -2015,6 +2305,7 @@ export class SimGraphRunner {
       parentPoseUpdate: options?.parentPoseUpdate,
       parentPoseSample: options?.parentPoseSample,
       makeParentPoseSample,
+      updateSucc: this.updateSucc,
     }
 
     const root = findRootHandle(this.handles, this.originalAnimgraph)
@@ -2085,7 +2376,15 @@ export class SimGraphRunner {
     let poseStats: SimSnapshot['poseStats'] = null
     const rig = this.activeRig
     if (rig && this.clipPoseLibrary && this.sampleOut && this.sampleScratchA && this.sampleScratchB) {
-      this.beginPoseCaptures()
+      simSampleLogLine(sampleLog, '--- root Sample ---')
+      if (sampleLog) {
+        let edges = 0
+        for (const arr of this.updateSucc.values()) edges += arr.length
+        simSampleLogLine(
+          sampleLog,
+          `updateSucc parents=${this.updateSucc.size} edges=${edges}`
+        )
+      }
       const result = sampleGraphPose(
         root,
         {
@@ -2106,9 +2405,22 @@ export class SimGraphRunner {
           scratchA: this.sampleScratchA,
           scratchB: this.sampleScratchB,
           missingGlb: [],
+          sampleLog,
+          sampleVisitedAll,
+          updateSucc: this.updateSucc,
+          warningsEnabled: this.sampleWarningsEnabled,
+          warnings: sampleWarnings,
+          lastWrittenNull: false,
         },
         this.sampleOut
       )
+      for (const id of this.stackCaptureHandleIds) {
+        simSampleLogLine(
+          sampleLog,
+          `after-root capture ${id}: ${this.capturedPoseThisFrame.has(id) ? 'YES' : 'NO'}`
+        )
+      }
+      flushSimSampleLog(sampleLog)
       const hud = this.resolveHudPose()
       const atNodePose = hud?.handleId ? hud.pose : null
       const resultPose = this.sampleOut
@@ -2133,8 +2445,14 @@ export class SimGraphRunner {
         stack: this.buildStackStats(stackPose),
         stackSourceHandleId: hud?.handleId ?? undefined,
         missingGlb: result.missingGlb,
+        warnings: result.warnings,
       }
     } else {
+      simSampleLogLine(
+        sampleLog,
+        `skip root Sample reason=${!rig ? 'no-rig' : !this.clipPoseLibrary ? 'no-glb' : 'no-buffers'}`
+      )
+      flushSimSampleLog(sampleLog)
       poseStats = {
         ok: false,
         reason: !rig ? 'no-rig' : !this.clipPoseLibrary ? 'no-glb' : 'no-buffers',
