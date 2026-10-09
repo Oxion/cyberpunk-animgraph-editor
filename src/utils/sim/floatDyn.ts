@@ -3,7 +3,9 @@
  * Math mirrors common/animation animNode_Damp.cpp + engine springDampers.h.
  */
 
-import { readBool, readNumber } from './simDataUtils'
+import { readBool, readNumber, readVector4 } from './simDataUtils'
+
+export type CurveVec4 = { x: number; y: number; z: number; w: number }
 
 export type FloatDynState = {
   value: number
@@ -430,6 +432,116 @@ export function evalCurveFloatData(curveData: unknown, argument: number): number
   return curveLinear(values[first]!, values[second]!, t)
 }
 
+/**
+ * CurveDataVector4 sample — same interpolators as float, per XYZ/W channel.
+ * Engine AnimNode_CurveVectorValue::OnGetValue → CurveDataEvaluator::EvalAt.
+ */
+export function evalCurveVector4Data(
+  curveData: unknown,
+  argument: number,
+  fallback: CurveVec4 = { x: 0, y: 0, z: 0, w: 0 }
+): CurveVec4 {
+  if (!curveData || typeof curveData !== 'object') return { ...fallback }
+  const data = curveData as {
+    InterpolationType?: string
+    Elements?: Array<{
+      point?: unknown
+      Point?: unknown
+      value?: unknown
+      Value?: unknown
+    }>
+  }
+  const elements = Array.isArray(data.Elements) ? data.Elements : []
+  if (elements.length === 0) return { ...fallback }
+
+  const keys = elements
+    .map((e) => ({
+      point: readNumber(e.point ?? e.Point, 0),
+      value: readVector4(e.value ?? e.Value, fallback),
+    }))
+    .sort((a, b) => a.point - b.point)
+
+  const times = keys.map((k) => k.point)
+  const values = keys.map((k) => k.value)
+  const numKeys = times.length
+  if (numKeys === 0) return { ...fallback }
+
+  if (argument <= times[0]!) return { ...values[0]! }
+  if (argument >= times[numKeys - 1]!) return { ...values[numKeys - 1]! }
+
+  const interpRaw = String(data.InterpolationType ?? 'Linear')
+  const interp = interpRaw
+    .replace(/^curveE?/i, '')
+    .replace(/^EIT_/i, '')
+    .toLowerCase()
+
+  const at = Math.min(times[numKeys - 1]!, Math.max(times[0]!, argument))
+  const blend = (a: CurveVec4, b: CurveVec4, t: number): CurveVec4 => ({
+    x: curveLinear(a.x, b.x, t),
+    y: curveLinear(a.y, b.y, t),
+    z: curveLinear(a.z, b.z, t),
+    w: curveLinear(a.w, b.w, t),
+  })
+  const blendN = (
+    pick: (channel: number[]) => number
+  ): CurveVec4 => ({
+    x: pick(values.map((v) => v.x)),
+    y: pick(values.map((v) => v.y)),
+    z: pick(values.map((v) => v.z)),
+    w: pick(values.map((v) => v.w)),
+  })
+
+  if (interp.includes('constant')) {
+    const idx = curveClampKey(curveInterpolationSearch(times, at), numKeys - 1)
+    return { ...values[idx]! }
+  }
+
+  if (interp.includes('bezierquadratic') || interp.includes('quadraticbezier')) {
+    if (numKeys < 3) return { ...values[0]! }
+    let first = curveClampKey(curveInterpolationSearch(times, at), numKeys - 1)
+    first = first - (first % 2)
+    const second = curveClampKey(first + 1, numKeys - 1)
+    const third = curveClampKey(second + 1, numKeys - 1)
+    const t = curveScaleT(at, times[first]!, times[third]!)
+    return blendN((ch) => curveQuadraticBezier(ch[first]!, ch[second]!, ch[third]!, t))
+  }
+
+  if (
+    interp.includes('beziercubic') ||
+    interp.includes('cubicbezier') ||
+    (interp.includes('bezier') && !interp.includes('quadratic'))
+  ) {
+    if (numKeys < 4) return { ...values[0]! }
+    let first = curveClampKey(curveInterpolationSearch(times, at), numKeys - 1)
+    first = first - (first % 3)
+    const second = curveClampKey(first + 1, numKeys - 1)
+    const third = curveClampKey(second + 1, numKeys - 1)
+    const fourth = curveClampKey(third + 1, numKeys - 1)
+    const t = curveScaleT(at, times[first]!, times[fourth]!)
+    return blendN((ch) =>
+      curveCubicBezier(ch[first]!, ch[second]!, ch[third]!, ch[fourth]!, t)
+    )
+  }
+
+  if (interp.includes('hermite')) {
+    if (numKeys < 4) return { ...values[0]! }
+    let first = curveClampKey(curveInterpolationSearch(times, at), numKeys - 1)
+    first = first - (first % 3)
+    const second = curveClampKey(first + 1, numKeys - 1)
+    const third = curveClampKey(second + 1, numKeys - 1)
+    const fourth = curveClampKey(third + 1, numKeys - 1)
+    const t = curveScaleT(at, times[first]!, times[fourth]!)
+    return blendN((ch) =>
+      curveCubicHermite(ch[first]!, ch[second]!, ch[third]!, ch[fourth]!, t)
+    )
+  }
+
+  let first = curveClampKey(curveInterpolationSearch(times, at), numKeys - 1)
+  const second = curveClampKey(first + 1, numKeys - 1)
+  const t = curveScaleT(at, times[first]!, times[second]!)
+  return blend(values[first]!, values[second]!, t)
+}
+
 export function readDampDefaults(d: Record<string, unknown>): {
   increaseSpeed: number
   decreaseSpeed: number
@@ -447,6 +559,48 @@ export function readDampDefaults(d: Record<string, unknown>): {
     wrap: readBool(d.wrapAroundRange),
     rangeMin: readNumber(d.rangeMin, -180),
     rangeMax: readNumber(d.rangeMax, 180),
+  }
+}
+
+/** Engine AnimNode_DampVector::OnUpdate — per-component damp (no wrap). */
+export function stepDampVector(
+  state: CurveVec4,
+  input: CurveVec4,
+  increaseSpeed: CurveVec4,
+  decreaseSpeed: CurveVec4,
+  dt: number
+): void {
+  const axes: Array<keyof CurveVec4> = ['x', 'y', 'z', 'w']
+  for (const a of axes) {
+    const diff = input[a] - state[a]
+    if (diff === 0) continue
+    const signedSpeed = diff >= 0 ? Math.max(0, increaseSpeed[a]) : -Math.max(0, decreaseSpeed[a])
+    const valueDelta = signedSpeed * dt
+    if (signedSpeed === 0 || Math.abs(diff) <= Math.abs(valueDelta)) {
+      state[a] = input[a]
+    } else {
+      state[a] = state[a] + valueDelta
+    }
+  }
+}
+
+export function readDampVectorDefaults(d: Record<string, unknown>): {
+  increaseSpeed: CurveVec4
+  decreaseSpeed: CurveVec4
+  startFromDefault: boolean
+  defaultInitial: CurveVec4
+} {
+  const clampPos = (v: CurveVec4): CurveVec4 => ({
+    x: Math.max(0, v.x),
+    y: Math.max(0, v.y),
+    z: Math.max(0, v.z),
+    w: Math.max(0, v.w),
+  })
+  return {
+    increaseSpeed: clampPos(readVector4(d.defaultIncreaseSpeed, { x: 1, y: 1, z: 1, w: 1 })),
+    decreaseSpeed: clampPos(readVector4(d.defaultDecreaseSpeed, { x: 1, y: 1, z: 1, w: 1 })),
+    startFromDefault: readBool(d.startFromDefaultValue),
+    defaultInitial: readVector4(d.defaultInitialValue, { x: 0, y: 0, z: 0, w: 0 }),
   }
 }
 

@@ -2989,6 +2989,7 @@ const RTTI_TYPE_DEFINITIONS: Record<string, AnimTypeDef> = {
     fields: [
     { key: 'from', type: 'cname' },
     { key: 'to', type: 'cname' },
+    { key: 'weightTrack', type: 'cname' },
   ],
   },
   'animAnimVariable': {

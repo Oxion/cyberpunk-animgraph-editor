@@ -1,14 +1,16 @@
 /**
  * Scalar evaluator for anim MathExpressionFloat strings.
  * Subset of RED expressionToolkit (expressionToolkit_opRegistry Scalar + Logical).
- * Rotation ops (Rot / getRoll|Pitch|Yaw) are not ported.
+ * Vector/rotation ops live in evalAnimMathExpressionVector (mixed path).
  *
  * Engine trig takes/returns degrees. Engine `&` / `|` / `xor` / `!` are float
  * logical (operand > eps → 1 else 0), not bitwise / JS boolean.
  */
 
-const SAFE_EXPR = /^[\d\s+\-*/().,_<>=!&|^%#a-zA-Z]+$/
-const IDENT_RE = /[A-Za-z_][A-Za-z0-9_]*/g
+/** Engine IsAlpha: alnum + _ $ # @. `#name` = rotation var; bare `#` = unary minus (mixed tokenizer). */
+const SAFE_EXPR = /^[\d\s+\-*/().,_<>=!&|^%#$a-zA-Z@]+$/
+/** `$vec` / `@x` / `name` / `#quat` — `#` alone is not an ident. */
+const IDENT_RE = /[$A-Za-z_@][A-Za-z0-9_]*|#[A-Za-z_][A-Za-z0-9_]*/g
 const EPS = Number.EPSILON
 
 const DEG2RAD = Math.PI / 180
@@ -46,6 +48,9 @@ export const ANIM_MATH_SCALAR_BUILTINS: Record<string, (...args: number[]) => nu
   or: (a, b) => (logicalTrue(a) || logicalTrue(b) ? 1 : 0),
   xor: (a, b) => (logicalTrue(a) !== logicalTrue(b) ? 1 : 0),
   not: (a) => (logicalTrue(a) ? 0 : 1),
+  // Logical ops as named funcs (expressionToolkit LogicalOperations)
+  greater_or_equal: (a, b) => (a >= b ? 1 : 0),
+  less_or_equal: (a, b) => (a <= b ? 1 : 0),
 }
 
 const BUILTINS = ANIM_MATH_SCALAR_BUILTINS
@@ -69,6 +74,10 @@ const BUILTIN_NAMES = new Set([
   'cross',
   'dot',
   'lerp',
+  'rot',
+  'getroll',
+  'getpitch',
+  'getyaw',
 ])
 
 function isBuiltinIdent(name: string): boolean {
@@ -86,6 +95,20 @@ export function listMathExprIdents(expression: string): string[] {
     out.push(n)
   }
   return out
+}
+
+/** Bare float socket names (`A`, `weight`) — not `$vec` / `#quat`. */
+export function listMathExprFloatIdents(expression: string): string[] {
+  return listMathExprIdents(expression).filter(
+    (n) => !n.startsWith('#') && !n.startsWith('$') && !n.startsWith('@')
+  )
+}
+
+/** True when expression needs the mixed (vector/quat) parser. */
+export function mathExprNeedsMixedEval(expression: string): boolean {
+  return /[$]|#[A-Za-z_]|get[XYZ]\s*\(|get(?:Roll|Pitch|Yaw)\s*\(|\b(?:vec|length|norm|dot|cross|lerp|Rot)\s*\(/i.test(
+    expression
+  )
 }
 
 function lookupVar(vars: Record<string, number>, name: string): number {
@@ -196,52 +219,120 @@ function rewriteBarePi(expr: string): string {
   return expr.replace(/\bPI\b/gi, '__fn.pi()')
 }
 
+/** Per-runner (or ad-hoc) compile cache keyed by trimmed expressionString. */
+export type MathExprCompileCache = Map<string, MathExprCompiled>
+
+/**
+ * One compile of an expressionString: idents + scalar runner.
+ * Mixed tokenizer fills `mixedTokens` lazily (evalAnimMathExpressionVector).
+ */
+export type MathExprCompiled = {
+  trimmed: string
+  safe: boolean
+  needsMixed: boolean
+  /** All non-builtin idents in expression order (AutoRegisterVar). */
+  idents: string[]
+  floatIdents: string[]
+  vectorIdents: string[]
+  quatIdents: string[]
+  /** Scalar path; null when unsafe / compile failed. */
+  evalScalar: ((vars: Record<string, number>) => number | null) | null
+  /** Lazy mixed-path tokenize result (Tok[] | null); set by vector module. */
+  mixedTokens?: unknown
+  mixedTokensResolved?: boolean
+}
+
+function compileMathExpr(trimmed: string): MathExprCompiled {
+  const idents = listMathExprIdents(trimmed)
+  const floatIdents = idents.filter(
+    (n) => !n.startsWith('#') && !n.startsWith('$') && !n.startsWith('@')
+  )
+  const quatIdents = idents.filter((n) => n.startsWith('#'))
+  // Same as listMathExprVectorIdents: builtins already stripped by listMathExprIdents.
+  const vectorIdents = idents.filter((n) => !n.startsWith('#'))
+  const needsMixed = mathExprNeedsMixedEval(trimmed)
+  const safe = SAFE_EXPR.test(trimmed)
+
+  let evalScalar: MathExprCompiled['evalScalar'] = null
+  if (safe) {
+    const paramOf = new Map<string, string>()
+    const argNames: string[] = []
+    for (const ident of idents) {
+      const param = `__v${argNames.length}`
+      paramOf.set(ident, param)
+      argNames.push(param)
+    }
+
+    let js = trimmed.replace(IDENT_RE, (name) => {
+      if (isBuiltinIdent(name)) {
+        const lower = name.toLowerCase()
+        if (lower === 'pi') return '__fn.pi()'
+        return `__fn.${lower}`
+      }
+      return paramOf.get(name) ?? name
+    })
+    js = js.replace(/([^!<>=])=([^=])/g, '$1==$2')
+    js = rewriteBarePi(js)
+    js = rewriteUnary(js)
+    js = rewriteLogicalAndPow(js)
+
+    try {
+      // eslint-disable-next-line no-new-func
+      const fn = new Function(
+        '__fn',
+        ...argNames,
+        `"use strict"; return Number(${js});`
+      ) as (...args: unknown[]) => unknown
+      const identsSnapshot = idents
+      evalScalar = (vars) => {
+        try {
+          const argValues = identsSnapshot.map((id) => lookupVar(vars, id))
+          const result = fn(BUILTINS, ...argValues)
+          return typeof result === 'number' && Number.isFinite(result) ? result : 0
+        } catch {
+          return null
+        }
+      }
+    } catch {
+      evalScalar = null
+    }
+  }
+
+  return {
+    trimmed,
+    safe,
+    needsMixed,
+    idents,
+    floatIdents,
+    vectorIdents,
+    quatIdents,
+    evalScalar,
+  }
+}
+
+/** Compile (or fetch) expression; empty string → null. */
+export function getCompiledMathExpr(
+  expression: string,
+  cache?: MathExprCompileCache | null
+): MathExprCompiled | null {
+  const trimmed = expression.trim()
+  if (!trimmed) return null
+  const hit = cache?.get(trimmed)
+  if (hit) return hit
+  const compiled = compileMathExpr(trimmed)
+  cache?.set(trimmed, compiled)
+  return compiled
+}
+
 /**
  * @returns null if expression cannot be evaluated safely
  */
 export function evalAnimMathExpression(
   expression: string,
-  vars: Record<string, number>
+  vars: Record<string, number>,
+  cache?: MathExprCompileCache | null
 ): number | null {
-  const expr = expression.trim()
-  if (!expr || !SAFE_EXPR.test(expr)) return null
-
-  const idents = listMathExprIdents(expr)
-  const paramOf = new Map<string, string>()
-  const argNames: string[] = []
-  const argValues: number[] = []
-  for (const ident of idents) {
-    const param = `__v${argNames.length}`
-    paramOf.set(ident, param)
-    argNames.push(param)
-    argValues.push(lookupVar(vars, ident))
-  }
-
-  let js = expr.replace(IDENT_RE, (name) => {
-    if (isBuiltinIdent(name)) {
-      const lower = name.toLowerCase()
-      if (lower === 'pi') return '__fn.pi()'
-      return `__fn.${lower}`
-    }
-    return paramOf.get(name) ?? name
-  })
-
-  // lone = → ==
-  js = js.replace(/([^!<>=])=([^=])/g, '$1==$2')
-  js = rewriteBarePi(js)
-  js = rewriteUnary(js)
-  js = rewriteLogicalAndPow(js)
-
-  try {
-    // eslint-disable-next-line no-new-func
-    const fn = new Function(
-      '__fn',
-      ...argNames,
-      `"use strict"; return Number(${js});`
-    )
-    const result = fn(BUILTINS, ...argValues)
-    return typeof result === 'number' && Number.isFinite(result) ? result : 0
-  } catch {
-    return null
-  }
+  const compiled = getCompiledMathExpr(expression, cache)
+  if (!compiled?.evalScalar) return null
+  return compiled.evalScalar(vars)
 }

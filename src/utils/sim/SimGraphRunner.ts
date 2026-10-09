@@ -18,17 +18,23 @@ import {
   buildBlendMultipleSlots,
   selectBlendMultipleInputs,
 } from './engineParity'
-import { evalAnimMathExpression, listMathExprIdents } from './evalAnimMathExpression'
 import {
+  evalAnimMathExpression,
+  getCompiledMathExpr,
+  type MathExprCompileCache,
+} from './evalAnimMathExpression'
+import {
+  evalAnimMathExpressionFloatMixed,
   evalAnimMathExpressionVector,
-  listMathExprVectorIdents,
   vec4Mag3,
   ZERO_VEC4,
   type SimVec4,
 } from './evalAnimMathExpressionVector'
 import {
   clearBoneOpFrameCache,
+  clearMathExprPoseFrameCache,
   createBoneOpFrameCache,
+  createMathExprPoseFrameCache,
   IDENTITY_QUAT_STATE,
   mulQuatState,
   nlerpQuatState,
@@ -36,16 +42,23 @@ import {
   type BoneOpQuatState,
   type BoneOpRotateState,
   type BoneOpTranslateState,
+  type MathExprPoseFloatSocketSnap,
+  type MathExprPoseFrameCache,
+  type MathExprPoseQuatSocketSnap,
+  type MathExprPoseVectorSocketSnap,
 } from './boneOpDyn'
 import {
   createFloatRandomState,
   createFloatSinusState,
   evalCurveFloatData,
+  evalCurveVector4Data,
   evalFloatTimeDependentSinus,
   readDampDefaults,
+  readDampVectorDefaults,
   readSpringDefaults,
   stepCriticalSpringDamp,
   stepDampFloat,
+  stepDampVector,
   stepFloatRandom,
   stepFloatTimeDependentSinus,
   stepSpringDamp,
@@ -65,13 +78,16 @@ import {
   advanceClipClock,
   beginClipClockStep,
   clipWindow,
+  collectClipEventsInRange,
   createClipClockState,
   deactivateClipClock,
+  resolvePhaseClipPads,
   type ClipClockState,
 } from './clipClock'
 import {
   readAnimDatabaseDepotPath,
   resolveAnimDatabaseName,
+  resolveAnimDatabaseRow,
   type AnimDatabaseLibrary,
 } from './animDatabase'
 import {
@@ -90,8 +106,19 @@ import { DEFAULT_ANIM_FPS } from './clipLibrary'
 import type { ClipPoseLibrary } from './clipPoseLibrary'
 import type { RigEntry } from './rigResource'
 import type { Qs } from './poseFk'
+import {
+  IDENTITY_QS,
+  lerpQs,
+  qsFromPosRotScale,
+  slerpQs,
+} from './poseFk'
 import { readBoneTrs, readStackBoneTrs, copyPose, createPose, DEFAULT_STACK_CAPACITY, type Pose } from './pose'
-import { allocSampleScratch, sampleGraphPose, samplePoseFromNode } from './sampleWalk'
+import {
+  allocSampleScratch,
+  sampleGraphPose,
+  samplePoseFromNode,
+  type PoseScratchPool,
+} from './sampleWalk'
 import {
   createSimSampleLog,
   flushSimSampleLog,
@@ -100,6 +127,7 @@ import {
 import { buildStackPairing } from './stackPairing'
 import type { SimInputBoard } from './SimInputBoard'
 import {
+  evaluateSmTransitionBlendAlpha,
   findStateMachineHandles,
   findStateOutput,
   SimStateMachineRuntime,
@@ -146,6 +174,139 @@ function runSkAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
   clock.animName = fields.animation || 'None'
   clock.wasActive = true
   return 0
+}
+
+/** SkSpeedAnim / SkSyncedMasterAnim: currTime += Speed * dt. */
+function runSkSpeedAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
+  const d = (node.Data ?? {}) as Record<string, unknown>
+  const speedH = resolveHandle(ctx.handles, resolveSpeedLinkRaw(d))
+  if (speedH) updateFromNode(speedH, ctx)
+  const speed = speedH ? readFloatSource(speedH, ctx, 1) : 1
+  const fields = readSkAnimClockFields(d)
+  const clock = ensureClipClock(ctx.clipClocks, node.HandleId)
+  if (ctx.clipLibrary && ctx.clipLibrary.entryCount > 0) {
+    const result = advanceClipClock(
+      clock,
+      fields,
+      ctx.dt,
+      ctx.clipLibrary,
+      ctx.board,
+      (n) => ctx.board.isWrapperActive(n),
+      { speedScale: Number.isFinite(speed) ? speed : 1 }
+    )
+    return result.progress
+  }
+  if (clock.stepped) return 0
+  clock.stepped = true
+  clock.animName = fields.animation || 'None'
+  clock.wasActive = true
+  return 0
+}
+
+/**
+ * SkPhaseAnim family: clip window from named phase event; optional duration stretch / speed.
+ */
+function runSkPhaseAnimClipClock(
+  node: AnimgraphNode,
+  ctx: WalkCtx,
+  mode: 'phase' | 'duration' | 'speed'
+): number {
+  const d = (node.Data ?? {}) as Record<string, unknown>
+  const phase = readCName(d.phase)
+  let targetPlaybackDuration: number | undefined
+  let speedScale = 1
+
+  if (mode === 'duration') {
+    const durationH = resolveHandle(ctx.handles, d.durationLink)
+    if (durationH) updateFromNode(durationH, ctx)
+    if (durationH) {
+      const raw = readFloatSource(durationH, ctx, 0)
+      targetPlaybackDuration = Number.isFinite(raw) ? Math.max(0, raw) : 0
+    }
+  }
+  if (mode === 'speed') {
+    const speedH = resolveHandle(ctx.handles, resolveSpeedLinkRaw(d))
+    if (speedH) updateFromNode(speedH, ctx)
+    const speed = speedH ? readFloatSource(speedH, ctx, 1) : 1
+    speedScale = Number.isFinite(speed) ? speed : 1
+  }
+
+  const fields = readSkAnimClockFields(d)
+  const clock = ensureClipClock(ctx.clipClocks, node.HandleId)
+  const isWrap = (n: string) => ctx.board.isWrapperActive(n)
+  const animName = fields.animation || 'None'
+  const clip =
+    ctx.clipLibrary && ctx.clipLibrary.entryCount > 0
+      ? ctx.clipLibrary.resolveClip(animName, isWrap)
+      : undefined
+  const phaseFields = applyPhaseToClockFields(fields, clip, phase)
+
+  if (ctx.clipLibrary && ctx.clipLibrary.entryCount > 0) {
+    const result = advanceClipClock(
+      clock,
+      phaseFields,
+      ctx.dt,
+      ctx.clipLibrary,
+      ctx.board,
+      isWrap,
+      { targetPlaybackDuration, speedScale }
+    )
+    return result.progress
+  }
+  if (clock.stepped) return 0
+  clock.stepped = true
+  clock.animName = animName
+  clock.wasActive = true
+  return 0
+}
+
+/**
+ * SkOneShotAnim clock only (caller Updates input pose link).
+ * Returns shot blend weight for markActive (0..1).
+ */
+function runSkOneShotAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
+  const d = (node.Data ?? {}) as Record<string, unknown>
+  const clock = ensureClipClock(ctx.clipClocks, node.HandleId)
+  if (!clock.wasActive) clock.oneShotRunning = true
+
+  let shotWeight = 0
+  if (clock.oneShotRunning) {
+    const fields = { ...readSkAnimClockFields(d), isLooped: false }
+    const blendIn = readNumber(d.blendIn, 0)
+    const blendOut = readNumber(d.blendOut, 0)
+    if (ctx.clipLibrary && ctx.clipLibrary.entryCount > 0) {
+      const result = advanceClipClock(
+        clock,
+        fields,
+        ctx.dt,
+        ctx.clipLibrary,
+        ctx.board,
+        (n) => ctx.board.isWrapperActive(n)
+      )
+      shotWeight = oneShotBlendWeight(
+        result.currTime,
+        result.duration,
+        blendIn,
+        blendOut
+      )
+      if (result.progress >= 1 - 1e-6 || result.ended) {
+        clock.oneShotRunning = false
+        if (result.currTime >= result.duration) shotWeight = 0
+      }
+    } else {
+      if (!clock.stepped) {
+        clock.stepped = true
+        clock.animName = fields.animation || 'None'
+        clock.wasActive = true
+      }
+      clock.oneShotRunning = false
+    }
+  } else if (!clock.stepped) {
+    // Still on path after shot ended — keep HUD name without advancing time
+    clock.stepped = true
+    clock.animName = readSkAnimClockFields(d).animation || 'None'
+  }
+  return shotWeight
 }
 
 /**
@@ -244,12 +405,40 @@ function runSkFrameAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
     currTime = Number.isFinite(frame) ? frame / Math.max(1e-6, fps) : front
   }
 
-  clock.prevTime = clock.currTime
+  const prevTime = clock.currTime
+  clock.prevTime = prevTime
   clock.currTime = currTime
   if (!ctx.clipLibrary || ctx.clipLibrary.entryCount === 0) {
     clock.resolveHint = animName && animName !== 'None' ? 'no-lib' : 'empty'
   } else if (!clip) {
     clock.resolveHint = ctx.clipLibrary.hasClipAnywhere(animName) ? 'gated' : 'missing'
+  }
+
+  // Engine SkFrameAnim::OnUpdate — fireAnimLoopEvent at animEnd; once unless time moved.
+  if (clip && fields.fireAnimLoopEvent && fields.animLoopEventName && fields.animLoopEventName !== 'None') {
+    const animEnd = Math.max(duration - endPad, 0)
+    if (Math.abs(currTime - animEnd) < 1e-5) {
+      const fireOnce = readBool(d.fireAnimEndOnceOnAnimEnd)
+      const timeMoved = Math.abs(prevTime - currTime) > 1e-5
+      if (!fireOnce || timeMoved) {
+        ctx.board.fireAnimEnd(fields.animLoopEventName)
+      }
+    }
+  }
+
+  // Timeline events across scrub (prev→curr).
+  if (clip && fields.collectEvents) {
+    const animEnd = Math.max(duration - endPad, 0)
+    collectClipEventsInRange(
+      clip,
+      prevTime,
+      currTime,
+      0,
+      front,
+      animEnd,
+      (name, value, phase, footPhase) =>
+        ctx.board.fireAnimEvent(name, value, phase ?? 'tick', footPhase)
+    )
   }
 
   const progress = window > 1e-8 ? (currTime - front) / window : 0
@@ -276,9 +465,30 @@ function runAnimDatabaseClipClock(node: AnimgraphNode, ctx: WalkCtx) {
   const inputs: number[] = []
   for (const link of inputLinks) {
     const h = resolveHandle(ctx.handles, link)
+    if (h) updateFromNode(h, ctx)
     inputs.push(Math.round(h ? readFloatSource(h, ctx, 0) : 0))
   }
-  const animName = resolveAnimDatabaseName(db, inputs)
+  const row = resolveAnimDatabaseRow(db, inputs)
+  let animName = row?.animationName || resolveAnimDatabaseName(db, inputs) || 'None'
+
+  // If primary clip missing/gated but row has fallback, prefer fallback when resolvable.
+  const isWrap = (n: string) => ctx.board.isWrapperActive(n)
+  if (
+    ctx.clipLibrary &&
+    ctx.clipLibrary.entryCount > 0 &&
+    animName &&
+    animName !== 'None' &&
+    row?.fallbackAnimationName
+  ) {
+    const primary = ctx.clipLibrary.resolveClip(animName, isWrap)
+    if (!primary) {
+      const fb = row.fallbackAnimationName
+      if (fb && fb !== 'None' && ctx.clipLibrary.resolveClip(fb, isWrap)) {
+        animName = fb
+      }
+    }
+  }
+
   const fields = {
     ...readSkAnimClockFields(d),
     animation: animName,
@@ -294,7 +504,7 @@ function runAnimDatabaseClipClock(node: AnimgraphNode, ctx: WalkCtx) {
       ctx.dt,
       ctx.clipLibrary,
       ctx.board,
-      (n) => ctx.board.isWrapperActive(n)
+      isWrap
     )
     if (animName === 'None') clock.resolveHint = 'missing'
     return
@@ -331,11 +541,17 @@ type FloatEvalCtx = {
   dt: number
   floatDyn: Map<string, FloatDynState>
   floatUpdated: Set<string>
+  /** VectorLatch / DampVector latched or damped Vector4. */
+  vectorDyn: Map<string, SimVec4>
+  /** TransformLatch latched Qs. */
+  transformDyn: Map<string, Qs>
   randomDyn: Map<string, FloatRandomState>
   sinusDyn: Map<string, FloatSinusState>
   signalDyn: Map<string, SignalDynState>
   signalUpdated: Set<string>
   clipLibrary: ClipLibrary | null
+  /** Per-runner math expression compile cache (idents + scalar/mixed). */
+  mathExprCache: MathExprCompileCache
 }
 
 type WalkCtx = FloatEvalCtx & {
@@ -367,6 +583,8 @@ type WalkCtx = FloatEvalCtx & {
    * with this runner's Sample buffers / libraries).
    */
   makeParentPoseSample?: (inputLink: AnimgraphNode) => (out: Pose) => boolean
+  /** AdditionalFloatTrack local time (engine i_time), shared with Sample. */
+  additionalFloatTrackTimes: Map<string, number>
   /**
    * Update-traversal successors this frame: parentHandleId → childHandleIds
    * in visit order (role order for blends: base/first then blend/second).
@@ -377,6 +595,7 @@ type WalkCtx = FloatEvalCtx & {
   boneRotateDyn: Map<string, BoneOpRotateState>
   boneQuatDyn: Map<string, BoneOpQuatState>
   boneTranslateDyn: Map<string, BoneOpTranslateState>
+  mathExprPoseCache: MathExprPoseFrameCache
 }
 
 /** Project GraphSlot attach: resolve slot name → nested diagram Update. */
@@ -446,12 +665,15 @@ function isUpdateSuccTarget(node: AnimgraphNode): boolean {
   return true
 }
 
-/** SkAnim playback clock (exclude frame/duration-driven + AnimDatabase). */
+/** Plain SkAnim clock path (excludes frame/duration/speed/phase/oneshot + AnimDatabase). */
 function isClipClockSkAnimType(t: string | null | undefined): boolean {
   if (!t || !isAnimType(t, 'animAnimNode_SkAnim')) return false
   if (isSkFrameAnimType(t)) return false
   if (t === 'animAnimNode_SkDurationAnim') return false
   if (t === 'animAnimNode_AnimDatabase') return false
+  if (isSkSpeedAnimType(t)) return false
+  if (isSkPhaseAnimType(t)) return false
+  if (isSkOneShotAnimType(t)) return false
   return true
 }
 
@@ -463,8 +685,57 @@ function isSkDurationAnimType(t: string | null | undefined): boolean {
   return t === 'animAnimNode_SkDurationAnim'
 }
 
+function isSkSpeedAnimType(t: string | null | undefined): boolean {
+  return !!t && isAnimType(t, 'animAnimNode_SkSpeedAnim')
+}
+
+function isSkPhaseAnimType(t: string | null | undefined): boolean {
+  return !!t && isAnimType(t, 'animAnimNode_SkPhaseAnim')
+}
+
+function isSkPhaseWithDurationType(t: string | null | undefined): boolean {
+  return !!t && isAnimType(t, 'animAnimNode_SkPhaseWithDurationAnim')
+}
+
+function isSkPhaseWithSpeedType(t: string | null | undefined): boolean {
+  return !!t && isAnimType(t, 'animAnimNode_SkPhaseWithSpeedAnim')
+}
+
+function isSkOneShotAnimType(t: string | null | undefined): boolean {
+  return t === 'animAnimNode_SkOneShotAnim'
+}
+
 function isAnimDatabaseType(t: string | null | undefined): boolean {
   return t === 'animAnimNode_AnimDatabase'
+}
+
+/** Resolve Speed floatLink (SkSpeedAnim RTTI name "Speed", or speedLink). */
+function resolveSpeedLinkRaw(d: Record<string, unknown>): unknown {
+  return d.Speed ?? d.speedLink ?? d.speed
+}
+
+function applyPhaseToClockFields(
+  fields: ReturnType<typeof readSkAnimClockFields>,
+  clip: import('./clipLibrary').ClipMeta | undefined,
+  phase: string
+): ReturnType<typeof readSkAnimClockFields> {
+  if (!clip || !phase || phase === 'None') return fields
+  const pads = resolvePhaseClipPads(clip, phase)
+  if (!pads) return fields
+  return { ...fields, clipFront: pads.clipFront, clipEnd: pads.clipEnd }
+}
+
+function oneShotBlendWeight(
+  currTime: number,
+  duration: number,
+  blendIn: number,
+  blendOut: number
+): number {
+  if (!(duration > 0)) return 0
+  if (currTime > duration) return 0
+  if (blendIn > 0 && currTime < blendIn) return currTime / blendIn
+  if (blendOut > 0 && duration - currTime < blendOut) return (duration - currTime) / blendOut
+  return 1
 }
 
 function readSkAnimClockFields(data: Record<string, unknown>) {
@@ -525,6 +796,31 @@ function tickClipClocksAlongPose(
 
   if (isAnimDatabaseType(t)) {
     runAnimDatabaseClipClock(node, ctx)
+    return
+  }
+
+  if (isSkOneShotAnimType(t)) {
+    runSkOneShotAnimClipClock(node, ctx)
+    return
+  }
+
+  if (isSkPhaseWithDurationType(t)) {
+    runSkPhaseAnimClipClock(node, ctx, 'duration')
+    return
+  }
+
+  if (isSkPhaseWithSpeedType(t)) {
+    runSkPhaseAnimClipClock(node, ctx, 'speed')
+    return
+  }
+
+  if (isSkPhaseAnimType(t)) {
+    runSkPhaseAnimClipClock(node, ctx, 'phase')
+    return
+  }
+
+  if (isSkSpeedAnimType(t)) {
+    runSkSpeedAnimClipClock(node, ctx)
     return
   }
 
@@ -798,13 +1094,8 @@ function collectMathFloatSocketVars(
   const vars: Record<string, number> = {}
   const sockets = node.Data?.expressionData?.floatSockets
   if (!Array.isArray(sockets)) return vars
-  const expr = String(
-    node.Data?.expressionString ??
-      node.Data?.expressionData?.expressionString ??
-      node.Data?.expression ??
-      ''
-  )
-  const idents = listMathExprIdents(expr)
+  const compiled = getCompiledMathExpr(mathExpressionString(node), fctx.mathExprCache)
+  const idents = compiled?.floatIdents ?? []
   sockets.forEach((socket: any, index: number) => {
     const varId = readNumber(socket?.expressionVarId, index)
     const letter = String.fromCharCode(65 + Math.max(0, varId))
@@ -823,23 +1114,67 @@ function collectMathFloatSocketVars(
   return vars
 }
 
+/** Collect quaternion socket vars (`#quaternion`) from expressionData. */
+function collectMathQuatSocketVars(
+  node: AnimgraphNode,
+  fctx: FloatEvalCtx,
+  depth: number
+): Record<string, SimVec4> {
+  const vars: Record<string, SimVec4> = {}
+  const sockets = node.Data?.expressionData?.quaternionSockets
+  if (!Array.isArray(sockets)) return vars
+  const compiled = getCompiledMathExpr(mathExpressionString(node), fctx.mathExprCache)
+  const idents = compiled?.quatIdents ?? []
+  sockets.forEach((socket: any, index: number) => {
+    const varId = readNumber(socket?.expressionVarId, index)
+    const letter = String.fromCharCode(65 + Math.max(0, varId))
+    const named = readCName(socket?.variableName)
+    const ident = idents[varId] ?? idents[index]
+    const src = resolveHandle(fctx.handles, socket?.link ?? socket)
+    const q = src ? readQuatSource(src, fctx, IDENTITY_QUAT_STATE, depth + 1) : IDENTITY_QUAT_STATE
+    const v: SimVec4 = { x: q.x, y: q.y, z: q.z, w: q.w }
+    if (named) vars[named] = v
+    if (ident) vars[ident] = v
+    vars[letter] = v
+    // Engine AutoRegisterVar stores `#name`; also bind bare name.
+    if (ident?.startsWith('#') && ident.length > 1) {
+      vars[ident.slice(1)] = v
+    }
+    if (index === 0 || varId === 0) {
+      if (vars.In === undefined) vars.In = v
+      if (vars.in === undefined) vars.in = v
+    }
+  })
+  return vars
+}
+
 function evalMathExpressionFloat(
   node: AnimgraphNode,
   fctx: FloatEvalCtx,
   depth = 0
 ): number {
-  const vars = collectMathFloatSocketVars(node, fctx, depth)
-  const expr = String(
-    node.Data?.expressionString ??
-      node.Data?.expressionData?.expressionString ??
-      node.Data?.expression ??
-      ''
-  )
-  if (expr) {
-    const result = evalAnimMathExpression(expr, vars)
+  const expr = mathExpressionString(node)
+  const compiled = getCompiledMathExpr(expr, fctx.mathExprCache)
+  const floatVars = collectMathFloatSocketVars(node, fctx, depth)
+  const vectorVars = collectMathVectorSocketVars(node, fctx, depth)
+  const quatVars = collectMathQuatSocketVars(node, fctx, depth)
+  if (compiled) {
+    const needsMixed =
+      Object.keys(vectorVars).length > 0 ||
+      Object.keys(quatVars).length > 0 ||
+      compiled.needsMixed
+    const result = needsMixed
+      ? evalAnimMathExpressionFloatMixed(
+          expr,
+          floatVars,
+          vectorVars,
+          quatVars,
+          fctx.mathExprCache
+        )
+      : evalAnimMathExpression(expr, floatVars, fctx.mathExprCache)
     if (result != null) return result
   }
-  const first = Object.values(vars)[0]
+  const first = Object.values(floatVars)[0]
   return first ?? 0
 }
 
@@ -861,7 +1196,8 @@ function collectMathVectorSocketVars(
   const vars: Record<string, SimVec4> = {}
   const sockets = node.Data?.expressionData?.vectorSockets
   if (!Array.isArray(sockets)) return vars
-  const idents = listMathExprVectorIdents(mathExpressionString(node))
+  const compiled = getCompiledMathExpr(mathExpressionString(node), fctx.mathExprCache)
+  const idents = compiled?.vectorIdents ?? []
   sockets.forEach((socket: any, index: number) => {
     const varId = readNumber(socket?.expressionVarId, index)
     const letter = String.fromCharCode(65 + Math.max(0, varId))
@@ -890,7 +1226,13 @@ function evalMathExpressionVector(
   const vectorVars = collectMathVectorSocketVars(node, fctx, depth)
   const expr = mathExpressionString(node)
   if (expr) {
-    const result = evalAnimMathExpressionVector(expr, floatVars, vectorVars)
+    const result = evalAnimMathExpressionVector(
+      expr,
+      floatVars,
+      vectorVars,
+      {},
+      fctx.mathExprCache
+    )
     if (result) return result
   }
   const first = Object.values(vectorVars)[0]
@@ -1091,7 +1433,12 @@ function isFloatValueNodeType(t: string): boolean {
     t === 'animAnimNode_FloatClamp' ||
     t === 'animAnimNode_FloatJoin' ||
     t === 'animAnimNode_FloatLatch' ||
+    t === 'animAnimNode_BoolJoin' ||
+    t === 'animAnimNode_BoolLatch' ||
+    t === 'animAnimNode_IntJoin' ||
+    t === 'animAnimNode_IntLatch' ||
     t === 'animAnimNode_FloatInterpolation' ||
+    t === 'animAnimNode_FloatCumulative' ||
     t === 'animAnimNode_CurveFloatValue' ||
     t === 'animAnimNode_FloatRandom' ||
     t === 'animAnimNode_FloatTimeDependentSinus' ||
@@ -1106,6 +1453,8 @@ function isFloatValueNodeType(t: string): boolean {
     t === 'animAnimNode_IntToFloatConverter' ||
     t === 'animAnimNode_BoolToFloatConverter' ||
     t === 'animAnimNode_FloatToIntConverter' ||
+    t === 'animAnimNode_FloatToBoolConverter' ||
+    t === 'animAnimNode_CoordinateFromVector' ||
     /Converter$/i.test(t)
   )
 }
@@ -1116,7 +1465,23 @@ function isVectorValueNodeType(t: string): boolean {
     t === 'animAnimNode_VectorInput' ||
     t === 'animAnimNode_VectorConstant' ||
     t === 'animAnimNode_VectorJoin' ||
-    t === 'animAnimNode_MathExpressionVector'
+    t === 'animAnimNode_VectorVariable' ||
+    t === 'animAnimNode_VectorLatch' ||
+    t === 'animAnimNode_DampVector' ||
+    t === 'animAnimNode_CurveVectorValue' ||
+    t === 'animAnimNode_MathExpressionVector' ||
+    t === 'animAnimNode_VectorInterpolation' ||
+    t === 'animAnimNode_VectorWsToMs'
+  )
+}
+
+function isTransformValueNodeType(t: string): boolean {
+  return (
+    t === 'animAnimNode_TransformConstant' ||
+    t === 'animAnimNode_TransformInterpolation' ||
+    t === 'animAnimNode_TransformJoin' ||
+    t === 'animAnimNode_TransformLatch' ||
+    t === 'animAnimNode_TransformVariable'
   )
 }
 
@@ -1175,14 +1540,21 @@ function readQuatSource(
     return nlerpQuatState(a, b, Math.min(1, Math.max(0, w)))
   }
 
+  // Engine AnimNode_QuaternionVariable::OnGetValue — board quat var or identity.
   if (t === 'animAnimNode_QuaternionVariable') {
-    // No quat vars on board yet
-    return { ...fallback }
+    const name = readCName(d.variableName)
+    if (!name || name === 'None') return { ...fallback }
+    const q = fctx.board.quatVars.get(name)
+    return q ? { x: q.x, y: q.y, z: q.z, w: q.w } : { ...IDENTITY_QUAT_STATE }
   }
 
   if (t === 'animAnimNode_QuaternionInput') {
-    // No quat AnimFeature map yet
-    return { ...fallback }
+    const group = readCName(d.group)
+    const name = readCName(d.name)
+    if (!group || !name || name === 'None') return { ...fallback }
+    const q = fctx.board.getQuatFeature(group, name)
+    if (!q) return { ...fallback }
+    return { x: q.x, y: q.y, z: q.z, w: q.w }
   }
 
   if (t === 'animAnimNode_QuaternionLatch') {
@@ -1236,17 +1608,211 @@ function readVectorSource(
     return readVector4(d.value, fallback)
   }
 
+  // Engine AnimNode_VectorVariable::OnGetValue — board vector var or ZERO_3D_POINT.
+  if (t === 'animAnimNode_VectorVariable') {
+    const name = readCName(d.variableName)
+    if (!name || name === 'None') return fallback
+    const v = board.vectorVars.get(name)
+    return v ? { ...v } : { x: 0, y: 0, z: 0, w: 0 }
+  }
+
   if (t === 'animAnimNode_VectorJoin') {
     const input = resolveHandle(handles, d.input)
     if (input) return readVectorSource(input, fctx, fallback, depth + 1)
     return fallback
   }
 
+  // Engine AnimNode_VectorInterpolation::OnGetValue — Lerp(weight, first, second).
+  if (t === 'animAnimNode_VectorInterpolation') {
+    const a = readVectorSource(
+      resolveHandle(handles, d.firstInput),
+      fctx,
+      fallback,
+      depth + 1
+    )
+    const b = readVectorSource(
+      resolveHandle(handles, d.secondInput),
+      fctx,
+      ZERO_VEC4,
+      depth + 1
+    )
+    const wNode = resolveHandle(handles, d.weight)
+    const w = Math.min(1, Math.max(0, wNode ? readFloatSource(wNode, fctx, 0, depth + 1) : 0))
+    const u = 1 - w
+    return {
+      x: a.x * u + b.x * w,
+      y: a.y * u + b.y * w,
+      z: a.z * u + b.z * w,
+      w: a.w * u + b.w * w,
+    }
+  }
+
+  // Engine AnimNode_VectorWsToMs — inv(entity L2W). Offline: identity L2W → passthrough.
+  if (t === 'animAnimNode_VectorWsToMs') {
+    const input = resolveHandle(handles, d.vectorWs)
+    return input ? readVectorSource(input, fctx, fallback, depth + 1) : fallback
+  }
+
   if (t === 'animAnimNode_MathExpressionVector') {
     return evalMathExpressionVector(source, fctx, depth)
   }
 
+  // Engine AnimNode_CurveVectorValue::OnGetValue — EvalAt(curveData, argument).
+  if (t === 'animAnimNode_CurveVectorValue') {
+    const argNode = resolveHandle(handles, d.argument)
+    const arg = argNode ? readFloatSource(argNode, fctx, 0, depth + 1) : 0
+    return evalCurveVector4Data(d.curveData, arg, fallback)
+  }
+
+  if (t === 'animAnimNode_VectorLatch' || t === 'animAnimNode_DampVector') {
+    return evalStatefulVectorNode(source, t, fctx, depth)
+  }
+
   return fallback
+}
+
+/** Read Qs transform from TransformValue family nodes. */
+function readTransformSource(
+  source: AnimgraphNode | null,
+  fctx: FloatEvalCtx,
+  fallback: Qs = IDENTITY_QS,
+  depth = 0
+): Qs {
+  if (!source || depth > 32) return { ...fallback }
+  const t = handleType(source)
+  const d = source.Data ?? {}
+  const { board, handles } = fctx
+
+  if (t === 'animAnimNode_TransformConstant') {
+    return qsFromPosRotScale(d.pos, d.rotation, d.scale)
+  }
+
+  if (t === 'animAnimNode_TransformVariable') {
+    const name = readCName(d.variableName)
+    if (!name || name === 'None') return { ...fallback }
+    const v = board.transformVars.get(name)
+    return v ? { ...v } : { ...IDENTITY_QS }
+  }
+
+  if (t === 'animAnimNode_TransformJoin') {
+    const input = resolveHandle(handles, d.input)
+    if (input) return readTransformSource(input, fctx, fallback, depth + 1)
+    return { ...fallback }
+  }
+
+  if (t === 'animAnimNode_TransformLatch') {
+    const id = source.HandleId
+    if (fctx.floatUpdated.has(id)) {
+      return fctx.transformDyn.get(id) ? { ...fctx.transformDyn.get(id)! } : { ...fallback }
+    }
+    let state = fctx.transformDyn.get(id)
+    if (!state) {
+      const input = resolveHandle(handles, d.input)
+      state = input
+        ? { ...readTransformSource(input, fctx, IDENTITY_QS, depth + 1) }
+        : { ...IDENTITY_QS }
+      fctx.transformDyn.set(id, state)
+    }
+    fctx.floatUpdated.add(id)
+    return { ...state }
+  }
+
+  if (t === 'animAnimNode_TransformInterpolation') {
+    const a = readTransformSource(
+      resolveHandle(handles, d.firstInput),
+      fctx,
+      fallback,
+      depth + 1
+    )
+    const b = readTransformSource(
+      resolveHandle(handles, d.secondInput),
+      fctx,
+      IDENTITY_QS,
+      depth + 1
+    )
+    const wNode = resolveHandle(handles, d.weight)
+    const w = Math.min(1, Math.max(0, wNode ? readFloatSource(wNode, fctx, 0, depth + 1) : 0))
+    const kind = String(d.interpolationType ?? 'Spherical')
+    if (kind.includes('Linear') && !kind.includes('Spherical')) return lerpQs(a, b, w)
+    return slerpQs(a, b, w)
+  }
+
+  return { ...fallback }
+}
+
+/** BoolLatch / IntLatch — sample input once on activate (like FloatLatch). */
+function evalScalarLatchNode(
+  source: AnimgraphNode,
+  fctx: FloatEvalCtx,
+  depth: number
+): number {
+  const id = source.HandleId
+  if (fctx.floatUpdated.has(id)) {
+    return fctx.floatDyn.get(id)?.value ?? 0
+  }
+  let state = fctx.floatDyn.get(id)
+  if (!state) {
+    const input = resolveHandle(fctx.handles, source.Data?.input)
+    const v = input ? readFloatSource(input, fctx, 0, depth + 1) : 0
+    state = { value: v, velocity: 0 }
+    fctx.floatDyn.set(id, state)
+  }
+  fctx.floatUpdated.add(id)
+  return state.value
+}
+
+/**
+ * VectorLatch (capture on activate) / DampVector (per-component damp each frame).
+ */
+function evalStatefulVectorNode(
+  source: AnimgraphNode,
+  t: string,
+  fctx: FloatEvalCtx,
+  depth: number
+): SimVec4 {
+  const id = source.HandleId
+  if (fctx.floatUpdated.has(id)) {
+    return fctx.vectorDyn.get(id) ? { ...fctx.vectorDyn.get(id)! } : { ...ZERO_VEC4 }
+  }
+  const d = source.Data ?? {}
+  const { handles, dt } = fctx
+
+  if (t === 'animAnimNode_VectorLatch') {
+    let state = fctx.vectorDyn.get(id)
+    if (!state) {
+      const input = resolveHandle(handles, d.input)
+      state = input
+        ? { ...readVectorSource(input, fctx, ZERO_VEC4, depth + 1) }
+        : { ...ZERO_VEC4 }
+      fctx.vectorDyn.set(id, state)
+    }
+    fctx.floatUpdated.add(id)
+    return { ...state }
+  }
+
+  // DampVector
+  const defs = readDampVectorDefaults(d)
+  const inputNode = resolveHandle(handles, d.inputNode)
+  const inputValue = inputNode
+    ? readVectorSource(inputNode, fctx, defs.defaultInitial, depth + 1)
+    : defs.defaultInitial
+  let increaseSpeed = defs.increaseSpeed
+  const incNode = resolveHandle(handles, d.increaseSpeedNode)
+  if (incNode) increaseSpeed = readVectorSource(incNode, fctx, increaseSpeed, depth + 1)
+  let decreaseSpeed = defs.decreaseSpeed
+  const decNode = resolveHandle(handles, d.decreaseSpeedNode)
+  if (decNode) decreaseSpeed = readVectorSource(decNode, fctx, decreaseSpeed, depth + 1)
+
+  let state = fctx.vectorDyn.get(id)
+  if (!state) {
+    state = {
+      ...(defs.startFromDefault ? defs.defaultInitial : inputValue),
+    }
+    fctx.vectorDyn.set(id, state)
+  }
+  stepDampVector(state, inputValue, increaseSpeed, decreaseSpeed, dt)
+  fctx.floatUpdated.add(id)
+  return { ...state }
 }
 
 /** Read numeric value from a float/int source node (variable / constant / AnimFeature input). */
@@ -1331,6 +1897,17 @@ function readFloatSource(
     return evalFloatInterpolation(source, fctx, depth)
   }
 
+  if (t === 'animAnimNode_FloatCumulative') {
+    return evalFloatCumulative(source, fctx, depth)
+  }
+
+  // Engine AnimNode_FloatToBoolConverter — 0.f != input.
+  if (t === 'animAnimNode_FloatToBoolConverter') {
+    const input = resolveHandle(handles, d.inputNode ?? d.input)
+    const v = input ? readFloatSource(input, fctx, 0, depth + 1) : 0
+    return v !== 0 ? 1 : 0
+  }
+
   if (t === 'animAnimNode_Signal') {
     return evalSignalFloat(source, fctx)
   }
@@ -1339,10 +1916,30 @@ function readFloatSource(
     return evalWrapperValueFloat(source, board)
   }
 
-  if (t === 'animAnimNode_FloatJoin') {
+  if (
+    t === 'animAnimNode_FloatJoin' ||
+    t === 'animAnimNode_IntJoin' ||
+    t === 'animAnimNode_BoolJoin'
+  ) {
     const input = resolveHandle(handles, d.input)
     if (input) return readFloatSource(input, fctx, fallback, depth + 1)
     return fallback
+  }
+
+  if (t === 'animAnimNode_BoolLatch' || t === 'animAnimNode_IntLatch') {
+    return evalScalarLatchNode(source, fctx, depth)
+  }
+
+  // Engine AnimNode_CoordinateFromVector::OnGetValue — pick X/Y/Z/W from vector input.
+  // Field name has engine typo: vectorCoodrinateType.
+  if (t === 'animAnimNode_CoordinateFromVector') {
+    const input = resolveHandle(handles, d.input)
+    const v = input ? readVectorSource(input, fctx, ZERO_VEC4, depth + 1) : ZERO_VEC4
+    const raw = d.vectorCoodrinateType ?? d.vectorCoordinateType ?? 0
+    if (raw === 1 || raw === 'Y' || String(raw).endsWith('Y')) return v.y
+    if (raw === 2 || raw === 'Z' || String(raw).endsWith('Z')) return v.z
+    if (raw === 3 || raw === 'W' || String(raw).endsWith('W')) return v.w
+    return v.x
   }
 
   if (t === 'animAnimNode_CurveFloatValue') {
@@ -1410,6 +2007,96 @@ function readFloatSource(
     d.value ?? d.floatValue ?? d.defaultValue ?? d.defaultInitialValue,
     fallback
   )
+}
+
+/**
+ * Engine AnimNode_FloatCumulative::OnUpdate — accumulate input, optional clamp /
+ * normalize180 / override / resetSpeed / external-event reset.
+ */
+function evalFloatCumulative(
+  source: AnimgraphNode,
+  fctx: FloatEvalCtx,
+  depth: number
+): number {
+  const id = source.HandleId
+  if (fctx.floatUpdated.has(id)) {
+    return fctx.floatDyn.get(id)?.value ?? 0
+  }
+  const d = source.Data ?? {}
+  const { handles, dt, board } = fctx
+  const defaultValue = readNumber(d.defaultValue, 0)
+  const clamp = d.clamp === undefined ? true : readBool(d.clamp)
+  const normalize180Default = d.normalize180 === undefined ? true : readBool(d.normalize180)
+
+  let state = fctx.floatDyn.get(id)
+  if (!state) {
+    state = { value: defaultValue, velocity: 0 }
+    fctx.floatDyn.set(id, state)
+  }
+
+  const applyLimits = (value: number): number => {
+    let v = value
+    const normNode = resolveHandle(handles, d.normalize180Input)
+    const normalize =
+      normNode != null
+        ? readFloatSource(normNode, fctx, normalize180Default ? 1 : 0, depth + 1) !== 0
+        : normalize180Default
+    if (normalize) {
+      while (v > 180) v -= 360
+      while (v < -180) v += 360
+    }
+    if (clamp) {
+      const minN = resolveHandle(handles, d.minValue)
+      const maxN = resolveHandle(handles, d.maxValue)
+      const min = minN ? readFloatSource(minN, fctx, 0, depth + 1) : 0
+      const max = maxN ? readFloatSource(maxN, fctx, 0, depth + 1) : 0
+      v = Math.min(max, Math.max(min, v))
+    }
+    return v
+  }
+
+  const overrideNode = resolveHandle(handles, d.override)
+  const override =
+    overrideNode != null ? readFloatSource(overrideNode, fctx, 0, depth + 1) !== 0 : false
+
+  let updated: number
+  if (override) {
+    const curNode = resolveHandle(handles, d.curValue)
+    updated = applyLimits(
+      curNode ? readFloatSource(curNode, fctx, defaultValue, depth + 1) : defaultValue
+    )
+  } else {
+    let forceReset = false
+    const resetEvent = readCName(d.resetExternalEventName)
+    if (resetEvent && resetEvent !== 'None' && board.externalEvents.has(resetEvent)) {
+      forceReset = true
+    }
+    const resetSpeedNode = resolveHandle(handles, d.resetSpeed)
+    const resetSpeed = resetSpeedNode
+      ? readFloatSource(resetSpeedNode, fctx, 0, depth + 1)
+      : 0
+    const currentValue = state.value
+    const resetRequest = Math.abs(resetSpeed) > 0 && currentValue !== 0
+
+    if (forceReset) {
+      updated = defaultValue
+    } else if (resetRequest) {
+      const delta = Math.abs(currentValue * resetSpeed * dt)
+      if (delta >= Math.abs(currentValue) || Math.abs(currentValue) < 0.1) {
+        updated = 0
+      } else {
+        updated = currentValue - Math.sign(currentValue) * delta
+      }
+    } else {
+      const input = resolveHandle(handles, d.inputNode)
+      const delta = input ? readFloatSource(input, fctx, 0, depth + 1) : 0
+      updated = applyLimits(currentValue + delta)
+    }
+  }
+
+  state.value = updated
+  fctx.floatUpdated.add(id)
+  return state.value
 }
 
 /**
@@ -1725,6 +2412,17 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
+  // Transform value sources — badge shows translation length
+  if (isTransformValueNodeType(t)) {
+    walkFloatValueInputs(node, ctx)
+    const qs = readTransformSource(node, ctx, IDENTITY_QS)
+    markActive(nodes, node.HandleId, {
+      weight: Math.hypot(qs.tx, qs.ty, qs.tz),
+      alpha: 1,
+    })
+    return
+  }
+
   if (isQuaternionValueNodeType(t)) {
     walkFloatValueInputs(node, ctx)
     markActive(nodes, node.HandleId, { alpha: 1 })
@@ -1774,9 +2472,15 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       markInactiveBranch(h, handles, nodes, new Set(), ctx.visited)
     })
     if (rt.firingTransitionHandleId) {
+      const blendAlpha = evaluateSmTransitionBlendAlpha(
+        node,
+        rt,
+        handles,
+        rt.transitionProgress
+      )
       markActive(nodes, rt.firingTransitionHandleId, {
-        weight: rt.transitionProgress,
-        alpha: rt.transitionProgress,
+        weight: blendAlpha,
+        alpha: blendAlpha,
       })
     }
     for (const id of rt.eligibleTransitionIds) {
@@ -1809,6 +2513,41 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       }
     }
     markActive(nodes, node.HandleId, { weight, alpha: 1 })
+    return
+  }
+
+  if (isSkOneShotAnimType(t)) {
+    const shotW = runSkOneShotAnimClipClock(node, ctx)
+    const input = resolveHandle(
+      handles,
+      d.Input ?? d.inputLink ?? d.input ?? d.InputLink
+    )
+    if (input) followUpdate(node, input, ctx)
+    markActive(nodes, node.HandleId, { weight: shotW, alpha: 1 })
+    return
+  }
+
+  if (isSkPhaseWithDurationType(t)) {
+    const progress = runSkPhaseAnimClipClock(node, ctx, 'duration')
+    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    return
+  }
+
+  if (isSkPhaseWithSpeedType(t)) {
+    const progress = runSkPhaseAnimClipClock(node, ctx, 'speed')
+    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    return
+  }
+
+  if (isSkPhaseAnimType(t)) {
+    const progress = runSkPhaseAnimClipClock(node, ctx, 'phase')
+    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    return
+  }
+
+  if (isSkSpeedAnimType(t)) {
+    const progress = runSkSpeedAnimClipClock(node, ctx)
+    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
     return
   }
 
@@ -1853,7 +2592,15 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
-  if (isSkFrameAnimType(t)) {
+  // SkFrameAnimByTrack: Update inputWithTracks (tracks read at Sample) + link scrub.
+  if (t === 'animAnimNode_SkFrameAnimByTrack') {
+    followUpdate(node, resolveHandle(handles, d.inputWithTracks), ctx)
+    const progress = runSkFrameAnimClipClock(node, ctx)
+    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    return
+  }
+
+  if (t === 'animAnimNode_SkFrameAnim') {
     const progress = runSkFrameAnimClipClock(node, ctx)
     markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
     return
@@ -2045,6 +2792,68 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
+  if (t === 'animAnimNode_ParentConstraint') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const wNode = resolveHandle(handles, d.weightNode)
+    const offT = resolveHandle(handles, d.offsetTranslationLS)
+    const offE = resolveHandle(handles, d.offsetEulerRotationLS)
+    if (wNode) updateFromNode(wNode, ctx)
+    if (offT) updateFromNode(offT, ctx)
+    if (offE) updateFromNode(offE, ctx)
+
+    const staticW = readNumber(d.weight, 1)
+    const weight = wNode ? readFloatSource(wNode, ctx, staticW) : staticW
+    const snap = {
+      weight,
+      hasOffsetT: !!offT,
+      offsetT: { x: 0, y: 0, z: 0 },
+      hasOffsetE: !!offE,
+      offsetE: { x: 0, y: 0, z: 0 },
+    }
+    if (offT) {
+      const v = readVectorSource(offT, ctx, ZERO_VEC4)
+      snap.offsetT = { x: v.x, y: v.y, z: v.z }
+    }
+    if (offE) {
+      const v = readVectorSource(offE, ctx, ZERO_VEC4)
+      snap.offsetE = { x: v.x, y: v.y, z: v.z }
+    }
+    ctx.boneOpCache.parentConstraint.set(node.HandleId, snap)
+    markActive(nodes, node.HandleId, { weight, alpha: 1 })
+    return
+  }
+
+  if (
+    t === 'animAnimNode_FloatTrackDirectConnConstraint' ||
+    t === 'animAnimNode_TransformToTrack'
+  ) {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const wNode = resolveHandle(handles, d.weightNode)
+    const mNode = resolveHandle(handles, d.mulFactorNode)
+    if (wNode) updateFromNode(wNode, ctx)
+    if (mNode) updateFromNode(mNode, ctx)
+    const staticW = readNumber(d.weight, 1)
+    const staticM = readNumber(d.mulFactor, 1)
+    const weight = wNode ? readFloatSource(wNode, ctx, staticW) : staticW
+    const mulFactor = mNode ? readFloatSource(mNode, ctx, staticM) : staticM
+    ctx.boneOpCache.floatTrackConn.set(node.HandleId, { weight, mulFactor })
+    markActive(nodes, node.HandleId, { weight, alpha: 1 })
+    return
+  }
+
+  if (
+    t === 'animAnimNode_OrientConstraint' ||
+    t === 'animAnimNode_PointConstraint' ||
+    t === 'animAnimNode_MultipleParentConstraint' ||
+    t === 'animAnimNode_AimConstraint' ||
+    t === 'animAnimNode_AimConstraint_ObjectUp' ||
+    t === 'animAnimNode_AimConstraint_ObjectRotationUp'
+  ) {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    markActive(nodes, node.HandleId, { weight: readNumber(d.weight, 1), alpha: 1 })
+    return
+  }
+
   if (t === 'animAnimNode_SetBonePosition') {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
     const posNode = resolveHandle(handles, d.positionMs)
@@ -2060,6 +2869,65 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     if (oriNode) updateFromNode(oriNode, ctx)
     const q = oriNode ? readQuatSource(oriNode, ctx) : IDENTITY_QUAT_STATE
     ctx.boneOpCache.orientationMs.set(node.HandleId, { ...q })
+    return
+  }
+
+  // Engine AnimNode_TransformRotator — accumulate angle, Sample multiplies LS by axis-angle.
+  if (t === 'animAnimNode_TransformRotator') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const valueNode = resolveHandle(handles, d.angleValueNode)
+    const speedNode = resolveHandle(handles, d.angleSpeedNode)
+    if (valueNode) updateFromNode(valueNode, ctx)
+    if (speedNode) updateFromNode(speedNode, ctx)
+
+    const valueScale = readNumber(d.valueScale, 1)
+    const doClamp = readBool(d.clamp)
+    const angleMin = readNumber(d.angleMin, -180)
+    const angleMax = readNumber(d.angleMax, 180)
+
+    let state = ctx.boneRotateDyn.get(node.HandleId)
+    if (!state) {
+      state = { angleDeg: 0 }
+      ctx.boneRotateDyn.set(node.HandleId, state)
+    }
+
+    let newAngle = state.angleDeg
+    if (valueNode) newAngle += readFloatSource(valueNode, ctx, 0) * valueScale
+    if (speedNode) newAngle += readFloatSource(speedNode, ctx, 0) * valueScale * ctx.dt
+
+    while (newAngle < -180) newAngle += 360
+    while (newAngle > 180) newAngle -= 360
+    if (doClamp) newAngle = Math.min(angleMax, Math.max(angleMin, newAngle))
+
+    state.angleDeg = newAngle
+    ctx.boneOpCache.rotateAngleDeg.set(node.HandleId, newAngle)
+    markActive(nodes, node.HandleId, { weight: newAngle, alpha: 1 })
+    return
+  }
+
+  // FloatTrackModifier(+MarkUnstable) — Sample mutates tracks; Update walks pose/float links.
+  if (
+    t === 'animAnimNode_FloatTrackModifier' ||
+    t === 'animAnimNode_FloatTrackModifierMarkUnstable'
+  ) {
+    const poseIn = resolveHandle(handles, d.poseInputNode) ?? resolvePoseInputLink(handles, d)
+    followUpdate(node, poseIn, ctx)
+    const fIn = resolveHandle(handles, d.floatInputNode)
+    if (fIn) updateFromNode(fIn, ctx)
+    // Reuse floatTrackConn.weight as Sample secondArgument when inputFloatTrack missing.
+    const floatVal = fIn ? readFloatSource(fIn, ctx, 0) : 0
+    ctx.boneOpCache.floatTrackConn.set(node.HandleId, { weight: floatVal, mulFactor: 1 })
+    markActive(nodes, node.HandleId, { weight: floatVal, alpha: 1 })
+    return
+  }
+
+  // AdditionalFloatTrack — PoseLink + local i_time for curve Sample.
+  if (t === 'animAnimNode_AdditionalFloatTrack') {
+    const poseIn = resolveHandle(handles, d.poseInputNode) ?? resolvePoseInputLink(handles, d)
+    followUpdate(node, poseIn, ctx)
+    const prev = ctx.additionalFloatTrackTimes.get(node.HandleId) ?? 0
+    ctx.additionalFloatTrackTimes.set(node.HandleId, prev + ctx.dt)
+    markActive(nodes, node.HandleId, { alpha: 1 })
     return
   }
 
@@ -2210,6 +3078,68 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
+  if (t === 'animAnimNode_MathExpressionPose') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const exprData =
+      d.expressionData && typeof d.expressionData === 'object'
+        ? (d.expressionData as Record<string, unknown>)
+        : null
+    const floatSockets = Array.isArray(exprData?.floatSockets) ? exprData.floatSockets : []
+    const vectorSockets = Array.isArray(exprData?.vectorSockets) ? exprData.vectorSockets : []
+    const quatSockets = Array.isArray(exprData?.quaternionSockets)
+      ? exprData.quaternionSockets
+      : []
+    const floatSnaps: MathExprPoseFloatSocketSnap[] = []
+    for (let i = 0; i < floatSockets.length; i++) {
+      const sock = floatSockets[i] as Record<string, unknown> | null
+      if (!sock || typeof sock !== 'object') continue
+      const link = resolveHandle(handles, sock.link ?? sock)
+      if (link) updateFromNode(link, ctx)
+      const trackRaw = sock.inputFloatTrack
+      const trackObj =
+        trackRaw && typeof trackRaw === 'object'
+          ? (trackRaw as Record<string, unknown>)
+          : null
+      const trackName = readCName(trackObj?.name ?? trackRaw)
+      floatSnaps.push({
+        varId: readNumber(sock.expressionVarId, i),
+        variableName: readCName(sock.variableName),
+        inputTrackName: trackName === 'None' ? '' : trackName,
+        linkValue: link ? readFloatSource(link, ctx, 0) : 0,
+      })
+    }
+    const vectorSnaps: MathExprPoseVectorSocketSnap[] = []
+    for (let i = 0; i < vectorSockets.length; i++) {
+      const sock = vectorSockets[i] as Record<string, unknown> | null
+      if (!sock || typeof sock !== 'object') continue
+      const link = resolveHandle(handles, sock.link ?? sock)
+      if (link) updateFromNode(link, ctx)
+      const v = link ? readVectorSource(link, ctx, ZERO_VEC4) : ZERO_VEC4
+      vectorSnaps.push({
+        varId: readNumber(sock.expressionVarId, i),
+        variableName: readCName(sock.variableName),
+        linkValue: { x: v.x, y: v.y, z: v.z, w: v.w },
+      })
+    }
+    const quatSnaps: MathExprPoseQuatSocketSnap[] = []
+    for (let i = 0; i < quatSockets.length; i++) {
+      const sock = quatSockets[i] as Record<string, unknown> | null
+      if (!sock || typeof sock !== 'object') continue
+      const link = resolveHandle(handles, sock.link ?? sock)
+      if (link) updateFromNode(link, ctx)
+      const q = link ? readQuatSource(link, ctx) : IDENTITY_QUAT_STATE
+      quatSnaps.push({
+        varId: readNumber(sock.expressionVarId, i),
+        variableName: readCName(sock.variableName),
+        linkValue: { x: q.x, y: q.y, z: q.z, w: q.w },
+      })
+    }
+    ctx.mathExprPoseCache.floatSockets.set(node.HandleId, floatSnaps)
+    ctx.mathExprPoseCache.vectorSockets.set(node.HandleId, vectorSnaps)
+    ctx.mathExprPoseCache.quatSockets.set(node.HandleId, quatSnaps)
+    return
+  }
+
   // Generic pose/value links — follow diagram pins; record only succ targets.
   forEachLinkedInput(node, handles, (linked) => {
     if (linked && isUpdateSuccTarget(linked)) followUpdate(node, linked, ctx)
@@ -2227,6 +3157,9 @@ export class SimGraphRunner {
   private prevNodes: Record<string, SimNodeState> | null = null
   /** Per-handle damp / spring / latch state (cleared on bind/reset / deactivate). */
   private floatDyn = new Map<string, FloatDynState>()
+  /** VectorLatch / DampVector state. */
+  private vectorDyn = new Map<string, SimVec4>()
+  private transformDyn = new Map<string, Qs>()
   private randomDyn = new Map<string, FloatRandomState>()
   private sinusDyn = new Map<string, FloatSinusState>()
   /** Per-handle Signal latch / blend (cleared like floatDyn). */
@@ -2236,8 +3169,14 @@ export class SimGraphRunner {
   private boneQuatDyn = new Map<string, BoneOpQuatState>()
   private boneTranslateDyn = new Map<string, BoneOpTranslateState>()
   private boneOpCache = createBoneOpFrameCache()
+  private mathExprPoseCache = createMathExprPoseFrameCache()
   /** Optional parent-transform MS map for ParentTransform Sample. */
   parentTransforms = new Map<string, Qs>()
+  /** Join pose cache (engine diamond re-sample); poses reused, sampled cleared per Sample. */
+  private joinPoseCache = {
+    sampled: new Set<string>(),
+    poses: new Map<string, Pose>(),
+  }
   /** Anim setup / clip index for HasAnimation + SkAnim clock. */
   private clipLibrary: ClipLibrary | null = null
   /** Glb pose clips for Sample. */
@@ -2257,14 +3196,17 @@ export class SimGraphRunner {
    */
   stackCaptureHandleIds = new Set<string>()
   private sampleOut: Pose | null = null
-  private sampleScratchA: Pose | null = null
-  private sampleScratchB: Pose | null = null
+  private poseScratch: PoseScratchPool | null = null
   /** Update-traversal successors for Sample (cleared each step). */
   private updateSucc = new Map<string, string[]>()
-  /** Pose stack capacity from Extender scan at bind. */
+  /** Transform stack capacity from Extender scan at bind. */
   private stackCapacity = DEFAULT_STACK_CAPACITY
-  /** Shrinker handleId → remove count (tag pairing). */
+  /** Track stack capacity from StackTracksExtender scan at bind. */
+  private trackStackCapacity = DEFAULT_STACK_CAPACITY
+  /** Transform Shrinker handleId → remove count (tag pairing). */
   private shrinkRemoveCountByHandleId = new Map<string, number>()
+  /** Track Shrinker handleId → remove count. */
+  private trackShrinkRemoveCountByHandleId = new Map<string, number>()
   /** Pooled full-pose snapshots for capture handles. */
   private capturedPoses = new Map<string, Pose>()
   /** Handles captured this Sample pass. */
@@ -2273,6 +3215,10 @@ export class SimGraphRunner {
   private animDbLibrary: AnimDatabaseLibrary | null = null
   /** Per-SkAnim playback clocks */
   private clipClocks = new Map<string, ClipClockState>()
+  /** AdditionalFloatTrack i_time (cleared when node leaves active Update path). */
+  private additionalFloatTrackTimes = new Map<string, number>()
+  /** MathExpression compile cache (idents + scalar/mixed); cleared on bind/reset. */
+  private mathExprCache: MathExprCompileCache = new Map()
   /**
    * Per-graph Timed / ModifiedFloat dyn (engine instance buffer).
    * Not on SimInputBoard — HandleIds collide across nested graphs.
@@ -2295,18 +3241,17 @@ export class SimGraphRunner {
     if (!rig) {
       this.activeRig = null
       this.sampleOut = null
-      this.sampleScratchA = null
-      this.sampleScratchB = null
+      this.poseScratch = null
       return
     }
     // Same rig + live buffers → keep sampleOut (ensureRunner used to wipe nested poses).
     if (
-      rig === this.activeRig &&
+      this.activeRig === rig &&
       this.sampleOut &&
-      this.sampleScratchA &&
-      this.sampleScratchB &&
+      this.poseScratch &&
       this.sampleOut.boneCount === rig.boneNames.length &&
-      this.sampleOut.stackCapacity === this.stackCapacity
+      this.sampleOut.stackCapacity === this.stackCapacity &&
+      this.sampleOut.trackStackCapacity === this.trackStackCapacity
     ) {
       return
     }
@@ -2317,10 +3262,9 @@ export class SimGraphRunner {
   private reallocSampleBuffers(): void {
     const rig = this.activeRig
     if (!rig) return
-    const buf = allocSampleScratch(rig, this.stackCapacity)
+    const buf = allocSampleScratch(rig, this.stackCapacity, this.trackStackCapacity)
     this.sampleOut = buf.out
-    this.sampleScratchA = buf.scratchA
-    this.sampleScratchB = buf.scratchB
+    this.poseScratch = buf.poseScratch
   }
 
   /** Whether this graph owns a handle (for capture / debug scoping). */
@@ -2373,7 +3317,12 @@ export class SimGraphRunner {
       pose.boneCount !== rig.boneNames.length ||
       pose.stackCapacity !== this.stackCapacity
     ) {
-      pose = createPose(rig.boneNames.length, rig.trackNames.length, this.stackCapacity)
+      pose = createPose(
+        rig.boneNames.length,
+        rig.trackNames.length,
+        this.stackCapacity,
+        this.trackStackCapacity
+      )
       this.capturedPoses.set(handleId, pose)
     }
     return pose
@@ -2416,6 +3365,20 @@ export class SimGraphRunner {
     return { count: pose.stackCount, names, bones }
   }
 
+  private buildTrackStackStats(
+    pose: Pose
+  ): NonNullable<SimSnapshot['poseStats']>['trackStack'] | undefined {
+    if (pose.trackStackCount <= 0) return undefined
+    const names: string[] = []
+    const values: Record<string, number> = {}
+    for (let i = 0; i < pose.trackStackCount; i++) {
+      const n = pose.trackStackNames[i] || `track_stack_${i}`
+      names.push(n)
+      values[n] = pose.trackStackValues[i] ?? 0
+    }
+    return { count: pose.trackStackCount, names, values }
+  }
+
   private readNamedTrs(pose: Pose, boneName: string): ReturnType<typeof readBoneTrs> {
     const rig = this.activeRig
     if (!rig) return null
@@ -2443,6 +3406,8 @@ export class SimGraphRunner {
     this.originalAnimgraph = graphData?.originalAnimgraph ?? null
     this.runtimes.clear()
     this.floatDyn.clear()
+    this.vectorDyn.clear()
+    this.transformDyn.clear()
     this.randomDyn.clear()
     this.sinusDyn.clear()
     this.signalDyn.clear()
@@ -2450,8 +3415,13 @@ export class SimGraphRunner {
     this.boneQuatDyn.clear()
     this.boneTranslateDyn.clear()
     clearBoneOpFrameCache(this.boneOpCache)
+    clearMathExprPoseFrameCache(this.mathExprPoseCache)
     this.parentTransforms.clear()
+    this.joinPoseCache.sampled.clear()
+    this.joinPoseCache.poses.clear()
     this.clipClocks.clear()
+    this.additionalFloatTrackTimes.clear()
+    this.mathExprCache.clear()
     this.conditionDyn.clear()
     this.staticSwitchResults.clear()
     this.staticSwitchDirty = true
@@ -2460,7 +3430,9 @@ export class SimGraphRunner {
     this.capturedPoseThisFrame.clear()
     const pairing = buildStackPairing(this.handles)
     this.shrinkRemoveCountByHandleId = pairing.shrinkRemoveCountByHandleId
+    this.trackShrinkRemoveCountByHandleId = pairing.trackShrinkRemoveCountByHandleId
     this.stackCapacity = pairing.suggestedStackCapacity
+    this.trackStackCapacity = pairing.suggestedTrackStackCapacity
     if (this.activeRig) this.reallocSampleBuffers()
     for (const sm of findStateMachineHandles(this.handles)) {
       const def = readNumber(sm.Data?.defaultStateIndex, 0)
@@ -2471,6 +3443,8 @@ export class SimGraphRunner {
   reset(): void {
     this.prevNodes = null
     this.floatDyn.clear()
+    this.vectorDyn.clear()
+    this.transformDyn.clear()
     this.randomDyn.clear()
     this.sinusDyn.clear()
     this.signalDyn.clear()
@@ -2478,8 +3452,13 @@ export class SimGraphRunner {
     this.boneQuatDyn.clear()
     this.boneTranslateDyn.clear()
     clearBoneOpFrameCache(this.boneOpCache)
+    clearMathExprPoseFrameCache(this.mathExprPoseCache)
     this.parentTransforms.clear()
+    this.joinPoseCache.sampled.clear()
+    this.joinPoseCache.poses.clear()
     this.clipClocks.clear()
+    this.additionalFloatTrackTimes.clear()
+    this.mathExprCache.clear()
     this.conditionDyn.clear()
     this.staticSwitchResults.clear()
     this.staticSwitchDirty = true
@@ -2543,6 +3522,7 @@ export class SimGraphRunner {
       : undefined
     this.updateSucc.clear()
     clearBoneOpFrameCache(this.boneOpCache)
+    clearMathExprPoseFrameCache(this.mathExprPoseCache)
     if (sampleLog) {
       const caps = [...this.stackCaptureHandleIds]
       const known = caps.filter((id) => this.hasHandle(id))
@@ -2554,12 +3534,8 @@ export class SimGraphRunner {
 
     const makeParentPoseSample = (inputLink: AnimgraphNode) => (out: Pose): boolean => {
       const rig = this.activeRig
-      if (
-        !rig ||
-        !this.clipPoseLibrary ||
-        !this.sampleScratchA ||
-        !this.sampleScratchB
-      ) {
+      const poseScratch = this.poseScratch
+      if (!rig || !this.clipPoseLibrary || !poseScratch) {
         return false
       }
       simSampleLogLine(
@@ -2581,10 +3557,10 @@ export class SimGraphRunner {
           sampleNested: (slotName) => options?.slotHost?.getNestedPose(slotName) ?? null,
           parentPoseSample: options?.parentPoseSample,
           shrinkRemoveCountByHandleId: this.shrinkRemoveCountByHandleId,
+          trackShrinkRemoveCountByHandleId: this.trackShrinkRemoveCountByHandleId,
           stackCaptureHandleIds: this.stackCaptureHandleIds,
           captureStack: (handleId, pose) => this.capturePoseFromSample(handleId, pose),
-          scratchA: this.sampleScratchA,
-          scratchB: this.sampleScratchB,
+          poseScratch,
           sampleLog,
           sampleVisitedAll,
           updateSucc: this.updateSucc,
@@ -2592,7 +3568,11 @@ export class SimGraphRunner {
           warnings: sampleWarnings,
           lastWrittenNull: false,
           boneOpCache: this.boneOpCache,
+          additionalFloatTrackTimes: this.additionalFloatTrackTimes,
+          mathExprCache: this.mathExprCache,
+          mathExprPoseCache: this.mathExprPoseCache,
           parentTransforms: this.parentTransforms,
+          joinPoseCache: this.joinPoseCache,
         },
         out
       )
@@ -2604,6 +3584,8 @@ export class SimGraphRunner {
       dt,
       floatDyn: this.floatDyn,
       floatUpdated,
+      vectorDyn: this.vectorDyn,
+      transformDyn: this.transformDyn,
       randomDyn: this.randomDyn,
       sinusDyn: this.sinusDyn,
       signalDyn: this.signalDyn,
@@ -2621,12 +3603,15 @@ export class SimGraphRunner {
       parentPoseUpdate: options?.parentPoseUpdate,
       parentPoseSample: options?.parentPoseSample,
       makeParentPoseSample,
+      additionalFloatTrackTimes: this.additionalFloatTrackTimes,
+      mathExprCache: this.mathExprCache,
       updateSucc: this.updateSucc,
       prevNodes: this.prevNodes,
       boneOpCache: this.boneOpCache,
       boneRotateDyn: this.boneRotateDyn,
       boneQuatDyn: this.boneQuatDyn,
       boneTranslateDyn: this.boneTranslateDyn,
+      mathExprPoseCache: this.mathExprPoseCache,
     }
 
     const root = findRootHandle(this.handles, this.originalAnimgraph)
@@ -2651,6 +3636,12 @@ export class SimGraphRunner {
     for (const id of [...this.floatDyn.keys()]) {
       if (!floatUpdated.has(id)) this.floatDyn.delete(id)
     }
+    for (const id of [...this.vectorDyn.keys()]) {
+      if (!floatUpdated.has(id)) this.vectorDyn.delete(id)
+    }
+    for (const id of [...this.transformDyn.keys()]) {
+      if (!floatUpdated.has(id)) this.transformDyn.delete(id)
+    }
     for (const id of [...this.randomDyn.keys()]) {
       if (!floatUpdated.has(id)) this.randomDyn.delete(id)
     }
@@ -2659,6 +3650,10 @@ export class SimGraphRunner {
     }
     for (const id of [...this.signalDyn.keys()]) {
       if (!signalUpdated.has(id)) this.signalDyn.delete(id)
+    }
+    // Reset AdditionalFloatTrack i_time when node leaves active Update path (OnActivated).
+    for (const id of [...this.additionalFloatTrackTimes.keys()]) {
+      if (!nodes[id]?.active) this.additionalFloatTrackTimes.delete(id)
     }
     // Deactivate clip clocks that were not stepped (left the active pose path)
     for (const [, clock] of this.clipClocks) {
@@ -2696,7 +3691,7 @@ export class SimGraphRunner {
 
     let poseStats: SimSnapshot['poseStats'] = null
     const rig = this.activeRig
-    if (rig && this.clipPoseLibrary && this.sampleOut && this.sampleScratchA && this.sampleScratchB) {
+    if (rig && this.clipPoseLibrary && this.sampleOut && this.poseScratch) {
       simSampleLogLine(sampleLog, '--- root Sample ---')
       if (sampleLog) {
         let edges = 0
@@ -2706,6 +3701,7 @@ export class SimGraphRunner {
           `updateSucc parents=${this.updateSucc.size} edges=${edges}`
         )
       }
+      this.joinPoseCache.sampled.clear()
       const result = sampleGraphPose(
         root,
         {
@@ -2721,10 +3717,10 @@ export class SimGraphRunner {
           sampleNested: (slotName) => options?.slotHost?.getNestedPose(slotName) ?? null,
           parentPoseSample: options?.parentPoseSample,
           shrinkRemoveCountByHandleId: this.shrinkRemoveCountByHandleId,
+          trackShrinkRemoveCountByHandleId: this.trackShrinkRemoveCountByHandleId,
           stackCaptureHandleIds: this.stackCaptureHandleIds,
           captureStack: (handleId, pose) => this.capturePoseFromSample(handleId, pose),
-          scratchA: this.sampleScratchA,
-          scratchB: this.sampleScratchB,
+          poseScratch: this.poseScratch,
           missingGlb: [],
           sampleLog,
           sampleVisitedAll,
@@ -2733,7 +3729,11 @@ export class SimGraphRunner {
           warnings: sampleWarnings,
           lastWrittenNull: false,
           boneOpCache: this.boneOpCache,
+          additionalFloatTrackTimes: this.additionalFloatTrackTimes,
+          mathExprCache: this.mathExprCache,
+          mathExprPoseCache: this.mathExprPoseCache,
           parentTransforms: this.parentTransforms,
+          joinPoseCache: this.joinPoseCache,
         },
         this.sampleOut
       )
@@ -2766,6 +3766,7 @@ export class SimGraphRunner {
         sampleMs: result.sampleMs,
         inspect: Object.keys(inspect).length ? inspect : undefined,
         stack: this.buildStackStats(stackPose),
+        trackStack: this.buildTrackStackStats(stackPose),
         stackSourceHandleId: hud?.handleId ?? undefined,
         missingGlb: result.missingGlb,
         warnings: result.warnings,

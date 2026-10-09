@@ -63,6 +63,9 @@ export type SimSampleWarning = {
     | 'blend-mask-missing'
     | 'blend-mask-empty'
     | 'bone-op-missing'
+    | 'additional-transform-entry'
+    | 'additional-float-track-entry'
+    | 'math-expr-pose'
   handleId: string
   message: string
   weight?: number
@@ -110,11 +113,17 @@ export interface SimPoseStats {
   sampleMs: number
   /** Selected bone TRS for HUD inspect (sparse); atNode from capture, result from root */
   inspect?: Record<string, SimBoneInspect>
-  /** Procedural stack after Sample (prefer capture at selected node) */
+  /** Procedural transform stack after Sample (prefer capture at selected node) */
   stack?: {
     count: number
     names: string[]
     bones: Record<string, import('./pose').BoneTrs>
+  }
+  /** Procedural track stack after Sample (StackTracksExtender; same pose source as stack) */
+  trackStack?: {
+    count: number
+    names: string[]
+    values: Record<string, number>
   }
   /** HandleId of pose capture used for HUD (null/omit = final root pose) */
   stackSourceHandleId?: string

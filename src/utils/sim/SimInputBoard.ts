@@ -11,12 +11,16 @@
  * - EventValue reads lastFrameAnimEventValues (valued timeline events)
  *
  * Vector4 AnimFeatures (VectorInput) live in a separate map — not split into scalars.
+ * Quaternion AnimFeatures (QuaternionInput) live in a separate map (xyzw).
  * Bool AnimFeatures (BoolInput / BoolFeature) live in a separate map — not as float 0/1.
  */
 
 import type { SimVec4 } from './evalAnimMathExpressionVector'
 
 export type { SimVec4 }
+
+/** Identity quaternion for QuaternionInput defaults (xyzw). */
+export const IDENTITY_QUAT_VEC4: SimVec4 = { x: 0, y: 0, z: 0, w: 1 }
 
 /** FiredEvent phase for timeline events (animNode_Signal DurStart/DurEnd split). */
 export type SimAnimEventPhase = 'tick' | 'durStart' | 'durEnd'
@@ -28,12 +32,37 @@ export class SimInputBoard {
   private prevFeatures = new Map<string, Map<string, number>>()
   /** lowercase featureName -> lowercase propertyName -> Vector4 (VectorInput) */
   private vectorFeatures = new Map<string, Map<string, SimVec4>>()
+  /** lowercase featureName -> lowercase propertyName -> Quaternion xyzw (QuaternionInput) */
+  private quatFeatures = new Map<string, Map<string, SimVec4>>()
   /** lowercase featureName -> lowercase propertyName -> bool (BoolInput) */
   private boolFeatures = new Map<string, Map<string, boolean>>()
   /** Snapshot of bool features at previous endFrame — BoolEdge conditions */
   private prevBoolFeatures = new Map<string, Map<string, boolean>>()
   /** variableName -> number (float vars / float variable conditions) */
   floatVars = new Map<string, number>()
+  /** variableName -> Vector4 (AnimNode_VectorVariable) */
+  vectorVars = new Map<string, SimVec4>()
+  /** variableName -> Quaternion xyzw (AnimNode_QuaternionVariable) */
+  quatVars = new Map<string, SimVec4>()
+  /**
+   * variableName -> Qs transform (AnimNode_TransformVariable).
+   * Stored as flat tx/ty/tz/qx/qy/qz/qw/sx/sy/sz — see poseFk.Qs.
+   */
+  transformVars = new Map<
+    string,
+    {
+      tx: number
+      ty: number
+      tz: number
+      qx: number
+      qy: number
+      qz: number
+      qw: number
+      sx: number
+      sy: number
+      sz: number
+    }
+  >()
   boolVars = new Map<string, boolean>()
   intVars = new Map<string, number>()
   /**
@@ -118,8 +147,12 @@ export class SimInputBoard {
   clearAll(): void {
     this.features.clear()
     this.vectorFeatures.clear()
+    this.quatFeatures.clear()
     this.boolFeatures.clear()
     this.floatVars.clear()
+    this.vectorVars.clear()
+    this.quatVars.clear()
+    this.transformVars.clear()
     this.boolVars.clear()
     this.intVars.clear()
     this.tagValues.clear()
@@ -195,6 +228,30 @@ export class SimInputBoard {
     const key = SimInputBoard.featKey(featureName, propertyName)
     if (!key) return undefined
     const v = this.vectorFeatures.get(key[0])?.get(key[1])
+    return v ? { ...v } : undefined
+  }
+
+  setQuatFeature(featureName: string, propertyName: string, value: SimVec4): void {
+    const key = SimInputBoard.featKey(featureName, propertyName)
+    if (!key) return
+    const [f, p] = key
+    let props = this.quatFeatures.get(f)
+    if (!props) {
+      props = new Map()
+      this.quatFeatures.set(f, props)
+    }
+    props.set(p, {
+      x: Number.isFinite(value.x) ? value.x : 0,
+      y: Number.isFinite(value.y) ? value.y : 0,
+      z: Number.isFinite(value.z) ? value.z : 0,
+      w: Number.isFinite(value.w) ? value.w : 1,
+    })
+  }
+
+  getQuatFeature(featureName: string, propertyName: string): SimVec4 | undefined {
+    const key = SimInputBoard.featKey(featureName, propertyName)
+    if (!key) return undefined
+    const v = this.quatFeatures.get(key[0])?.get(key[1])
     return v ? { ...v } : undefined
   }
 

@@ -9,7 +9,7 @@
  */
 
 import type { Pose } from './pose'
-import { clearStack } from './pose'
+import { clearStack, clearTrackStack } from './pose'
 import type { RigEntry } from './rigResource'
 
 /** animAnimationType — Normal or Additive* (engine / WolvenKit extras). */
@@ -195,6 +195,8 @@ export class ClipPoseLibrary {
     out.rotation.set(rig.refRotation.subarray(0, out.boneCount * 4))
     out.scale.set(rig.refScale.subarray(0, out.boneCount * 3))
     clearStack(out)
+    clearTrackStack(out)
+    out.tracks.fill(0)
     const dur = anim.duration > 0 ? anim.duration : 0
     let t = time
     if (dur > 0) {

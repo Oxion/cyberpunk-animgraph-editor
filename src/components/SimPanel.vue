@@ -222,7 +222,12 @@
               v-model="featuresFilter"
             />
             <div
-              v-if="filteredFeatures.length || filteredVectorFeatures.length || filteredBoolFeatures.length"
+              v-if="
+                filteredFeatures.length ||
+                filteredVectorFeatures.length ||
+                filteredQuatFeatures.length ||
+                filteredBoolFeatures.length
+              "
               class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto"
             >
               <PropertyNumberControl
@@ -248,6 +253,14 @@
                 :target="vectorFeatureTarget(f.feature, f.property)"
                 @change="(p) => onVectorFeatureAxis(f.feature, f.property, p.axis, p.value)"
               />
+              <PropertyVecBlock
+                v-for="f in filteredQuatFeatures"
+                :key="`q-${f.feature}.${f.property}`.toLowerCase()"
+                :label="`quat ${f.feature}.${f.property}`"
+                :axes="vector4Axes"
+                :target="quatFeatureTarget(f.feature, f.property)"
+                @change="(p) => onQuatFeatureAxis(f.feature, f.property, p.axis, p.value)"
+              />
             </div>
             <p v-else-if="featuresTabCount" class="m-0 text-[11px] text-muted-foreground">No matching features</p>
             <p v-else class="m-0 text-[11px] text-muted-foreground">No features</p>
@@ -269,6 +282,22 @@
                 :decimals="2"
                 @update:model-value="(v) => onFloatValue(name, v)"
               />
+              <PropertyVecBlock
+                v-for="name in filteredVectorVars"
+                :key="`vv-${name}`"
+                :label="`vec ${name}`"
+                :axes="vector4Axes"
+                :target="vectorVarTarget(name)"
+                @change="(p) => onVectorVarAxis(name, p.axis, p.value)"
+              />
+              <PropertyVecBlock
+                v-for="name in filteredQuatVars"
+                :key="`qv-${name}`"
+                :label="`quat ${name}`"
+                :axes="vector4Axes"
+                :target="quatVarTarget(name)"
+                @change="(p) => onQuatVarAxis(name, p.axis, p.value)"
+              />
               <PropertyNumberControl
                 v-for="name in filteredIntVars"
                 :key="`i-${name}`"
@@ -286,7 +315,7 @@
               />
             </div>
             <p v-else-if="hasAnyVars" class="m-0 text-[11px] text-muted-foreground">No matching vars</p>
-            <p v-else class="m-0 text-[11px] text-muted-foreground">No float / int / bool vars</p>
+            <p v-else class="m-0 text-[11px] text-muted-foreground">No float / vector / int / bool vars</p>
           </TabsContent>
 
           <TabsContent value="wrappers" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
@@ -837,6 +866,9 @@
             <template v-if="snapshot.poseStats.stack?.count">
               · stack {{ snapshot.poseStats.stack.count }}
             </template>
+            <template v-if="snapshot.poseStats.trackStack?.count">
+              · tracks {{ snapshot.poseStats.trackStack.count }}
+            </template>
           </p>
           <p
             v-if="snapshot.poseStats?.missingGlb?.length"
@@ -853,10 +885,7 @@
           >
             <p class="m-0 text-[9px] uppercase tracking-wide text-muted-foreground/80">
               Procedural (stack)
-              <template v-if="stackSelectionHint"> · {{ stackSelectionHint }}</template>
-              <template v-else-if="snapshot.poseStats?.stackSourceHandleId">
-                · captured
-              </template>
+              <template v-if="snapshot.poseStats?.stackSourceHandleId"> · captured</template>
             </p>
             <button
               v-for="name in snapshot.poseStats.stack.names"
@@ -870,6 +899,25 @@
                 name
               }}</span>
             </button>
+          </div>
+          <div
+            v-if="snapshot.poseStats?.trackStack?.count"
+            class="flex max-h-28 flex-col gap-0.5 overflow-y-auto border-t border-border/40 pt-1"
+          >
+            <p class="m-0 text-[9px] uppercase tracking-wide text-muted-foreground/80">
+              Procedural tracks
+              <template v-if="snapshot.poseStats?.stackSourceHandleId"> · captured</template>
+            </p>
+            <div
+              v-for="name in snapshot.poseStats.trackStack.names"
+              :key="`tstack-${name}`"
+              class="font-data flex w-full items-baseline gap-1 px-1 py-0.5 text-[11px]"
+            >
+              <span class="min-w-0 flex-1 truncate text-amber-300/90">{{ name }}</span>
+              <span class="shrink-0 tabular-nums text-muted-foreground">{{
+                formatTrackStackValue(snapshot.poseStats.trackStack.values[name])
+              }}</span>
+            </div>
           </div>
           <div
             v-if="snapshot.poseStats?.inspect"
@@ -967,7 +1015,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { PencilIcon, TrashIcon } from 'lucide-vue-next'
 import type {
   AnimSetupEntryView,
@@ -1008,8 +1056,11 @@ const props = defineProps<{
   discovered: {
     features: Array<{ feature: string; property: string }>
     vectorFeatures?: Array<{ feature: string; property: string }>
+    quatFeatures?: Array<{ feature: string; property: string }>
     boolFeatures?: Array<{ feature: string; property: string }>
     floatVars: string[]
+    vectorVars?: string[]
+    quatVars?: string[]
     boolVars: string[]
     intVars: string[]
     wrappers: string[]
@@ -1020,8 +1071,11 @@ const props = defineProps<{
   eventDraft: string
   featureDrafts: Record<string, number>
   vectorFeatureDrafts?: Record<string, { x: number; y: number; z: number; w: number }>
+  quatFeatureDrafts?: Record<string, { x: number; y: number; z: number; w: number }>
   boolFeatureDrafts?: Record<string, boolean>
   floatVars: Record<string, number>
+  vectorVars?: Record<string, { x: number; y: number; z: number; w: number }>
+  quatVars?: Record<string, { x: number; y: number; z: number; w: number }>
   boolVars: Record<string, boolean>
   intVars: Record<string, number>
   tagValues: Record<string, number>
@@ -1063,13 +1117,6 @@ const props = defineProps<{
   setPoseInspectBones: (names: string[]) => void
   sampleWarningsEnabled?: boolean
   setSampleWarningsEnabled?: (on: boolean) => void
-  /** Selection-aware stack HUD focus (Extender/Shrinker). */
-  selectedStackFocus?: {
-    kind: 'extender' | 'shrinker'
-    handleId: string
-    names: string[]
-    removeCount: number
-  } | null
   loadAnimDatabaseJson: (json: object, sourceLabel?: string) => string
   removeAnimDatabase: (pathKey: string) => void
   updateSetupEntry: (
@@ -1085,7 +1132,17 @@ const props = defineProps<{
     axis: 'x' | 'y' | 'z' | 'w',
     value: number
   ) => void
+  applyQuatFeatureAxis?: (
+    feature: string,
+    property: string,
+    axis: 'x' | 'y' | 'z' | 'w',
+    value: number
+  ) => void
   applyFloatVar: (name: string, value: number) => void
+  applyVectorVarAxis?: (name: string, axis: 'x' | 'y' | 'z' | 'w', value: number) => void
+  resolveVectorVarValue?: (name: string) => { x: number; y: number; z: number; w: number }
+  applyQuatVarAxis?: (name: string, axis: 'x' | 'y' | 'z' | 'w', value: number) => void
+  resolveQuatVarValue?: (name: string) => { x: number; y: number; z: number; w: number }
   applyBoolVar: (name: string, value: boolean) => void
   applyIntVar: (name: string, value: number) => void
   applyTagValue: (name: string, value: number) => void
@@ -1095,6 +1152,10 @@ const props = defineProps<{
   resolveFeatureValue: (feature: string, property: string) => number
   resolveBoolFeatureValue?: (feature: string, property: string) => boolean
   resolveVectorFeatureValue?: (
+    feature: string,
+    property: string
+  ) => { x: number; y: number; z: number; w: number }
+  resolveQuatFeatureValue?: (
     feature: string,
     property: string
   ) => { x: number; y: number; z: number; w: number }
@@ -1186,6 +1247,7 @@ const featuresTabCount = computed(
   () =>
     props.discovered.features.length +
     (props.discovered.vectorFeatures?.length ?? 0) +
+    (props.discovered.quatFeatures?.length ?? 0) +
     (props.discovered.boolFeatures?.length ?? 0)
 )
 
@@ -1221,8 +1283,31 @@ const filteredVectorFeatures = computed(() =>
       return localeCmp(a.property, b.property)
     })
 )
+
+const filteredQuatFeatures = computed(() =>
+  (props.discovered.quatFeatures ?? [])
+    .filter((f) => matchesQuery(`${f.feature}.${f.property}`, featuresFilter.value))
+    .slice()
+    .sort((a, b) => {
+      const byFeat = localeCmp(a.feature, b.feature)
+      if (byFeat !== 0) return byFeat
+      return localeCmp(a.property, b.property)
+    })
+)
 const filteredFloatVars = computed(() =>
   props.discovered.floatVars
+    .filter((name) => matchesQuery(name, varsFilter.value))
+    .slice()
+    .sort(localeCmp)
+)
+const filteredVectorVars = computed(() =>
+  (props.discovered.vectorVars ?? [])
+    .filter((name) => matchesQuery(name, varsFilter.value))
+    .slice()
+    .sort(localeCmp)
+)
+const filteredQuatVars = computed(() =>
+  (props.discovered.quatVars ?? [])
     .filter((name) => matchesQuery(name, varsFilter.value))
     .slice()
     .sort(localeCmp)
@@ -1254,6 +1339,8 @@ const filteredEntityTags = computed(() =>
 const varsCount = computed(
   () =>
     props.discovered.floatVars.length +
+    (props.discovered.vectorVars?.length ?? 0) +
+    (props.discovered.quatVars?.length ?? 0) +
     (props.discovered.boolVars?.length ?? 0) +
     (props.discovered.intVars?.length ?? 0)
 )
@@ -1265,6 +1352,8 @@ const hasAnyVars = computed(() => varsCount.value > 0)
 const hasFilteredVars = computed(
   () =>
     filteredFloatVars.value.length > 0 ||
+    filteredVectorVars.value.length > 0 ||
+    filteredQuatVars.value.length > 0 ||
     filteredBoolVars.value.length > 0 ||
     filteredIntVars.value.length > 0
 )
@@ -1458,6 +1547,16 @@ const vectorFeatureTarget = (feature: string, property: string) => {
   return { X: v.x, Y: v.y, Z: v.z, W: v.w }
 }
 
+const quatFeatureTarget = (feature: string, property: string) => {
+  const v = props.resolveQuatFeatureValue?.(feature, property) ?? {
+    x: 0,
+    y: 0,
+    z: 0,
+    w: 1,
+  }
+  return { X: v.x, Y: v.y, Z: v.z, W: v.w }
+}
+
 const formatClipDur = (name: string) => {
   const c = props.lookupClip(name)
   return c ? `${c.duration.toFixed(2)}s` : '—'
@@ -1486,10 +1585,51 @@ const onVectorFeatureAxis = (
   props.applyVectorFeatureAxis?.(feature, property, key, value)
 }
 
+const onQuatFeatureAxis = (
+  feature: string,
+  property: string,
+  axis: string,
+  raw: string | number
+) => {
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return
+  const key = axis.toLowerCase()
+  if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
+  props.applyQuatFeatureAxis?.(feature, property, key, value)
+}
+
 const onFloatValue = (name: string, raw: string | number) => {
   const value = Number(raw)
   if (!Number.isFinite(value)) return
   props.applyFloatVar(name, value)
+}
+
+const vectorVarTarget = (name: string) => {
+  const v = props.resolveVectorVarValue?.(name) ??
+    props.vectorVars?.[name] ?? { x: 0, y: 0, z: 0, w: 0 }
+  return { X: v.x, Y: v.y, Z: v.z, W: v.w }
+}
+
+const onVectorVarAxis = (name: string, axis: string, raw: string | number) => {
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return
+  const key = axis.toLowerCase()
+  if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
+  props.applyVectorVarAxis?.(name, key, value)
+}
+
+const quatVarTarget = (name: string) => {
+  const v = props.resolveQuatVarValue?.(name) ??
+    props.quatVars?.[name] ?? { x: 0, y: 0, z: 0, w: 1 }
+  return { X: v.x, Y: v.y, Z: v.z, W: v.w }
+}
+
+const onQuatVarAxis = (name: string, axis: string, raw: string | number) => {
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return
+  const key = axis.toLowerCase()
+  if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
+  props.applyQuatVarAxis?.(name, key, value)
 }
 
 const onIntValue = (name: string, raw: string | number) => {
@@ -1631,56 +1771,13 @@ const applyPoseInspect = () => {
 const formatInspectTrs = (trs: BoneTrs) =>
   `t(${trs.tx.toFixed(3)}, ${trs.ty.toFixed(3)}, ${trs.tz.toFixed(3)})`
 
+const formatTrackStackValue = (v: number | undefined) =>
+  Number.isFinite(v) ? (v as number).toFixed(3) : '—'
+
 const inspectStackBone = (name: string) => {
   poseInspectDraft.value = name
   props.setPoseInspectBones([name])
 }
-
-const stackSelectionHint = computed(() => {
-  const focus = props.selectedStackFocus
-  if (!focus) return ''
-  const st = props.snapshot.nodes[focus.handleId]
-  const active = st?.active === true
-  if (focus.kind === 'extender') {
-    return active ? `extender ×${focus.names.length}` : 'extender (inactive)'
-  }
-  return active
-    ? `shrinker remove ${focus.removeCount}`
-    : `shrinker remove ${focus.removeCount} (inactive)`
-})
-
-watch(
-  () => {
-    const focus = props.selectedStackFocus
-    const active = focus ? props.snapshot.nodes[focus.handleId]?.active === true : false
-    const stackNames = props.snapshot.poseStats?.stack?.names ?? []
-    return {
-      kind: focus?.kind ?? null,
-      handleId: focus?.handleId ?? null,
-      active,
-      namesKey: focus?.names.join('\0') ?? '',
-      stackKey: stackNames.join('\0'),
-      removeCount: focus?.removeCount ?? 0,
-    }
-  },
-  (cur) => {
-    const focus = props.selectedStackFocus
-    if (!focus || !cur.active) return
-    if (focus.kind === 'extender' && focus.names.length) {
-      poseInspectDraft.value = focus.names[0] ?? ''
-      props.setPoseInspectBones([...focus.names])
-      return
-    }
-    if (focus.kind === 'shrinker') {
-      const names = props.snapshot.poseStats?.stack?.names ?? []
-      if (names.length) {
-        poseInspectDraft.value = names[0] ?? ''
-        props.setPoseInspectBones([...names])
-      }
-    }
-  },
-  { flush: 'post' }
-)
 
 const onAnimDbFile = async (ev: Event) => {
   animDbError.value = ''

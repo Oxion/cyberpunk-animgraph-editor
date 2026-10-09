@@ -1,22 +1,42 @@
 /**
- * Pair StackTransforms Extender ↔ Shrinker by tag (compiler TryMatching*).
+ * Pair StackTransforms / StackTracks Extender ↔ Shrinker by tag (compiler TryMatching*).
  */
 
 import type { AnimgraphNode } from '../graph/animgraphTypes'
 import { handleType, readCName } from './simDataUtils'
 
 export type StackPairing = {
-  /** Shrinker handleId → transforms to remove */
+  /** Transform Shrinker handleId → transforms to remove */
   shrinkRemoveCountByHandleId: Map<string, number>
-  /** Extender handleId → transformInfos count */
+  /** Transform Extender handleId → transformInfos count */
   extenderCountByHandleId: Map<string, number>
-  /** Suggested stack capacity for pose buffers */
+  /** Suggested transform stack capacity for pose buffers */
   suggestedStackCapacity: number
+  /** Track Shrinker handleId → tracks to remove */
+  trackShrinkRemoveCountByHandleId: Map<string, number>
+  /** Track Extender handleId → newTracks count */
+  trackExtenderCountByHandleId: Map<string, number>
+  /** Suggested track stack capacity */
+  suggestedTrackStackCapacity: number
 }
 
 function transformInfosCount(node: AnimgraphNode): number {
   const infos = node.Data?.transformInfos
   return Array.isArray(infos) ? infos.length : 0
+}
+
+function newTracksCount(node: AnimgraphNode): number {
+  const tracks = node.Data?.newTracks
+  return Array.isArray(tracks) ? tracks.length : 0
+}
+
+/** AdditionalFloatTrack entries that may push track-stack slots. */
+function additionalFloatTrackEntriesCount(node: AnimgraphNode): number {
+  const cont = node.Data?.additionalTracks
+  if (!cont || typeof cont !== 'object') return 0
+  const c = cont as { Data?: { entries?: unknown }; entries?: unknown }
+  const entries = c.Data?.entries ?? c.entries
+  return Array.isArray(entries) ? entries.length : 0
 }
 
 /**
@@ -46,8 +66,44 @@ export function buildStackPairing(handles: Map<string, AnimgraphNode>): StackPai
     shrinkRemoveCountByHandleId.set(h.HandleId, count)
   }
 
+  const trackTagToCount = new Map<string, number>()
+  const trackExtenderCountByHandleId = new Map<string, number>()
+  let trackSum = 0
+
+  for (const h of handles.values()) {
+    if (handleType(h) !== 'animAnimNode_StackTracksExtender') continue
+    const n = newTracksCount(h)
+    trackExtenderCountByHandleId.set(h.HandleId, n)
+    trackSum += n
+    const tag = readCName(h.Data?.tag)
+    const key = tag && tag !== 'None' ? tag.toLowerCase() : `__id:${h.HandleId}`
+    if (!trackTagToCount.has(key)) trackTagToCount.set(key, n)
+  }
+
+  for (const h of handles.values()) {
+    if (handleType(h) !== 'animAnimNode_AdditionalFloatTrack') continue
+    trackSum += additionalFloatTrackEntriesCount(h)
+  }
+
+  const trackShrinkRemoveCountByHandleId = new Map<string, number>()
+  for (const h of handles.values()) {
+    if (handleType(h) !== 'animAnimNode_StackTracksShrinker') continue
+    const tag = readCName(h.Data?.tag)
+    const key = tag && tag !== 'None' ? tag.toLowerCase() : ''
+    const count = key ? (trackTagToCount.get(key) ?? 0) : 0
+    trackShrinkRemoveCountByHandleId.set(h.HandleId, count)
+  }
+
   const suggestedStackCapacity = Math.max(16, Math.min(128, sum || 64))
-  return { shrinkRemoveCountByHandleId, extenderCountByHandleId, suggestedStackCapacity }
+  const suggestedTrackStackCapacity = Math.max(16, Math.min(128, trackSum || 64))
+  return {
+    shrinkRemoveCountByHandleId,
+    extenderCountByHandleId,
+    suggestedStackCapacity,
+    trackShrinkRemoveCountByHandleId,
+    trackExtenderCountByHandleId,
+    suggestedTrackStackCapacity,
+  }
 }
 
 /** Extender transformInfos names for HUD auto-inspect. */

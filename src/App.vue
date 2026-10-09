@@ -223,8 +223,11 @@
                 :event-draft="simEventDraft"
                 :feature-drafts="simFeatureDrafts"
                 :vector-feature-drafts="simVectorFeatureDrafts"
+                :quat-feature-drafts="simQuatFeatureDrafts"
                 :bool-feature-drafts="simBoolFeatureDrafts"
                 :float-vars="simFloatVarDrafts"
+                :vector-vars="simVectorVarDrafts"
+                :quat-vars="simQuatVarDrafts"
                 :bool-vars="simBoolVarDrafts"
                 :int-vars="simIntVarDrafts"
                 :tag-values="simTagValueDrafts"
@@ -255,7 +258,6 @@
                 :set-pose-inspect-bones="simSetPoseInspectBones"
                 :sample-warnings-enabled="simSampleWarningsEnabled"
                 :set-sample-warnings-enabled="simSetSampleWarningsEnabled"
-                :selected-stack-focus="simSelectedStackFocus"
                 :load-anim-database-json="simLoadAnimDatabaseJson"
                 :remove-anim-database="simRemoveAnimDatabase"
                 :update-setup-entry="simUpdateSetupEntry"
@@ -263,7 +265,12 @@
                 :apply-feature="simSetFeature"
                 :apply-bool-feature="simSetBoolFeature"
                 :apply-vector-feature-axis="simSetVectorFeatureAxis"
+                :apply-quat-feature-axis="simSetQuatFeatureAxis"
                 :apply-float-var="simSetFloatVar"
+                :apply-vector-var-axis="simSetVectorVarAxis"
+                :resolve-vector-var-value="simDraftVectorVarValue"
+                :apply-quat-var-axis="simSetQuatVarAxis"
+                :resolve-quat-var-value="simDraftQuatVarValue"
                 :apply-bool-var="simSetBoolVar"
                 :apply-int-var="simSetIntVar"
                 :apply-tag-value="simSetTagValue"
@@ -273,6 +280,7 @@
                 :resolve-feature-value="simDraftFeatureValue"
                 :resolve-bool-feature-value="simDraftBoolFeatureValue"
                 :resolve-vector-feature-value="simDraftVectorFeatureValue"
+                :resolve-quat-feature-value="simDraftQuatFeatureValue"
                 @update:event-draft="simEventDraft = $event"
                 @toggle="simToggle"
                 @toggle-active="simToggleActive"
@@ -832,8 +840,6 @@ import type { DirectChildrenLayoutMode } from './utils/graph/DirectChildrenLayou
 import { getConnectionKey } from './utils/graph/diagramModel'
 import { NodeDefinitionRegistry } from './utils/NodeDefinition'
 import { PixiGraphRenderer } from './utils/PixiGraphRenderer'
-import { buildStackPairing, readExtenderTransformNames } from './utils/sim/stackPairing'
-import { handleType } from './utils/sim/simDataUtils'
 import {
   buildStateMachineRingPresentation,
   DIAGRAM_CONDITIONAL_ENTRY_WRAPPER_TYPE,
@@ -1063,8 +1069,11 @@ const {
   eventDraft: simEventDraft,
   featureDrafts: simFeatureDrafts,
   vectorFeatureDrafts: simVectorFeatureDrafts,
+  quatFeatureDrafts: simQuatFeatureDrafts,
   boolFeatureDrafts: simBoolFeatureDrafts,
   floatVarDrafts: simFloatVarDrafts,
+  vectorVarDrafts: simVectorVarDrafts,
+  quatVarDrafts: simQuatVarDrafts,
   boolVarDrafts: simBoolVarDrafts,
   intVarDrafts: simIntVarDrafts,
   tagValueDrafts: simTagValueDrafts,
@@ -1080,6 +1089,10 @@ const {
   fireAnimEvent: simFireAnimEvent,
   fireAnimEnd: simFireAnimEnd,
   setFloatVar: simSetFloatVar,
+  setVectorVarAxis: simSetVectorVarAxis,
+  draftVectorVarValue: simDraftVectorVarValue,
+  setQuatVarAxis: simSetQuatVarAxis,
+  draftQuatVarValue: simDraftQuatVarValue,
   setBoolVar: simSetBoolVar,
   setIntVar: simSetIntVar,
   setTagValue: simSetTagValue,
@@ -1089,9 +1102,11 @@ const {
   setFeature: simSetFeature,
   setBoolFeature: simSetBoolFeature,
   setVectorFeatureAxis: simSetVectorFeatureAxis,
+  setQuatFeatureAxis: simSetQuatFeatureAxis,
   draftFeatureValue: simDraftFeatureValue,
   draftBoolFeatureValue: simDraftBoolFeatureValue,
   draftVectorFeatureValue: simDraftVectorFeatureValue,
+  draftQuatFeatureValue: simDraftQuatFeatureValue,
   clipStats: simClipStats,
   clipNames: simClipNames,
   setupEntries: simSetupEntries,
@@ -1132,35 +1147,6 @@ const {
   applyProjectSimResources: simApplyProjectSimResources,
   getSkeletonViewPose: simGetSkeletonViewPose,
 } = useAnimgraphSim()
-
-const simSelectedStackFocus = computed(() => {
-  const node = selectedNodeRef.value
-  const data = getActiveRenderData()
-  if (!node || !data) return null
-  const handleId = (node.data?.originalNodeId as string | undefined) ?? ''
-  if (!handleId) return null
-  const h = data.handlesRegistry.get(handleId)
-  if (!h) return null
-  const t = handleType(h)
-  if (t === 'animAnimNode_StackTransformsExtender') {
-    return {
-      kind: 'extender' as const,
-      handleId,
-      names: readExtenderTransformNames(h),
-      removeCount: 0,
-    }
-  }
-  if (t === 'animAnimNode_StackTransformsShrinker') {
-    const pairing = buildStackPairing(data.handlesRegistry)
-    return {
-      kind: 'shrinker' as const,
-      handleId,
-      names: [],
-      removeCount: pairing.shrinkRemoveCountByHandleId.get(handleId) ?? 0,
-    }
-  }
-  return null
-})
 
 watch(
   () => {

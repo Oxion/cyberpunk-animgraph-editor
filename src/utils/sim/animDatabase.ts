@@ -155,11 +155,12 @@ function extractDepotLikePath(archiveFileName: string): string {
   return animDbBasename(n)
 }
 
-export function resolveAnimDatabaseName(
+/** First matching CSV row, or null. */
+export function resolveAnimDatabaseRow(
   db: AnimDatabase,
   inputValues: number[]
-): string {
-  if (inputValues.length !== db.inputCount) return 'None'
+): AnimDbRow | null {
+  if (inputValues.length !== db.inputCount) return null
   for (const row of db.rows) {
     let ok = true
     for (let i = 0; i < db.inputCount; i++) {
@@ -170,9 +171,16 @@ export function resolveAnimDatabaseName(
         break
       }
     }
-    if (ok) return row.animationName || 'None'
+    if (ok) return row
   }
-  return 'None'
+  return null
+}
+
+export function resolveAnimDatabaseName(
+  db: AnimDatabase,
+  inputValues: number[]
+): string {
+  return resolveAnimDatabaseRow(db, inputValues)?.animationName || 'None'
 }
 
 export class AnimDatabaseLibrary {

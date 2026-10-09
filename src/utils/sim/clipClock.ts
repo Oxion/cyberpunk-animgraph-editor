@@ -21,6 +21,8 @@ export type ClipClockState = {
    * Cleared each beginClipClockStep.
    */
   resolveHint?: import('./simTypes').SimClipResolve
+  /** SkOneShotAnim: playing shot until progress hits end (cleared on deactivate). */
+  oneShotRunning?: boolean
 }
 
 export type ClipClockNodeFields = {
@@ -134,9 +136,38 @@ export type AdvanceClipClockResult = {
 }
 
 /**
+ * SkPhaseAnim: map named timeline phase (duration event) → clipFront / clipEnd pads.
+ * Engine CacheClipping: clipFront = eventStart, clipEnd = duration - eventEnd.
+ */
+export function resolvePhaseClipPads(
+  clip: Pick<ClipMeta, 'duration' | 'events'>,
+  phase: string
+): { clipFront: number; clipEnd: number } | null {
+  if (!phase || phase === 'None') return null
+  const key = phase.toLowerCase()
+  const ev =
+    clip.events.find((e) => e.name.toLowerCase() === key && e.duration > 0) ??
+    clip.events.find((e) => e.name.toLowerCase() === key)
+  if (!ev) return null
+  const start = Math.max(0, ev.time)
+  const end = ev.duration > 0 ? ev.time + ev.duration : clip.duration
+  return {
+    clipFront: start,
+    clipEnd: Math.max(0, clip.duration - end),
+  }
+}
+
+export type AdvanceClipClockOpts = {
+  /** SkDurationAnim / SkPhaseWithDuration: stretch clipped window to this many seconds. */
+  targetPlaybackDuration?: number
+  /** SkSpeedAnim / SkPhaseWithSpeed: currTime += speed * dt (default 1). */
+  speedScale?: number
+}
+
+/**
  * One Update tick for an active SkAnim-family node.
- * @param targetPlaybackDuration — SkDurationAnim: stretch clip so clipped window
- *   fits this many seconds (timeScale = clippedDur / duration). Omit for 1:1 dt.
+ * @param opts.targetPlaybackDuration — stretch clip so clipped window fits N seconds.
+ * @param opts.speedScale — multiply dt (engine SkSpeedAnim UpdateRuntimeData).
  */
 export function advanceClipClock(
   state: ClipClockState,
@@ -145,8 +176,12 @@ export function advanceClipClock(
   library: ClipLibrary | null,
   board: SimInputBoard,
   isWrapperActive: (name: string) => boolean,
-  targetPlaybackDuration?: number
+  opts?: number | AdvanceClipClockOpts
 ): AdvanceClipClockResult {
+  const options: AdvanceClipClockOpts =
+    typeof opts === 'number' ? { targetPlaybackDuration: opts } : opts ?? {}
+  const targetPlaybackDuration = options.targetPlaybackDuration
+  const speedScale = options.speedScale ?? 1
   if (state.stepped) {
     return {
       progress: 0,
@@ -213,7 +248,8 @@ export function advanceClipClock(
   }
 
   // SkDurationAnim: timeScale = clippedDur / durationLink (1 if duration ≤ 0)
-  let playDt = Math.max(0, dt)
+  // SkSpeedAnim: playDt = speed * dt (may be negative for reverse)
+  let playDt = dt * speedScale
   if (targetPlaybackDuration !== undefined) {
     const dur = Math.max(0, targetPlaybackDuration)
     const timeScale = dur > 0 && clippedDur > 0 ? clippedDur / dur : 1
@@ -297,6 +333,7 @@ export function beginClipClockStep(clocks: Map<string, ClipClockState>): void {
 export function deactivateClipClock(state: ClipClockState): void {
   state.wasActive = false
   state.stepped = false
+  state.oneShotRunning = undefined
 }
 
 export { Board as ClipClockBoardRef }

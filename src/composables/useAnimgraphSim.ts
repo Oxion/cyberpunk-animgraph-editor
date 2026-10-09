@@ -34,7 +34,11 @@ import {
   SimGraphRunner,
   type SimGraphSlotHost,
 } from '../utils/sim/SimGraphRunner'
-import { SimInputBoard, type SimVec4 } from '../utils/sim/SimInputBoard'
+import {
+  IDENTITY_QUAT_VEC4,
+  SimInputBoard,
+  type SimVec4,
+} from '../utils/sim/SimInputBoard'
 import { ZERO_VEC4 } from '../utils/sim/evalAnimMathExpressionVector'
 import { collectDiscoveredInputs } from '../utils/sim/SimStateMachine'
 import { emptySimSnapshot, type SimSnapshot } from '../utils/sim/simTypes'
@@ -83,9 +87,12 @@ export function useAnimgraphSim() {
   const featureDrafts = ref<Record<string, number>>({})
   /** Vector4 AnimFeature drafts: feature\\0property → {x,y,z,w} */
   const vectorFeatureDrafts = ref<Record<string, SimVec4>>({})
+  const quatFeatureDrafts = ref<Record<string, SimVec4>>({})
   /** Bool AnimFeature drafts: feature\\0property → boolean */
   const boolFeatureDrafts = ref<Record<string, boolean>>({})
   const floatVarDrafts = ref<Record<string, number>>({})
+  const vectorVarDrafts = ref<Record<string, SimVec4>>({})
+  const quatVarDrafts = ref<Record<string, SimVec4>>({})
   const boolVarDrafts = ref<Record<string, boolean>>({})
   const intVarDrafts = ref<Record<string, number>>({})
   /** AnimNode_TagValue data-flow tags */
@@ -166,8 +173,12 @@ export function useAnimgraphSim() {
     void entityTagDrafts.value
     const features: { feature: string; property: string }[] = []
     const vectorFeatures: { feature: string; property: string }[] = []
+    const quatFeatures: { feature: string; property: string }[] = []
     const boolFeatures: { feature: string; property: string }[] = []
     const floatVars: string[] = []
+    const vectorVars: string[] = []
+    const quatVars: string[] = []
+    const transformVars: string[] = []
     const boolVars: string[] = []
     const intVars: string[] = []
     const wrappers: string[] = []
@@ -176,6 +187,7 @@ export function useAnimgraphSim() {
     const entityTags: string[] = []
     const featSeen = new Set<string>()
     const vecFeatSeen = new Set<string>()
+    const quatFeatSeen = new Set<string>()
     const boolFeatSeen = new Set<string>()
     const mergeUnique = (into: string[], seen: Set<string>, names: string[]) => {
       for (const n of names) {
@@ -186,6 +198,9 @@ export function useAnimgraphSim() {
       }
     }
     const floatSeen = new Set<string>()
+    const vectorSeen = new Set<string>()
+    const quatVarSeen = new Set<string>()
+    const transformSeen = new Set<string>()
     const boolSeen = new Set<string>()
     const intSeen = new Set<string>()
     const wrapSeen = new Set<string>()
@@ -209,6 +224,12 @@ export function useAnimgraphSim() {
         vecFeatSeen.add(k)
         vectorFeatures.push(f)
       }
+      for (const f of fromGraph.quatFeatures) {
+        const k = `${f.feature}\0${f.property}`.toLowerCase()
+        if (quatFeatSeen.has(k)) continue
+        quatFeatSeen.add(k)
+        quatFeatures.push(f)
+      }
       for (const f of fromGraph.boolFeatures) {
         const k = `${f.feature}\0${f.property}`.toLowerCase()
         if (boolFeatSeen.has(k)) continue
@@ -216,6 +237,9 @@ export function useAnimgraphSim() {
         boolFeatures.push(f)
       }
       mergeUnique(floatVars, floatSeen, fromGraph.floatVars)
+      mergeUnique(vectorVars, vectorSeen, fromGraph.vectorVars)
+      mergeUnique(quatVars, quatVarSeen, fromGraph.quatVars)
+      mergeUnique(transformVars, transformSeen, fromGraph.transformVars)
       mergeUnique(boolVars, boolSeen, fromGraph.boolVars)
       mergeUnique(intVars, intSeen, fromGraph.intVars)
       mergeUnique(wrappers, wrapSeen, fromGraph.wrappers)
@@ -237,10 +261,16 @@ export function useAnimgraphSim() {
     vectorFeatures.sort((a, b) =>
       `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
     )
+    quatFeatures.sort((a, b) =>
+      `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
+    )
     boolFeatures.sort((a, b) =>
       `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
     )
     floatVars.sort((a, b) => a.localeCompare(b))
+    vectorVars.sort((a, b) => a.localeCompare(b))
+    quatVars.sort((a, b) => a.localeCompare(b))
+    transformVars.sort((a, b) => a.localeCompare(b))
     boolVars.sort((a, b) => a.localeCompare(b))
     intVars.sort((a, b) => a.localeCompare(b))
     wrappers.sort((a, b) => a.localeCompare(b))
@@ -251,8 +281,12 @@ export function useAnimgraphSim() {
     return {
       features,
       vectorFeatures,
+      quatFeatures,
       boolFeatures,
       floatVars,
+      vectorVars,
+      quatVars,
+      transformVars,
       boolVars,
       intVars,
       wrappers,
@@ -336,6 +370,11 @@ export function useAnimgraphSim() {
       if (sep < 0 || !val) continue
       board.value.setVectorFeature(key.slice(0, sep), key.slice(sep + 1), val)
     }
+    for (const [key, val] of Object.entries(quatFeatureDrafts.value)) {
+      const sep = key.indexOf('\0')
+      if (sep < 0 || !val) continue
+      board.value.setQuatFeature(key.slice(0, sep), key.slice(sep + 1), val)
+    }
     for (const [key, val] of Object.entries(boolFeatureDrafts.value)) {
       const sep = key.indexOf('\0')
       if (sep < 0) continue
@@ -345,6 +384,14 @@ export function useAnimgraphSim() {
       const n = Number(val)
       if (!Number.isFinite(n)) continue
       board.value.floatVars.set(name, n)
+    }
+    for (const [name, val] of Object.entries(vectorVarDrafts.value)) {
+      if (!val) continue
+      board.value.vectorVars.set(name, { ...val })
+    }
+    for (const [name, val] of Object.entries(quatVarDrafts.value)) {
+      if (!val) continue
+      board.value.quatVars.set(name, { ...val })
     }
     for (const [name, val] of Object.entries(boolVarDrafts.value)) {
       board.value.boolVars.set(name, val === true)
@@ -526,12 +573,19 @@ export function useAnimgraphSim() {
       vecDrafts[featureKey(f.feature, f.property)] = { ...ZERO_VEC4 }
     }
     vectorFeatureDrafts.value = vecDrafts
+    const quatDrafts: Record<string, SimVec4> = {}
+    for (const f of discovered.value.quatFeatures) {
+      quatDrafts[featureKey(f.feature, f.property)] = { ...IDENTITY_QUAT_VEC4 }
+    }
+    quatFeatureDrafts.value = quatDrafts
     const boolDrafts: Record<string, boolean> = {}
     for (const f of discovered.value.boolFeatures) {
       boolDrafts[featureKey(f.feature, f.property)] = false
     }
     boolFeatureDrafts.value = boolDrafts
     floatVarDrafts.value = {}
+    vectorVarDrafts.value = {}
+    quatVarDrafts.value = {}
     boolVarDrafts.value = {}
     intVarDrafts.value = {}
     tagValueDrafts.value = {}
@@ -646,6 +700,82 @@ export function useAnimgraphSim() {
     floatVarDrafts.value = { ...floatVarDrafts.value, [name]: n }
     board.value.floatVars.set(name, n)
     publish(0)
+  }
+
+  const draftVectorVarValue = (name: string): SimVec4 => {
+    if (!name) return { ...ZERO_VEC4 }
+    const direct = vectorVarDrafts.value[name]
+    if (direct) return { ...direct }
+    const want = name.toLowerCase()
+    for (const [k, v] of Object.entries(vectorVarDrafts.value)) {
+      if (k.toLowerCase() === want) return { ...v }
+    }
+    return { ...ZERO_VEC4 }
+  }
+
+  const setVectorVar = (name: string, value: SimVec4) => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    const v: SimVec4 = {
+      x: Number.isFinite(value.x) ? value.x : 0,
+      y: Number.isFinite(value.y) ? value.y : 0,
+      z: Number.isFinite(value.z) ? value.z : 0,
+      w: Number.isFinite(value.w) ? value.w : 0,
+    }
+    const next: Record<string, SimVec4> = { ...vectorVarDrafts.value }
+    const want = trimmed.toLowerCase()
+    for (const k of Object.keys(next)) {
+      if (k !== trimmed && k.toLowerCase() === want) delete next[k]
+    }
+    next[trimmed] = v
+    vectorVarDrafts.value = next
+    board.value.vectorVars.set(trimmed, v)
+    publish(0)
+  }
+
+  const setVectorVarAxis = (name: string, axis: keyof SimVec4, value: number) => {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return
+    const cur = draftVectorVarValue(name)
+    setVectorVar(name, { ...cur, [axis]: n })
+  }
+
+  const draftQuatVarValue = (name: string): SimVec4 => {
+    if (!name) return { ...IDENTITY_QUAT_VEC4 }
+    const direct = quatVarDrafts.value[name]
+    if (direct) return { ...direct }
+    const want = name.toLowerCase()
+    for (const [k, v] of Object.entries(quatVarDrafts.value)) {
+      if (k.toLowerCase() === want) return { ...v }
+    }
+    return { ...IDENTITY_QUAT_VEC4 }
+  }
+
+  const setQuatVar = (name: string, value: SimVec4) => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    const v: SimVec4 = {
+      x: Number.isFinite(value.x) ? value.x : 0,
+      y: Number.isFinite(value.y) ? value.y : 0,
+      z: Number.isFinite(value.z) ? value.z : 0,
+      w: Number.isFinite(value.w) ? value.w : 1,
+    }
+    const next: Record<string, SimVec4> = { ...quatVarDrafts.value }
+    const want = trimmed.toLowerCase()
+    for (const k of Object.keys(next)) {
+      if (k !== trimmed && k.toLowerCase() === want) delete next[k]
+    }
+    next[trimmed] = v
+    quatVarDrafts.value = next
+    board.value.quatVars.set(trimmed, v)
+    publish(0)
+  }
+
+  const setQuatVarAxis = (name: string, axis: keyof SimVec4, value: number) => {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return
+    const cur = draftQuatVarValue(name)
+    setQuatVar(name, { ...cur, [axis]: n })
   }
 
   const setBoolVar = (name: string, value: boolean) => {
@@ -818,6 +948,56 @@ export function useAnimgraphSim() {
     if (!Number.isFinite(n)) return
     const cur = draftVectorFeatureValue(feature, property)
     setVectorFeature(feature, property, { ...cur, [axis]: n })
+  }
+
+  const draftQuatFeatureValue = (feature: string, property: string): SimVec4 => {
+    const key = featureKey(feature, property)
+    const direct = quatFeatureDrafts.value[key]
+    if (direct) return { ...direct }
+    const want = `${feature}.${property}`.toLowerCase()
+    for (const [k, v] of Object.entries(quatFeatureDrafts.value)) {
+      if (k.toLowerCase() === want) return { ...v }
+    }
+    return { ...IDENTITY_QUAT_VEC4 }
+  }
+
+  const setQuatFeature = (feature: string, property: string, value: SimVec4) => {
+    if (!feature || !property) return
+    const key = featureKey(feature, property)
+    const next: Record<string, SimVec4> = { ...quatFeatureDrafts.value }
+    const want = `${feature}.${property}`.toLowerCase()
+    for (const k of Object.keys(next)) {
+      if (k === key) continue
+      if (k.includes('\0')) {
+        const sep = k.indexOf('\0')
+        const label = `${k.slice(0, sep)}.${k.slice(sep + 1)}`.toLowerCase()
+        if (label === want) delete next[k]
+      } else if (k.toLowerCase() === want) {
+        delete next[k]
+      }
+    }
+    const v: SimVec4 = {
+      x: Number.isFinite(value.x) ? value.x : 0,
+      y: Number.isFinite(value.y) ? value.y : 0,
+      z: Number.isFinite(value.z) ? value.z : 0,
+      w: Number.isFinite(value.w) ? value.w : 1,
+    }
+    next[key] = v
+    quatFeatureDrafts.value = next
+    board.value.setQuatFeature(feature, property, v)
+    publish(0)
+  }
+
+  const setQuatFeatureAxis = (
+    feature: string,
+    property: string,
+    axis: keyof SimVec4,
+    value: number
+  ) => {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return
+    const cur = draftQuatFeatureValue(feature, property)
+    setQuatFeature(feature, property, { ...cur, [axis]: n })
   }
 
   const loadAnimsetJson = (
@@ -1195,8 +1375,11 @@ export function useAnimgraphSim() {
     eventDraft,
     featureDrafts,
     vectorFeatureDrafts,
+    quatFeatureDrafts,
     boolFeatureDrafts,
     floatVarDrafts,
+    vectorVarDrafts,
+    quatVarDrafts,
     boolVarDrafts,
     intVarDrafts,
     tagValueDrafts,
@@ -1215,6 +1398,7 @@ export function useAnimgraphSim() {
     listGlbAnimNames,
     draftFeatureValue,
     draftVectorFeatureValue,
+    draftQuatFeatureValue,
     draftBoolFeatureValue,
     getClip,
     lookupClip,
@@ -1257,6 +1441,12 @@ export function useAnimgraphSim() {
     fireAnimEvent,
     fireAnimEnd,
     setFloatVar,
+    setVectorVar,
+    setVectorVarAxis,
+    draftVectorVarValue,
+    setQuatVar,
+    setQuatVarAxis,
+    draftQuatVarValue,
     setBoolVar,
     setIntVar,
     setTagValue,
@@ -1267,6 +1457,8 @@ export function useAnimgraphSim() {
     setBoolFeature,
     setVectorFeature,
     setVectorFeatureAxis,
+    setQuatFeature,
+    setQuatFeatureAxis,
     rebind,
   }
 }

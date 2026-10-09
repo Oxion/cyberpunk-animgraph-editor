@@ -179,13 +179,14 @@ export function checkCondition(
     }
 
     case 'animAnimStateTransitionCondition_FloatVariable': {
+      // Engine Update: missing FindFloatVariable → i_targetValue = 0, then compare.
       const name = readCName(data.variableName ?? data.eventName)
-      const cur = board.floatVars.get(name)
-      if (cur === undefined) return 'unknown'
-      if (data.compareValue !== undefined) {
-        return compareNumber(cur, readNumber(data.compareValue), data.compareFunc ?? 'equal')
-      }
-      return cur !== 0
+      const cur = board.floatVars.has(name) ? (board.floatVars.get(name) ?? 0) : 0
+      return compareNumber(
+        cur,
+        readNumber(data.compareValue, 0),
+        data.compareFunc ?? 'equal'
+      )
     }
     case 'animAnimStateTransitionCondition_IntVariable': {
       // Engine: missing var → 0

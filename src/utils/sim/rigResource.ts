@@ -349,6 +349,16 @@ export function getRigPartMask(rig: RigEntry, partName: string): Uint8Array | nu
   return null
 }
 
+/** Resolve named float track index on rig (−1 if missing). */
+export function trackIndexByName(rig: RigEntry, name: string): number {
+  if (!name || name === 'None') return -1
+  const key = name.toLowerCase()
+  for (let i = 0; i < rig.trackNames.length; i++) {
+    if (rig.trackNames[i]!.toLowerCase() === key) return i
+  }
+  return -1
+}
+
 let nextRigSeq = 1
 
 export class RigLibrary {

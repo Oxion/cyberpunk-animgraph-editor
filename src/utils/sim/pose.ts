@@ -4,9 +4,14 @@
  *
  * Base bones: [0..boneCount). Stack (procedural) bones: [0..stackCount) with
  * parents in unified space: 0..boneCount-1 = rig, boneCount+i = stack slot i.
+ *
+ * Base tracks: [0..trackCount) = rig.trackNames.
+ * Stack tracks: [0..trackStackCount) named separately (StackTracksExtender);
+ * unified track index: trackCount+i.
  */
 
 import type { RigEntry } from './rigResource'
+import { trackIndexByName } from './rigResource'
 
 export type Pose = {
   boneCount: number
@@ -17,11 +22,11 @@ export type Pose = {
   rotation: Float32Array
   /** Local scale xyz, length boneCount*3 */
   scale: Float32Array
-  /** Float tracks, length trackCount */
+  /** Base float tracks, length trackCount */
   tracks: Float32Array
-  /** Max procedural stack slots */
+  /** Max procedural transform stack slots */
   stackCapacity: number
-  /** Live stack size */
+  /** Live transform stack size */
   stackCount: number
   stackNames: string[]
   /** Parent index in unified space; -1 = root */
@@ -29,6 +34,12 @@ export type Pose = {
   stackTranslation: Float32Array
   stackRotation: Float32Array
   stackScale: Float32Array
+  /** Max procedural track stack slots */
+  trackStackCapacity: number
+  /** Live track stack size */
+  trackStackCount: number
+  trackStackNames: string[]
+  trackStackValues: Float32Array
 }
 
 export const DEFAULT_STACK_CAPACITY = 64
@@ -36,11 +47,13 @@ export const DEFAULT_STACK_CAPACITY = 64
 export function createPose(
   boneCount: number,
   trackCount = 0,
-  stackCapacity = DEFAULT_STACK_CAPACITY
+  stackCapacity = DEFAULT_STACK_CAPACITY,
+  trackStackCapacity = DEFAULT_STACK_CAPACITY
 ): Pose {
   const n = Math.max(0, boneCount | 0)
   const t = Math.max(0, trackCount | 0)
   const sc = Math.max(0, stackCapacity | 0)
+  const tsc = Math.max(0, trackStackCapacity | 0)
   const pose: Pose = {
     boneCount: n,
     trackCount: t,
@@ -55,6 +68,10 @@ export function createPose(
     stackTranslation: new Float32Array(sc * 3),
     stackRotation: new Float32Array(sc * 4),
     stackScale: new Float32Array(sc * 3),
+    trackStackCapacity: tsc,
+    trackStackCount: 0,
+    trackStackNames: Array.from({ length: tsc }, () => ''),
+    trackStackValues: new Float32Array(tsc),
   }
   identityPose(pose)
   return pose
@@ -78,6 +95,7 @@ export function identityPose(pose: Pose): void {
   }
   pose.tracks.fill(0)
   clearStack(pose)
+  clearTrackStack(pose)
 }
 
 export function clearStack(pose: Pose): void {
@@ -100,7 +118,15 @@ export function clearStack(pose: Pose): void {
   }
 }
 
-/** Copy stack slots from src onto dst (clamped to capacity). */
+export function clearTrackStack(pose: Pose): void {
+  pose.trackStackCount = 0
+  for (let i = 0; i < pose.trackStackCapacity; i++) {
+    pose.trackStackNames[i] = ''
+    pose.trackStackValues[i] = 0
+  }
+}
+
+/** Copy transform stack slots from src onto dst (clamped to capacity). */
 export function copyStack(dst: Pose, src: Pose): void {
   const n = Math.min(dst.stackCapacity, src.stackCount)
   dst.stackCount = n
@@ -126,6 +152,19 @@ export function copyStack(dst: Pose, src: Pose): void {
   }
 }
 
+export function copyTrackStack(dst: Pose, src: Pose): void {
+  const n = Math.min(dst.trackStackCapacity, src.trackStackCount)
+  dst.trackStackCount = n
+  for (let i = 0; i < n; i++) {
+    dst.trackStackNames[i] = src.trackStackNames[i] ?? ''
+    dst.trackStackValues[i] = src.trackStackValues[i] ?? 0
+  }
+  for (let i = n; i < dst.trackStackCapacity; i++) {
+    dst.trackStackNames[i] = ''
+    dst.trackStackValues[i] = 0
+  }
+}
+
 export function copyPose(dst: Pose, src: Pose): void {
   const n = Math.min(dst.boneCount, src.boneCount)
   dst.translation.set(src.translation.subarray(0, n * 3))
@@ -134,6 +173,7 @@ export function copyPose(dst: Pose, src: Pose): void {
   const tn = Math.min(dst.trackCount, src.trackCount)
   if (tn > 0) dst.tracks.set(src.tracks.subarray(0, tn))
   copyStack(dst, src)
+  copyTrackStack(dst, src)
 }
 
 /** Linear blend A→B by alpha into dst (engine Interpolate subset). */
@@ -178,6 +218,17 @@ export function interpolatePose(dst: Pose, a: Pose, b: Pose, alpha: number): voi
     }
   } else {
     copyStack(dst, a)
+  }
+  if (a.trackStackCount === b.trackStackCount && a.trackStackCount > 0) {
+    const sn = Math.min(dst.trackStackCapacity, a.trackStackCount)
+    dst.trackStackCount = sn
+    for (let i = 0; i < sn; i++) {
+      dst.trackStackNames[i] = a.trackStackNames[i] ?? ''
+      dst.trackStackValues[i] =
+        (a.trackStackValues[i] ?? 0) * u + (b.trackStackValues[i] ?? 0) * t
+    }
+  } else {
+    copyTrackStack(dst, a)
   }
 }
 
@@ -492,6 +543,54 @@ export function pushStackSlot(
 export function shrinkStack(pose: Pose, removeCount: number): void {
   const n = Math.max(0, Math.min(pose.stackCount, removeCount | 0))
   pose.stackCount = Math.max(0, pose.stackCount - n)
+}
+
+/** Push named stack track (StackTracksExtender). Returns stack slot or -1. */
+export function pushTrackSlot(pose: Pose, name: string, referenceValue: number): number {
+  if (pose.trackStackCount >= pose.trackStackCapacity) return -1
+  const i = pose.trackStackCount
+  pose.trackStackNames[i] = name
+  pose.trackStackValues[i] = referenceValue
+  pose.trackStackCount = i + 1
+  return i
+}
+
+export function shrinkTrackStack(pose: Pose, removeCount: number): void {
+  const n = Math.max(0, Math.min(pose.trackStackCount, removeCount | 0))
+  pose.trackStackCount = Math.max(0, pose.trackStackCount - n)
+}
+
+/**
+ * Unified track index: [0..trackCount) rig base, [trackCount..) stack.
+ * -1 if missing.
+ */
+export function resolveTrackUnified(pose: Pose, rig: RigEntry, name: string): number {
+  if (!name || name === 'None') return -1
+  const base = trackIndexByName(rig, name)
+  if (base >= 0) return base
+  const key = name.toLowerCase()
+  for (let i = 0; i < pose.trackStackCount; i++) {
+    if ((pose.trackStackNames[i] ?? '').toLowerCase() === key) return pose.trackCount + i
+  }
+  return -1
+}
+
+export function readTrackValue(pose: Pose, unified: number): number {
+  if (unified < 0) return 0
+  if (unified < pose.trackCount) return pose.tracks[unified] ?? 0
+  const si = unified - pose.trackCount
+  if (si < 0 || si >= pose.trackStackCount) return 0
+  return pose.trackStackValues[si] ?? 0
+}
+
+export function writeTrackValue(pose: Pose, unified: number, value: number): void {
+  if (unified < 0) return
+  if (unified < pose.trackCount) {
+    pose.tracks[unified] = value
+    return
+  }
+  const si = unified - pose.trackCount
+  if (si >= 0 && si < pose.trackStackCount) pose.trackStackValues[si] = value
 }
 
 const IDENTITY_QUAT = new Float32Array([0, 0, 0, 1])

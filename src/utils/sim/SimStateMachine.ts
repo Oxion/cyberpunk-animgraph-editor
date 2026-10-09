@@ -3,7 +3,7 @@ import {
   MAX_INSTANT_TRANSITION_SEQUENCE_LENGTH,
   transitionHasHigherPriority,
 } from './engineParity'
-import { checkCondition, conditionPasses, collectTimedConditions, type CheckConditionCtx } from './checkCondition'
+import { checkCondition, collectTimedConditions, type CheckConditionCtx } from './checkCondition'
 import {
   handleType,
   readBool,
@@ -26,7 +26,45 @@ function listHandles(
     .filter((h): h is AnimgraphNode => !!h)
 }
 
-/** Overlay: condition T/F on the condition handle and its owning transition/entry handle. */
+/**
+ * Mark condition tree for HUD (CompositeSimultaneous children included).
+ * Evaluates each leaf once — mirrors Composite AND without a second checkCondition pass.
+ */
+function markConditionTree(
+  nodeTruth: Record<string, SimNodeState>,
+  cond: AnimgraphNode | null,
+  board: SimInputBoard,
+  handles: Map<string, AnimgraphNode>,
+  ctx: CheckConditionCtx
+): SimConditionTruth {
+  if (!cond) return false
+  if (handleType(cond) === 'animAnimStateTransitionCondition_CompositeSimultaneous') {
+    const list = cond.Data?.conditions
+    if (!Array.isArray(list) || list.length === 0) {
+      nodeTruth[cond.HandleId] = { active: true, conditionTruth: true }
+      return true
+    }
+    let sawUnknown = false
+    let allPass = true
+    for (const ref of list) {
+      const child = resolveHandle(handles, ref)
+      const r = markConditionTree(nodeTruth, child, board, handles, ctx)
+      if (r === false) allPass = false
+      if (r === 'unknown') sawUnknown = true
+    }
+    const truth: SimConditionTruth = !allPass ? false : sawUnknown ? 'unknown' : true
+    nodeTruth[cond.HandleId] = { active: true, conditionTruth: truth }
+    return truth
+  }
+  const truth = checkCondition(cond, board, handles, ctx)
+  nodeTruth[cond.HandleId] = { active: true, conditionTruth: truth }
+  return truth
+}
+
+/**
+ * Overlay: condition T/F on the condition tree and owning transition/entry.
+ * @returns effective owner truth (forced → true); use instead of a second checkCondition.
+ */
 function recordConditionOverlay(
   nodeTruth: Record<string, SimNodeState>,
   ownerHandleId: string,
@@ -35,15 +73,12 @@ function recordConditionOverlay(
   handles: Map<string, AnimgraphNode>,
   ctx: CheckConditionCtx,
   isForcedToTrue: boolean
-): void {
+): SimConditionTruth {
   const truth: SimConditionTruth = cond
-    ? checkCondition(cond, board, handles, ctx)
+    ? markConditionTree(nodeTruth, cond, board, handles, ctx)
     : isForcedToTrue
       ? true
       : false
-  if (cond) {
-    nodeTruth[cond.HandleId] = { active: true, conditionTruth: truth }
-  }
   // Forced transitions pass regardless — owner badge shows effective pass.
   const ownerTruth: SimConditionTruth = isForcedToTrue ? true : truth
   nodeTruth[ownerHandleId] = {
@@ -51,6 +86,7 @@ function recordConditionOverlay(
     active: true,
     conditionTruth: ownerTruth,
   }
+  return ownerTruth
 }
 
 export class SimStateMachineRuntime {
@@ -185,7 +221,7 @@ export function updateStateMachine(
         duration: 0,
       }
       const cond = resolveHandle(handles, d.condition)
-      recordConditionOverlay(
+      const pass = recordConditionOverlay(
         nodeTruth,
         entry.HandleId,
         cond,
@@ -194,7 +230,7 @@ export function updateStateMachine(
         ctx,
         meta.isForcedToTrue
       )
-      if (!conditionPasses(cond, board, handles, meta.isForcedToTrue, ctx)) continue
+      if (pass !== true) continue
       if (
         transitionHasHigherPriority(
           bestMeta
@@ -264,7 +300,7 @@ export function updateStateMachine(
         if (!enabled) continue
         const meta = readTransitionMeta(desc)
         const cond = resolveHandle(handles, desc.Data?.condition)
-        recordConditionOverlay(
+        const pass = recordConditionOverlay(
           nodeTruth,
           desc.HandleId,
           cond,
@@ -273,7 +309,7 @@ export function updateStateMachine(
           ctx,
           meta.isForcedToTrue
         )
-        if (!conditionPasses(cond, board, handles, meta.isForcedToTrue, ctx)) continue
+        if (pass !== true) continue
         eligible.push(desc.HandleId)
         const cand: TransitionCandidate = { desc, index, isGlobal: false, ...meta }
         if (
@@ -294,7 +330,7 @@ export function updateStateMachine(
       if (!enabled) continue
       const meta = readTransitionMeta(desc)
       const cond = resolveHandle(handles, desc.Data?.condition)
-      recordConditionOverlay(
+      const pass = recordConditionOverlay(
         nodeTruth,
         desc.HandleId,
         cond,
@@ -303,7 +339,7 @@ export function updateStateMachine(
         ctx,
         meta.isForcedToTrue
       )
-      if (!conditionPasses(cond, board, handles, meta.isForcedToTrue, ctx)) continue
+      if (pass !== true) continue
       eligible.push(desc.HandleId)
       const cand: TransitionCandidate = {
         desc,
@@ -380,9 +416,14 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   features: Array<{ feature: string; property: string }>
   /** Vector4 AnimFeatures (VectorInput) — one entry per group.name */
   vectorFeatures: Array<{ feature: string; property: string }>
+  /** Quaternion AnimFeatures (QuaternionInput) — one entry per group.name */
+  quatFeatures: Array<{ feature: string; property: string }>
   /** Bool AnimFeatures (BoolInput / BoolFeature) — one entry per group.name */
   boolFeatures: Array<{ feature: string; property: string }>
   floatVars: string[]
+  vectorVars: string[]
+  quatVars: string[]
+  transformVars: string[]
   boolVars: string[]
   intVars: string[]
   wrappers: string[]
@@ -394,11 +435,16 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
 } {
   const features: Array<{ feature: string; property: string }> = []
   const vectorFeatures: Array<{ feature: string; property: string }> = []
+  const quatFeatures: Array<{ feature: string; property: string }> = []
   const boolFeatures: Array<{ feature: string; property: string }> = []
   const featureKeys = new Set<string>()
   const vectorKeys = new Set<string>()
+  const quatKeys = new Set<string>()
   const boolKeys = new Set<string>()
   const floatVars = new Set<string>()
+  const vectorVars = new Set<string>()
+  const quatVars = new Set<string>()
+  const transformVars = new Set<string>()
   const boolVars = new Set<string>()
   const intVars = new Set<string>()
   const wrappers = new Set<string>()
@@ -432,6 +478,20 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
     }
     vectorKeys.add(key)
     vectorFeatures.push({ feature, property })
+  }
+
+  const addQuatFeature = (feature: string, property: string, preferDisplay = false) => {
+    if (!feature || !property || feature === 'None' || property === 'None') return
+    const key = `${feature}.${property}`.toLowerCase()
+    const existing = quatFeatures.findIndex(
+      (f) => `${f.feature}.${f.property}`.toLowerCase() === key
+    )
+    if (existing >= 0) {
+      if (preferDisplay) quatFeatures[existing] = { feature, property }
+      return
+    }
+    quatKeys.add(key)
+    quatFeatures.push({ feature, property })
   }
 
   const addBoolFeature = (feature: string, property: string, preferDisplay = false) => {
@@ -482,6 +542,9 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
     if (t === 'animAnimNode_VectorInput') {
       addVectorFeature(readCName(d.group), readCName(d.name), true)
     }
+    if (t === 'animAnimNode_QuaternionInput') {
+      addQuatFeature(readCName(d.group), readCName(d.name), true)
+    }
     if (
       t === 'animAnimStateTransitionCondition_FloatVariable' ||
       t === 'animAnimStateTransitionCondition_ModifiedFloatVariable' ||
@@ -489,6 +552,18 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
     ) {
       const name = readCName(d.variableName)
       if (name) floatVars.add(name)
+    }
+    if (t === 'animAnimNode_VectorVariable') {
+      const name = readCName(d.variableName)
+      if (name && name !== 'None') vectorVars.add(name)
+    }
+    if (t === 'animAnimNode_QuaternionVariable') {
+      const name = readCName(d.variableName)
+      if (name && name !== 'None') quatVars.add(name)
+    }
+    if (t === 'animAnimNode_TransformVariable') {
+      const name = readCName(d.variableName)
+      if (name && name !== 'None') transformVars.add(name)
     }
     if (
       t === 'animAnimStateTransitionCondition_BoolVariable' ||
@@ -552,6 +627,9 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   vectorFeatures.sort((a, b) =>
     `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
   )
+  quatFeatures.sort((a, b) =>
+    `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
+  )
   boolFeatures.sort((a, b) =>
     `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
   )
@@ -559,8 +637,12 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   return {
     features,
     vectorFeatures,
+    quatFeatures,
     boolFeatures,
     floatVars: [...floatVars].sort((a, b) => a.localeCompare(b)),
+    vectorVars: [...vectorVars].sort((a, b) => a.localeCompare(b)),
+    quatVars: [...quatVars].sort((a, b) => a.localeCompare(b)),
+    transformVars: [...transformVars].sort((a, b) => a.localeCompare(b)),
     boolVars: [...boolVars].sort((a, b) => a.localeCompare(b)),
     intVars: [...intVars].sort((a, b) => a.localeCompare(b)),
     wrappers: [...wrappers].sort((a, b) => a.localeCompare(b)),
@@ -568,4 +650,97 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
     tags: [...tags].sort((a, b) => a.localeCompare(b)),
     entityTags: [...entityTags].sort((a, b) => a.localeCompare(b)),
   }
+}
+
+/** Engine animAnimStateInterpolationType. */
+export type AnimStateInterpolationType = 'Linear' | 'EaseIn' | 'EaseOut' | 'EaseInOut'
+
+/** Engine animMath.h EasyInCubic. */
+export function easyInCubic(t: number): number {
+  return t * t * t
+}
+
+/** Engine EasyOutCubic. */
+export function easyOutCubic(t: number): number {
+  const u = t - 1
+  return u * u * u + 1
+}
+
+/** Engine EasyInOutCubic. */
+export function easyInOutCubic(t: number): number {
+  const u = 2 * t - 2
+  return t < 0.5 ? 4 * t * t * t : 0.5 * u * u * u + 1
+}
+
+export function parseAnimStateInterpolationType(raw: unknown): AnimStateInterpolationType {
+  const s = String(raw ?? 'Linear')
+  if (s.includes('EaseInOut')) return 'EaseInOut'
+  if (s.includes('EaseOut')) return 'EaseOut'
+  if (s.includes('EaseIn')) return 'EaseIn'
+  return 'Linear'
+}
+
+/** Remap linear transition progress via Blend interpolator curve. */
+export function evaluateAnimStateInterpolation(
+  progress: number,
+  type: AnimStateInterpolationType
+): number {
+  const t = Math.min(1, Math.max(0, progress))
+  switch (type) {
+    case 'EaseIn':
+      return easyInCubic(t)
+    case 'EaseOut':
+      return easyOutCubic(t)
+    case 'EaseInOut':
+      return easyInOutCubic(t)
+    case 'Linear':
+    default:
+      return t
+  }
+}
+
+function readInterpolatorData(
+  raw: unknown,
+  handles: Map<string, AnimgraphNode>
+): Record<string, unknown> | null {
+  const resolved = resolveHandle(handles, raw)
+  if (resolved?.Data && typeof resolved.Data === 'object') {
+    return resolved.Data as Record<string, unknown>
+  }
+  if (!raw || typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  if (o.Data && typeof o.Data === 'object') return o.Data as Record<string, unknown>
+  if (typeof o.$type === 'string') return o
+  return null
+}
+
+/**
+ * Engine GetInterpolatorByIndex: firing transition.interpolator, else anyStateInterpolator.
+ * Only Blend is ported — returns evaluated blend alpha for pose interpolate.
+ */
+export function evaluateSmTransitionBlendAlpha(
+  sm: AnimgraphNode,
+  runtime: SimStateMachineRuntime,
+  handles: Map<string, AnimgraphNode>,
+  linearProgress: number
+): number {
+  let interpRaw: unknown = null
+  if (runtime.firingTransitionHandleId) {
+    const desc = handles.get(runtime.firingTransitionHandleId)
+    interpRaw = desc?.Data?.interpolator ?? null
+  }
+  if (interpRaw == null) {
+    interpRaw = sm.Data?.anyStateInterpolator ?? null
+  }
+  const data = readInterpolatorData(interpRaw, handles)
+  if (!data) return Math.min(1, Math.max(0, linearProgress))
+  // Unknown interpolator types fall back to linear.
+  const t = String(data.$type ?? '')
+  if (t && !t.includes('Interpolator_Blend') && !t.includes('TransitionInterpolator_Blend')) {
+    return Math.min(1, Math.max(0, linearProgress))
+  }
+  return evaluateAnimStateInterpolation(
+    linearProgress,
+    parseAnimStateInterpolationType(data.interpolationType)
+  )
 }
