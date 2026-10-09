@@ -27,8 +27,7 @@ export interface NodeDetailsContext {
   saveNodeText: (text: string) => void
   saveNodeLabel: (label: string) => void
   logSelectedNodeData: () => void
-  nodeDetailsSections: Record<NodeDetailsSection, boolean>
-  toggleNodeDetailsSection: (section: NodeDetailsSection) => void
+  activeNodeDetailsTab: Ref<NodeDetailsSection>
   selectedNodeConnectionCount: ComputedRef<number>
   nodePosition: Ref<{ x: number; y: number }>
   applyNodePosition: () => void

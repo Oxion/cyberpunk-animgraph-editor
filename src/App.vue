@@ -1486,16 +1486,7 @@ const bodyPresentRightInset = computed(
       : 16
 )
 
-const nodeDetailsSections = reactive<Record<NodeDetailsSection, boolean>>({
-  general: true,
-  transform: false,
-  connections: false,
-  typeDetails: true,
-})
-
-const toggleNodeDetailsSection = (section: NodeDetailsSection) => {
-  nodeDetailsSections[section] = !nodeDetailsSections[section]
-}
+const activeNodeDetailsTab = ref<NodeDetailsSection>('typeDetails')
 
 const selectedNodeConnectionCount = computed(() => {
   if (!selectedNodeConnectionsComputed.value) return 0
@@ -2221,8 +2212,7 @@ setupNodeDetailsContext({
   saveNodeText,
   saveNodeLabel,
   logSelectedNodeData,
-  nodeDetailsSections,
-  toggleNodeDetailsSection,
+  activeNodeDetailsTab,
   selectedNodeConnectionCount,
   nodePosition: nodePositionRef,
   applyNodePosition,

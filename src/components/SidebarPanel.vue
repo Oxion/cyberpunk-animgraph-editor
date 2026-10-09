@@ -248,9 +248,9 @@ defineExpose({ HEADER_HEIGHT })
 .sidebar-panel__subheader {
   display: flex;
   flex-shrink: 0;
-  align-items: center;
-  min-height: 32px;
-  padding: 0 8px;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0;
   border-bottom: 1px solid #1f1f1f;
   background: #383838;
 }

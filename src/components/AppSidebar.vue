@@ -43,6 +43,16 @@ const asHtmlEl = (el: Element | ComponentPublicInstance | null): HTMLElement | n
   return null
 }
 
+/** Prefer a laid-out box; skip display:contents / zero-size wrappers. */
+const measureBoxEl = (el: HTMLElement): HTMLElement => {
+  const rect = el.getBoundingClientRect()
+  if (rect.height > 0 || rect.width > 0) return el
+  for (const child of Array.from(el.children)) {
+    if (child instanceof HTMLElement) return measureBoxEl(child)
+  }
+  return el
+}
+
 const measureResizeHandle = () => {
   const sidebar = sidebarEl.value
   const cards = sidebarCardsEl.value
@@ -52,7 +62,9 @@ const measureResizeHandle = () => {
     return
   }
 
-  const kids = Array.from(cards.children) as HTMLElement[]
+  const kids = Array.from(cards.children).filter(
+    (el): el is HTMLElement => el instanceof HTMLElement
+  )
   if (kids.length === 0) {
     resizeHandleTop.value = 0
     resizeHandleHeight.value = 0
@@ -60,8 +72,8 @@ const measureResizeHandle = () => {
   }
 
   const sidebarRect = sidebar.getBoundingClientRect()
-  const firstRect = kids[0].getBoundingClientRect()
-  const lastRect = kids[kids.length - 1].getBoundingClientRect()
+  const firstRect = measureBoxEl(kids[0]).getBoundingClientRect()
+  const lastRect = measureBoxEl(kids[kids.length - 1]).getBoundingClientRect()
 
   resizeHandleTop.value = Math.max(0, firstRect.top - sidebarRect.top)
   resizeHandleHeight.value = Math.max(0, lastRect.bottom - firstRect.top)
@@ -92,8 +104,12 @@ const observeCards = (cards: HTMLElement | null) => {
     disconnectChildObservers()
     for (const child of Array.from(cards.children)) {
       if (!(child instanceof HTMLElement)) continue
+      const target = measureBoxEl(child)
       const childObserver = new ResizeObserver(() => measureResizeHandle())
-      childObserver.observe(child)
+      childObserver.observe(target)
+      if (target !== child) {
+        childObserver.observe(child)
+      }
       childObservers.push(childObserver)
     }
     measureResizeHandle()
