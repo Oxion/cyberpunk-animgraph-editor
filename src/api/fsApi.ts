@@ -35,13 +35,21 @@ const browserFs = {
     )
   },
 
-  async saveJson(filePath: string, data: unknown): Promise<void> {
+  async saveText(filePath: string, text: string): Promise<void> {
     await readJson(
-      await fetch('/api/fs/save', {
+      await fetch(`/api/fs/save?path=${encodeURIComponent(filePath)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: filePath, data }),
+        body: text,
       })
+    )
+  },
+
+  async saveJson(filePath: string, data: unknown, opts?: FsSaveJsonOptions): Promise<void> {
+    const pretty = opts?.pretty !== false
+    await browserFs.saveText(
+      filePath,
+      pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data)
     )
   },
 
@@ -90,12 +98,31 @@ export async function fsLoadJson(filePath: string): Promise<unknown> {
   return browserFs.loadJson(filePath)
 }
 
-export async function fsSaveJson(filePath: string, data: unknown): Promise<void> {
+export type FsSaveJsonOptions = {
+  /** Default true. Use false for large binary-ish payloads (clip poses). */
+  pretty?: boolean
+}
+
+export async function fsSaveText(filePath: string, text: string): Promise<void> {
   if (isElectron()) {
-    await electronFs().writeText(filePath, JSON.stringify(data, null, 2))
+    await electronFs().writeText(filePath, text)
     return
   }
-  return browserFs.saveJson(filePath, data)
+  return browserFs.saveText(filePath, text)
+}
+
+export async function fsSaveJson(
+  filePath: string,
+  data: unknown,
+  opts?: FsSaveJsonOptions
+): Promise<void> {
+  const pretty = opts?.pretty !== false
+  const text = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data)
+  if (isElectron()) {
+    await electronFs().writeText(filePath, text)
+    return
+  }
+  return browserFs.saveText(filePath, text)
 }
 
 export async function fsMkdir(folderPath: string): Promise<void> {

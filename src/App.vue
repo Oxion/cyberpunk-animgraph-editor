@@ -255,7 +255,6 @@
                 :remove-rig="simRemoveRig"
                 :set-active-rig="simSetActiveRig"
                 :clear-rig-library="simClearRigLibrary"
-                :set-pose-inspect-bones="simSetPoseInspectBones"
                 :sample-warnings-enabled="simSampleWarningsEnabled"
                 :set-sample-warnings-enabled="simSetSampleWarningsEnabled"
                 :update-warnings-enabled="simUpdateWarningsEnabled"
@@ -294,7 +293,6 @@
                 @fire-anim-end="simFireAnimEnd"
                 @clear-clips="simClearClipLibrary"
                 @clear-anim-db="simClearAnimDatabaseLibrary"
-                @open-skeleton="openSimSkeletonFromPanel"
               />
             </SidebarPanel>
 
@@ -386,7 +384,7 @@
             Pin
           </button>
           <button
-            v-if="win.type !== 'settings' && win.type !== 'render-stats' && win.type !== 'sim-skeleton'"
+            v-if="win.type !== 'settings' && win.type !== 'render-stats' && win.type !== 'sim-skeleton' && win.type !== 'sim-status'"
             type="button"
             class="app-window-toolbar-btn"
             title="Fit view"
@@ -423,8 +421,9 @@
           v-else-if="win.type === 'sim-skeleton'"
           :diagram-id="win.payload.diagramId"
           :minimized="win.minimized"
-          :get-pose="(source) => getSimSkeletonPose(source)"
+          :get-pose="getSimSkeletonPose"
         />
+        <SimStatusWindowContent v-else-if="win.type === 'sim-status'" />
         <div
           v-else-if="win.type === 'lens' && windowRenderData(win.id) && windowLensTop(win.id)"
           class="app-window-stack-host"
@@ -615,13 +614,100 @@ import LensWindowContent from './components/LensWindowContent.vue'
 import NodeDetailsPanel from './components/NodeDetailsPanel.vue'
 import RenderStatsWindowContent from './components/RenderStatsWindowContent.vue'
 import SimSkeletonWindowContent from './components/SimSkeletonWindowContent.vue'
+import SimStatusWindowContent from './components/SimStatusWindowContent.vue'
 import SettingsWindowContent from './components/SettingsWindowContent.vue'
 import SidebarPanel from './components/SidebarPanel.vue'
 import SimPanel from './components/SimPanel.vue'
 import StateLinksViewContent from './components/StateLinksViewContent.vue'
 import StateMachineRingWindowContent from './components/StateMachineRingWindowContent.vue'
 import ToolsPanel from './components/ToolsPanel.vue'
-import { useAnimgraphSim } from './composables/useAnimgraphSim'
+import {
+  disposeAnimgraphSim,
+  simActive,
+  simActiveRigBones,
+  simActiveRigParts,
+  simAnimDatabases,
+  simAnimDbStats,
+  simApplyProjectSimResources,
+  simBoolFeatureDrafts,
+  simBoolVarDrafts,
+  simClearAnimDatabaseLibrary,
+  simClearAnimsetGlb,
+  simClearClipLibrary,
+  simClearRigLibrary,
+  simClipNames,
+  simClipPoseSets,
+  simClipStats,
+  simDeactivate,
+  simDiscovered,
+  simDraftBoolFeatureValue,
+  simDraftFeatureValue,
+  simDraftQuatFeatureValue,
+  simDraftQuatVarValue,
+  simDraftVectorFeatureValue,
+  simDraftVectorVarValue,
+  simEntityTagDrafts,
+  simEventDraft,
+  simFeatureDrafts,
+  simFireAnimEnd,
+  simFireAnimEvent,
+  simFireExternal,
+  simFloatVarDrafts,
+  simGetClip,
+  simGetClipGlbInfo,
+  simGetCachedClipPoseCompactText,
+  simGetProjectSimResources,
+  simGetSkeletonViewPose,
+  simIntVarDrafts,
+  simIsClipActive,
+  simListClipSets,
+  simListGlbAnimNames,
+  simLoadAnimDatabaseJson,
+  simLoadAnimsetGlb,
+  simLoadAnimsetJson,
+  simLoadRigJson,
+  simLookupClip,
+  simQuatFeatureDrafts,
+  simQuatVarDrafts,
+  simRebind,
+  simRemoveAnimDatabase,
+  simRemoveEntityTag,
+  simRemoveRig,
+  simRemoveSetupEntry,
+  simReset,
+  simRigEntries,
+  simSampleWarningsEnabled,
+  simSetActiveRig,
+  simSetBoolFeature,
+  simSetBoolVar,
+  simSetEntityTag,
+  simSetFeature,
+  simSetFloatVar,
+  simSetIntVar,
+  simSetQuatFeatureAxis,
+  simSetQuatVarAxis,
+  simSetSampleWarningsEnabled,
+  simSetSpeed,
+  simSetStackCaptureHandleIds,
+  simSetTagValue,
+  simSetUpdateWarningsEnabled,
+  simSetupEntries,
+  simSetVectorFeatureAxis,
+  simSetVectorVarAxis,
+  simSetWrapperWeight,
+  simSnapshot as simSnapshotRef,
+  simSnapshotForDiagram,
+  simSnapshotsByDiagram,
+  simStep,
+  simTagValueDrafts,
+  simToggle,
+  simToggleActive,
+  simUpdateSetupEntry,
+  simUpdateWarningsEnabled,
+  simVectorFeatureDrafts,
+  simVectorVarDrafts,
+  simWrapperWeightDrafts,
+} from './stores/animgraphSim'
 import {
   flushPendingHandleFieldEditImpl,
   notifySelectedHandleDataChanged,
@@ -681,7 +767,6 @@ import {
   focusWindow,
   minimizeWindow,
   openRenderStatsWindow,
-  openSimSkeletonWindow,
   openStateLinksWindow,
   pinWindow,
   sizeWindowToContent,
@@ -1065,93 +1150,6 @@ const suppressNextGraphInteraction = ref(false)
 const graphCanvas = computed(() => focusHostEl.value)
     
 
-const {
-  snapshot: simSnapshotRef,
-  discovered: simDiscovered,
-  eventDraft: simEventDraft,
-  featureDrafts: simFeatureDrafts,
-  vectorFeatureDrafts: simVectorFeatureDrafts,
-  quatFeatureDrafts: simQuatFeatureDrafts,
-  boolFeatureDrafts: simBoolFeatureDrafts,
-  floatVarDrafts: simFloatVarDrafts,
-  vectorVarDrafts: simVectorVarDrafts,
-  quatVarDrafts: simQuatVarDrafts,
-  boolVarDrafts: simBoolVarDrafts,
-  intVarDrafts: simIntVarDrafts,
-  tagValueDrafts: simTagValueDrafts,
-  entityTagDrafts: simEntityTagDrafts,
-  wrapperWeightDrafts: simWrapperWeightDrafts,
-  toggle: simToggle,
-  step: simStep,
-  reset: simReset,
-  toggleActive: simToggleActive,
-  deactivate: simDeactivate,
-  setSpeed: simSetSpeed,
-  fireExternal: simFireExternal,
-  fireAnimEvent: simFireAnimEvent,
-  fireAnimEnd: simFireAnimEnd,
-  setFloatVar: simSetFloatVar,
-  setVectorVarAxis: simSetVectorVarAxis,
-  draftVectorVarValue: simDraftVectorVarValue,
-  setQuatVarAxis: simSetQuatVarAxis,
-  draftQuatVarValue: simDraftQuatVarValue,
-  setBoolVar: simSetBoolVar,
-  setIntVar: simSetIntVar,
-  setTagValue: simSetTagValue,
-  setEntityTag: simSetEntityTag,
-  removeEntityTag: simRemoveEntityTag,
-  setWrapperWeight: simSetWrapperWeight,
-  setFeature: simSetFeature,
-  setBoolFeature: simSetBoolFeature,
-  setVectorFeatureAxis: simSetVectorFeatureAxis,
-  setQuatFeatureAxis: simSetQuatFeatureAxis,
-  draftFeatureValue: simDraftFeatureValue,
-  draftBoolFeatureValue: simDraftBoolFeatureValue,
-  draftVectorFeatureValue: simDraftVectorFeatureValue,
-  draftQuatFeatureValue: simDraftQuatFeatureValue,
-  clipStats: simClipStats,
-  clipNames: simClipNames,
-  setupEntries: simSetupEntries,
-  animDbStats: simAnimDbStats,
-  animDatabases: simAnimDatabases,
-  rigEntries: simRigEntries,
-  activeRigBones: simActiveRigBones,
-  activeRigParts: simActiveRigParts,
-  clipPoseSets: simClipPoseSets,
-  getClipGlbInfo: simGetClipGlbInfo,
-  listGlbAnimNames: simListGlbAnimNames,
-  getClip: simGetClip,
-  lookupClip: simLookupClip,
-  isClipActive: simIsClipActive,
-  listClipSets: simListClipSets,
-  loadAnimsetJson: simLoadAnimsetJson,
-  loadAnimsetGlb: simLoadAnimsetGlb,
-  clearAnimsetGlb: simClearAnimsetGlb,
-  clearClipLibrary: simClearClipLibrary,
-  loadRigJson: simLoadRigJson,
-  removeRig: simRemoveRig,
-  setActiveRig: simSetActiveRig,
-  clearRigLibrary: simClearRigLibrary,
-  setPoseInspectBones: simSetPoseInspectBones,
-  sampleWarningsEnabled: simSampleWarningsEnabled,
-  setSampleWarningsEnabled: simSetSampleWarningsEnabled,
-  updateWarningsEnabled: simUpdateWarningsEnabled,
-  setUpdateWarningsEnabled: simSetUpdateWarningsEnabled,
-  setStackCaptureHandleIds: simSetStackCaptureHandleIds,
-  loadAnimDatabaseJson: simLoadAnimDatabaseJson,
-  clearAnimDatabaseLibrary: simClearAnimDatabaseLibrary,
-  removeAnimDatabase: simRemoveAnimDatabase,
-  updateSetupEntry: simUpdateSetupEntry,
-  removeSetupEntry: simRemoveSetupEntry,
-  rebind: simRebind,
-  active: simActive,
-  snapshotForDiagram: simSnapshotForDiagram,
-  snapshotsByDiagram: simSnapshotsByDiagram,
-  getProjectSimResources: simGetProjectSimResources,
-  applyProjectSimResources: simApplyProjectSimResources,
-  getSkeletonViewPose: simGetSkeletonViewPose,
-} = useAnimgraphSim()
-
 watch(
   () => {
     const node = selectedNodeRef.value
@@ -1367,10 +1365,14 @@ const openRenderStatsForActive = () => {
   openRenderStatsWindow(target)
 }
 
-const getSimSkeletonPose = (source: 'full' | 'active' | 'atNode') => {
+const getSimSkeletonPose = (
+  source: 'full' | 'selected' | 'atNode',
+  selectedDiagramId?: string | null
+) => {
   const handleId = (selectedNodeRef.value?.data?.originalNodeId as string | undefined) ?? null
   return simGetSkeletonViewPose(source, {
     activeDiagramId: requireActiveDiagramIdSafe(),
+    selectedDiagramId,
     captureHandleId: handleId,
   })
 }
@@ -1381,10 +1383,6 @@ const requireActiveDiagramIdSafe = (): string | null => {
   } catch {
     return null
   }
-}
-
-const openSimSkeletonFromPanel = () => {
-  openSimSkeletonWindow({ diagramId: requireActiveDiagramIdSafe() ?? 'main' })
 }
 
 // Connection settings
@@ -2269,6 +2267,7 @@ bindGraphDocument({
   simReset,
   simRebind,
   getProjectSimResources: simGetProjectSimResources,
+  getCachedClipPoseCompactText: simGetCachedClipPoseCompactText,
   applyProjectSimResources: simApplyProjectSimResources,
 })
 bindGraphNavigation({})
@@ -2345,6 +2344,7 @@ onUnmounted(() => {
   document.removeEventListener('pointermove', trackLastPointerClient)
   window.removeEventListener('resize', onWindowResize)
   disposeSidebarLayout()
+  disposeAnimgraphSim()
 })
 </script>
 

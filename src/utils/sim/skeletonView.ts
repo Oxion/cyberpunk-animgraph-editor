@@ -75,13 +75,20 @@ export function createSkeletonView(
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-  renderer.setSize(width, height, false)
+  // updateStyle=true so CSS size matches CSS pixels (not device buffer).
+  // With false + dpr>1 the canvas layout box grows and joint picking NDC breaks.
+  renderer.setSize(width, height, true)
+  renderer.domElement.style.display = 'block'
+  renderer.domElement.style.width = '100%'
+  renderer.domElement.style.height = '100%'
   container.appendChild(renderer.domElement)
 
   const labelRenderer = new CSS2DRenderer()
   labelRenderer.setSize(width, height)
   labelRenderer.domElement.style.position = 'absolute'
   labelRenderer.domElement.style.inset = '0'
+  labelRenderer.domElement.style.width = '100%'
+  labelRenderer.domElement.style.height = '100%'
   labelRenderer.domElement.style.pointerEvents = 'none'
   labelRenderer.domElement.style.overflow = 'hidden'
   container.appendChild(labelRenderer.domElement)
@@ -148,8 +155,9 @@ export function createSkeletonView(
   scene.add(selectPoints)
 
   // Pick: raycast against joint Points — threshold is world-space hit radius (not drawn).
+  // Keep larger than visual pixel size at typical orbit distance (~2m).
   const raycaster = new THREE.Raycaster()
-  raycaster.params.Points = { threshold: 0.012 }
+  raycaster.params.Points = { threshold: 0.05 }
   const pointerNdc = new THREE.Vector2()
   let pointerDownX = 0
   let pointerDownY = 0
@@ -269,11 +277,24 @@ export function createSkeletonView(
     pointerDown = true
     pointerDownX = ev.clientX
     pointerDownY = ev.clientY
+    // Keep pointerup on canvas even if Select/overlays steal the target.
+    try {
+      renderer.domElement.setPointerCapture(ev.pointerId)
+    } catch {
+      /* ignore */
+    }
   }
 
   const onPointerUp = (ev: PointerEvent) => {
     if (!pointerDown || ev.button !== 0) return
     pointerDown = false
+    if (renderer.domElement.hasPointerCapture?.(ev.pointerId)) {
+      try {
+        renderer.domElement.releasePointerCapture(ev.pointerId)
+      } catch {
+        /* ignore */
+      }
+    }
     const dx = ev.clientX - pointerDownX
     const dy = ev.clientY - pointerDownY
     if (dx * dx + dy * dy > 16) return // drag → orbit, ignore
@@ -282,6 +303,7 @@ export function createSkeletonView(
 
   renderer.domElement.addEventListener('pointerdown', onPointerDown)
   renderer.domElement.addEventListener('pointerup', onPointerUp)
+  renderer.domElement.addEventListener('pointercancel', onPointerUp)
 
   const clearLabels = () => {
     for (const L of labels) {
@@ -389,6 +411,7 @@ export function createSkeletonView(
     jointGeom = new THREE.BufferGeometry()
     jointGeom.setAttribute('position', new THREE.BufferAttribute(jointPos, 3))
     joints = new THREE.Points(jointGeom, jointMat)
+    joints.frustumCulled = false
     scene.add(joints)
 
     // Stack edges (parent may be rig or another stack slot — unified index)
@@ -417,6 +440,7 @@ export function createSkeletonView(
       stackJointGeom = new THREE.BufferGeometry()
       stackJointGeom.setAttribute('position', new THREE.BufferAttribute(stackJointPos, 3))
       stackJoints = new THREE.Points(stackJointGeom, stackJointMat)
+      stackJoints.frustumCulled = false
       scene.add(stackJoints)
     }
 
@@ -498,6 +522,8 @@ export function createSkeletonView(
     }
     jointAttr.needsUpdate = true
     jointGeom.setDrawRange(0, boneN)
+    // Points.raycast early-outs on a stale boundingSphere (still at origin after rebuild).
+    jointGeom.computeBoundingSphere()
 
     const lineAttr = boneGeom.getAttribute('position') as THREE.BufferAttribute
     const lineArr = lineAttr.array as Float32Array
@@ -535,6 +561,7 @@ export function createSkeletonView(
       }
       sjAttr.needsUpdate = true
       stackJointGeom!.setDrawRange(0, stackN)
+      stackJointGeom!.computeBoundingSphere()
     }
 
     if (showLabels && labels.length === total) {
@@ -559,8 +586,12 @@ export function createSkeletonView(
     const hh = Math.max(1, h | 0)
     camera.aspect = ww / hh
     camera.updateProjectionMatrix()
-    renderer.setSize(ww, hh, false)
+    renderer.setSize(ww, hh, true)
+    renderer.domElement.style.width = '100%'
+    renderer.domElement.style.height = '100%'
     labelRenderer.setSize(ww, hh)
+    labelRenderer.domElement.style.width = '100%'
+    labelRenderer.domElement.style.height = '100%'
   }
 
   const render = () => {

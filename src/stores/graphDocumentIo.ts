@@ -1,5 +1,5 @@
 import { ref, watch, type Ref } from 'vue'
-import { fsLoadJson, fsSaveJson } from '../api/fsApi'
+import { fsDelete, fsLoadJson, fsSaveJson, fsSaveText } from '../api/fsApi'
 import { pushRecentFile } from './fsFavorites'
 import type { AnimgraphData, AnimgraphNode } from '../utils/graph/animgraphTypes'
 import {
@@ -11,6 +11,7 @@ import {
 import type { DirectChildrenLayoutMode } from '../utils/graph/DirectChildrenLayout'
 import type { AnimClipSetupJson } from '../utils/sim/clipLibrary'
 import type { AnimDatabaseLibraryJson } from '../utils/sim/animDatabase'
+import type { ClipPoseLibraryJson } from '../utils/sim/clipPoseLibrary'
 import { AnimgraphParser } from '../utils/AnimgraphParser'
 import {
   collectFloatingHandleIdsForSave,
@@ -51,12 +52,16 @@ export type GraphDocumentIoHost = {
    */
   promptDiagramId?: (mode: 'first' | 'additional') => Promise<string | null>
   /** Snapshot sim clip setup + anim DBs for project export (optional). */
-  getProjectSimResources?: () => {
+  getProjectSimResources?: (opts?: { includeClipPoses?: boolean }) => {
     clipSetup?: AnimClipSetupJson
     animDatabaseLibrary?: AnimDatabaseLibraryJson
     entityTags?: Record<string, boolean>
     rigLibrary?: import('../utils/sim/rigResource').RigLibraryJson
+    clipPoseLibrary?: ClipPoseLibraryJson
+    clipPoseRevision?: number
   } | null
+  /** Compact clip-pose JSON for sidecar write (null if empty). */
+  getCachedClipPoseCompactText?: () => string | null
   /** Restore / clear sim resources after project load. */
   applyProjectSimResources?: (
     resources: {
@@ -64,9 +69,20 @@ export type GraphDocumentIoHost = {
       animDatabaseLibrary?: AnimDatabaseLibraryJson
       entityTags?: Record<string, boolean>
       rigLibrary?: import('../utils/sim/rigResource').RigLibraryJson
+      clipPoseLibrary?: ClipPoseLibraryJson
     } | null
   ) => void
 }
+
+/** Sibling of project.json holding processed GLB pose curves (compact). */
+export function clipPoseSidecarPath(projectPath: string): string {
+  return projectPath.toLowerCase().endsWith('.json')
+    ? projectPath.replace(/\.json$/i, '.clipposes.json')
+    : `${projectPath}.clipposes.json`
+}
+
+/** Last pose revision written to sidecar — skip rewrite when unchanged. */
+let lastSavedClipPoseRev = -1
 
 let host: GraphDocumentIoHost | null = null
 function requireHost(): GraphDocumentIoHost {
@@ -206,6 +222,7 @@ export const loadProjectFile = async (data: AnimgraphProjectFile) => {
     animDatabaseLibrary: data.animDatabaseLibrary,
     entityTags: data.entityTags,
     rigLibrary: data.rigLibrary,
+    clipPoseLibrary: data.clipPoseLibrary,
   })
   presentReplacedProject(data.mainDiagramId)
   clearProjectDirty()
@@ -309,9 +326,26 @@ export const beginLoadFromPath = async (
     if (intent === 'open' && detected === 'project') {
       if (hasProject.value && !confirmDiscardUnsavedChanges()) return
       diagramViewReadyRef.value = false
-      await loadProjectFile(data as AnimgraphProjectFile)
+      const project = data as AnimgraphProjectFile
+      if (project.clipPoseLibrary == null) {
+        try {
+          const poses = await fsLoadJson(clipPoseSidecarPath(filePath))
+          if (
+            poses &&
+            typeof poses === 'object' &&
+            Array.isArray((poses as ClipPoseLibraryJson).sets)
+          ) {
+            project.clipPoseLibrary = poses as ClipPoseLibraryJson
+          }
+        } catch {
+          // no sidecar
+        }
+      }
+      await loadProjectFile(project)
       currentLoadedPath.value = filePath
       pushRecentFile(filePath)
+      lastSavedClipPoseRev =
+        requireHost().getProjectSimResources?.()?.clipPoseRevision ?? -1
       showWelcomeOpen.value = false
       showAddAnimgraphDialog.value = false
       return
@@ -506,10 +540,15 @@ export const loadSampleData = async () => {
   }
 }
 
-export const createProjectExportData = (): AnimgraphProjectFile | null => {
+export const createProjectExportData = (opts?: {
+  /** Embed poses in the project JSON (download / single-file). FS save uses sidecar instead. */
+  includeClipPoses?: boolean
+}): AnimgraphProjectFile | null => {
   const project = projectRef.value
   if (!project?.diagrams.length) return null
-  const sim = requireHost().getProjectSimResources?.() ?? null
+  const includeClipPoses = opts?.includeClipPoses === true
+  const sim =
+    requireHost().getProjectSimResources?.({ includeClipPoses }) ?? null
   const out: AnimgraphProjectFile = {
     type: 'animgraph-project',
     version: 1,
@@ -527,17 +566,24 @@ export const createProjectExportData = (): AnimgraphProjectFile | null => {
   if (sim?.rigLibrary != null && (sim.rigLibrary.entries?.length ?? 0) > 0) {
     out.rigLibrary = sim.rigLibrary
   }
+  if (
+    includeClipPoses &&
+    sim?.clipPoseLibrary != null &&
+    (sim.clipPoseLibrary.sets?.length ?? 0) > 0
+  ) {
+    out.clipPoseLibrary = sim.clipPoseLibrary
+  }
   return out
 }
 
 export const exportProject = () => {
-  const projectData = createProjectExportData()
+  const projectData = createProjectExportData({ includeClipPoses: true })
   if (!projectData) return
 
   try {
     const estimatedSize = estimateDataSize(projectData)
     console.log('Estimated project export size:', formatFileSize(estimatedSize))
-    const dataStr = formatJson(projectData, 'pretty')
+    const dataStr = formatJson(projectData, 'compact')
     const dataBlob = new Blob([dataStr], { type: 'application/json' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(dataBlob)
@@ -829,12 +875,30 @@ watch(hasProject, (value) => {
 })
 
 export const saveGraphToServer = async (filePath: string) => {
-  const projectData = createProjectExportData()
+  // Poses go to sidecar (compact); keep main project lean/pretty for fast saves.
+  const projectData = createProjectExportData({ includeClipPoses: false })
   if (!projectData) return
 
   const abs = filePath.endsWith('.json') ? filePath : `${filePath}.json`
+  const posePath = clipPoseSidecarPath(abs)
   try {
     await fsSaveJson(abs, projectData)
+    const host = requireHost()
+    const poseRev = host.getProjectSimResources?.()?.clipPoseRevision ?? -1
+    const poseText = host.getCachedClipPoseCompactText?.() ?? null
+    if (poseText != null) {
+      if (poseRev !== lastSavedClipPoseRev) {
+        await fsSaveText(posePath, poseText)
+        lastSavedClipPoseRev = poseRev
+      }
+    } else if (lastSavedClipPoseRev >= 0) {
+      try {
+        await fsDelete(posePath)
+      } catch {
+        // ignore missing sidecar
+      }
+      lastSavedClipPoseRev = -1
+    }
     currentLoadedPath.value = abs
     pushRecentFile(abs)
     clearProjectDirty()

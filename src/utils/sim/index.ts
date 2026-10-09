@@ -1,5 +1,6 @@
 export * from './engineParity'
 export * from './simTypes'
+export * from './simSnapshot'
 export * from './simDataUtils'
 export * from './floatDyn'
 export * from './boneOpDyn'

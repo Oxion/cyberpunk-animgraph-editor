@@ -94,7 +94,7 @@ import {
   type SimSampleLog,
 } from './simSampleLog'
 import type { SimNodeState, SimSampleWarning } from './simTypes'
-import { SIM_SAMPLE_WARNINGS_MAX } from './simTypes'
+import { SIM_SAMPLE_WARNINGS_MAX } from './simSnapshot'
 
 /**
  * Sample support: follows Update `updateSucc` only (no Data pose rediscovery).

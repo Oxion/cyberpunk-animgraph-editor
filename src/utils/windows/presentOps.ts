@@ -50,6 +50,11 @@ const OPS: Record<AppWindowType, WindowPresentOps> = {
     preferredWidth: 640,
     preferredHeight: 520,
   },
+  'sim-status': {
+    placement: 'dialog',
+    preferredWidth: 360,
+    preferredHeight: 320,
+  },
 }
 
 export function getWindowPresentOps(type: AppWindowType): WindowPresentOps {

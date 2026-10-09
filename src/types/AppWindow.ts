@@ -1,4 +1,11 @@
-export type AppWindowType = 'lens' | 'sm-ring' | 'state-links' | 'settings' | 'render-stats' | 'sim-skeleton'
+export type AppWindowType =
+  | 'lens'
+  | 'sm-ring'
+  | 'state-links'
+  | 'settings'
+  | 'render-stats'
+  | 'sim-skeleton'
+  | 'sim-status'
 
 export interface LensWindowPayload {
   rootNodeId: string
@@ -36,6 +43,9 @@ export interface SimSkeletonWindowPayload {
   /** Root diagram Sample source (usually MAIN). */
   diagramId: string
 }
+
+/** Empty payload — content reads from animgraphSim store. */
+export type SimStatusWindowPayload = Record<string, never>
 
 export interface AppWindowRect {
   x?: number
@@ -96,4 +106,8 @@ export type AppWindowState =
   | (AppWindowBase & {
       type: 'sim-skeleton'
       payload: SimSkeletonWindowPayload
+    })
+  | (AppWindowBase & {
+      type: 'sim-status'
+      payload: SimStatusWindowPayload
     })

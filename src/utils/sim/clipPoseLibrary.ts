@@ -43,6 +43,39 @@ export type ClipPoseSetView = {
   jointCount: number
 }
 
+/** Project-persisted pose curves (post GLB parse: additive strip + RED Z-up). */
+export type ClipPoseLibraryJson = {
+  $type: 'animClipPoseLibrary'
+  sets: ClipPoseSetJson[]
+}
+
+export type ClipPoseSetJson = {
+  id: string
+  sourceLabel: string
+  setupEntryId: string | null
+  jointNames: string[]
+  animations: ClipPoseAnimJson[]
+}
+
+export type ClipPoseAnimJson = {
+  name: string
+  duration: number
+  animationType: AnimAnimationType
+  channels: ClipPoseChannelJson[]
+}
+
+/** Compact: base64 of little-endian Float32. Legacy: number[]. */
+export type ClipPoseTrackJson =
+  | { encoding: 'f32b64'; times: string; values: string }
+  | { times: number[]; values: number[] }
+
+export type ClipPoseChannelJson = {
+  joint: string
+  t?: ClipPoseTrackJson
+  r?: ClipPoseTrackJson
+  s?: ClipPoseTrackJson
+}
+
 type PoseSet = {
   id: string
   sourceLabel: string
@@ -53,6 +86,58 @@ type PoseSet = {
 }
 
 let nextPoseSetId = 1
+
+function f32ToB64(arr: Float32Array): string {
+  const bytes = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength)
+  const chunk = 0x8000
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length)))
+  }
+  return btoa(binary)
+}
+
+function b64ToF32(b64: string): Float32Array {
+  const binary = atob(b64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new Float32Array(bytes.buffer)
+}
+
+function trackToJson(
+  track: { times: Float32Array; values: Float32Array } | undefined
+): ClipPoseTrackJson | undefined {
+  if (!track) return undefined
+  return {
+    encoding: 'f32b64',
+    times: f32ToB64(track.times),
+    values: f32ToB64(track.values),
+  }
+}
+
+function trackFromJson(raw: ClipPoseTrackJson | undefined): {
+  times: Float32Array
+  values: Float32Array
+} | undefined {
+  if (!raw) return undefined
+  if (
+    'encoding' in raw &&
+    raw.encoding === 'f32b64' &&
+    typeof raw.times === 'string' &&
+    typeof raw.values === 'string'
+  ) {
+    const times = b64ToF32(raw.times)
+    const values = b64ToF32(raw.values)
+    if (!times.length || !values.length) return undefined
+    return { times, values }
+  }
+  if (!Array.isArray(raw.times) || !Array.isArray(raw.values)) return undefined
+  if (raw.times.length === 0 || raw.values.length === 0) return undefined
+  return {
+    times: Float32Array.from(raw.times),
+    values: Float32Array.from(raw.values),
+  }
+}
 
 export class ClipPoseLibrary {
   private sets: PoseSet[] = []
@@ -144,6 +229,77 @@ export class ClipPoseLibrary {
     const before = this.sets.length
     this.sets = this.sets.filter((s) => s.id !== id)
     return this.sets.length < before
+  }
+
+  toJson(): ClipPoseLibraryJson {
+    return {
+      $type: 'animClipPoseLibrary',
+      sets: this.sets.map((s) => ({
+        id: s.id,
+        sourceLabel: s.sourceLabel,
+        setupEntryId: s.setupEntryId,
+        jointNames: [...s.jointNames],
+        animations: [...s.animations.values()].map((a) => ({
+          name: a.name,
+          duration: a.duration,
+          animationType: a.animationType,
+          channels: [...a.channels.entries()].map(([joint, ch]) => ({
+            joint,
+            t: trackToJson(ch.t),
+            r: trackToJson(ch.r),
+            s: trackToJson(ch.s),
+          })),
+        })),
+      })),
+    }
+  }
+
+  loadFromJson(data: ClipPoseLibraryJson): void {
+    this.clear()
+    if (!data || !Array.isArray(data.sets)) return
+    let maxNum = 0
+    for (const raw of data.sets) {
+      if (!raw || !Array.isArray(raw.animations)) continue
+      const id =
+        typeof raw.id === 'string' && raw.id.trim()
+          ? raw.id.trim()
+          : `pose_${nextPoseSetId++}`
+      const m = /^pose_(\d+)$/.exec(id)
+      if (m) maxNum = Math.max(maxNum, Number(m[1]))
+      const animations = new Map<string, ClipPoseAnim>()
+      for (const a of raw.animations) {
+        if (!a?.name || typeof a.name !== 'string') continue
+        const channels = new Map<string, JointChannels>()
+        for (const ch of a.channels ?? []) {
+          if (!ch?.joint || typeof ch.joint !== 'string') continue
+          const jc: JointChannels = {}
+          const t = trackFromJson(ch.t)
+          const r = trackFromJson(ch.r)
+          const s = trackFromJson(ch.s)
+          if (t) jc.t = t
+          if (r) jc.r = r
+          if (s) jc.s = s
+          if (jc.t || jc.r || jc.s) channels.set(ch.joint, jc)
+        }
+        animations.set(a.name, {
+          name: a.name,
+          duration: Number.isFinite(a.duration) ? a.duration : 0,
+          animationType: (a.animationType || 'Normal') as AnimAnimationType,
+          channels,
+        })
+      }
+      this.sets.push({
+        id,
+        sourceLabel: raw.sourceLabel || id,
+        setupEntryId:
+          typeof raw.setupEntryId === 'string' && raw.setupEntryId.trim()
+            ? raw.setupEntryId.trim()
+            : null,
+        animations,
+        jointNames: Array.isArray(raw.jointNames) ? [...raw.jointNames] : [],
+      })
+    }
+    if (maxNum >= nextPoseSetId) nextPoseSetId = maxNum + 1
   }
 
   hasAnimation(name: string, setupEntryId?: string | null): boolean {

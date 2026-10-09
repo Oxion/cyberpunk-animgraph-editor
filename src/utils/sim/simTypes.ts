@@ -75,9 +75,6 @@ export type SimSampleWarning = {
   maskName?: string
 }
 
-/** Cap per Sample frame to keep HUD bounded. */
-export const SIM_SAMPLE_WARNINGS_MAX = 64
-
 /** Update-path diagnostic (clip clocks / speed / AnimEnd). */
 export type SimUpdateWarning = {
   code: 'clip-zero-speed'
@@ -86,9 +83,6 @@ export type SimUpdateWarning = {
   /** Effective playback speed when code is clip-zero-speed */
   speed?: number
 }
-
-/** Cap per Update frame to keep HUD bounded. */
-export const SIM_UPDATE_WARNINGS_MAX = 64
 
 /** Active SkAnim clip clock sample (all stepped clocks this frame). */
 export interface SimActiveClip {
@@ -111,34 +105,13 @@ export interface SimStatus {
   clips: SimActiveClip[]
 }
 
-/** Dual inspect: pose at selected node vs final root Sample. */
-export type SimBoneInspect = {
-  atNode?: import('./pose').BoneTrs
-  result?: import('./pose').BoneTrs
-}
-
+/** Lightweight sample diagnostics in the snapshot (no stack/inspect mapping). */
 export interface SimPoseStats {
   ok: boolean
   reason?: string
   boneCount: number
   trackCount: number
   sampleMs: number
-  /** Selected bone TRS for HUD inspect (sparse); atNode from capture, result from root */
-  inspect?: Record<string, SimBoneInspect>
-  /** Procedural transform stack after Sample (prefer capture at selected node) */
-  stack?: {
-    count: number
-    names: string[]
-    bones: Record<string, import('./pose').BoneTrs>
-  }
-  /** Procedural track stack after Sample (StackTracksExtender; same pose source as stack) */
-  trackStack?: {
-    count: number
-    names: string[]
-    values: Record<string, number>
-  }
-  /** HandleId of pose capture used for HUD (null/omit = final root pose) */
-  stackSourceHandleId?: string
   /** Anim names on sample that resolved clip meta but had no glb in winning set */
   missingGlb?: string[]
   /** Sample warnings this frame (only when detect enabled) */
@@ -151,60 +124,16 @@ export interface SimSnapshot {
   time: number
   playing: boolean
   speed: number
+  /**
+   * Monotonic generation bumped each publish/sample.
+   * Use for derived pose-stats cache keys and Vue frame ticks (not display `f=`).
+   */
+  poseGen: number
   sms: Record<string, SimSmState>
   nodes: Record<string, SimNodeState>
   /** null on first step after bind/reset — consumers should full-apply `nodes`. */
   nodeDelta: SimNodeDelta | null
   status: SimStatus
-  /** Sample-phase HUD (pooled pose stays on runner) */
+  /** Sample-phase diagnostics (pooled pose stays on runner; stack/inspect via getDerivedPoseStats) */
   poseStats?: SimPoseStats | null
-}
-
-export function emptySimStatus(): SimStatus {
-  return { rootHandleId: null, clips: [] }
-}
-
-export function emptySimSnapshot(): SimSnapshot {
-  return {
-    time: 0,
-    playing: false,
-    speed: 1,
-    sms: {},
-    nodes: {},
-    nodeDelta: null,
-    status: emptySimStatus(),
-    poseStats: null,
-  }
-}
-
-const WEIGHT_EPS = 1e-4
-
-export function simNodeStateEqual(a: SimNodeState, b: SimNodeState): boolean {
-  if (a.active !== b.active) return false
-  if (a.conditionTruth !== b.conditionTruth) return false
-  if (a.alpha !== b.alpha) return false
-  const aw = a.weight
-  const bw = b.weight
-  if (aw === bw) return true
-  if (typeof aw === 'number' && typeof bw === 'number') {
-    return Math.abs(aw - bw) <= WEIGHT_EPS
-  }
-  return aw === undefined && bw === undefined
-}
-
-export function diffSimNodeStates(
-  prev: Record<string, SimNodeState>,
-  next: Record<string, SimNodeState>
-): SimNodeDelta {
-  const changes: Record<string, SimNodeState> = {}
-  const removed: string[] = []
-  for (const id of Object.keys(next)) {
-    const n = next[id]!
-    const p = prev[id]
-    if (!p || !simNodeStateEqual(p, n)) changes[id] = n
-  }
-  for (const id of Object.keys(prev)) {
-    if (!(id in next)) removed.push(id)
-  }
-  return { changes, removed }
 }

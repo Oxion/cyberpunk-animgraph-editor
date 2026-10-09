@@ -7,6 +7,7 @@ import type {
   LensWindowPayload,
   RenderStatsWindowPayload,
   SimSkeletonWindowPayload,
+  SimStatusWindowPayload,
   SmRingWindowPayload,
   StateLinksWindowPayload,
 } from '../types/AppWindow'
@@ -344,6 +345,65 @@ export const openSimSkeletonWindow = (payload?: Partial<SimSkeletonWindowPayload
   return id
 }
 
+/** Size mode when a window exists. */
+export type AppWindowSizeUiState = 'minimized' | 'default' | 'maximized'
+
+/**
+ * Presentation state for window toggle buttons / chrome.
+ * Priority: closed → minimized → forward → maximized → default.
+ */
+export type AppWindowUiState =
+  | 'closed'
+  | 'forward'
+  | AppWindowSizeUiState
+
+export function resolveWindowUiState(
+  win: AppWindowState | undefined | null,
+): AppWindowUiState {
+  if (!win) return 'closed'
+  if (win.minimized) return 'minimized'
+  if (activeWindowId.value === win.id) return 'forward'
+  if (win.maximized) return 'maximized'
+  return 'default'
+}
+
+/** First window of `type` (singletons / “any of this type”). */
+export function windowUiStateByType(type: AppWindowType): AppWindowUiState {
+  return resolveWindowUiState(windows.value.find((w) => w.type === type))
+}
+
+export function windowUiStateById(id: string): AppWindowUiState {
+  return resolveWindowUiState(windows.value.find((w) => w.id === id))
+}
+
+export const openSimStatusWindow = (_payload?: Partial<SimStatusWindowPayload>) => {
+  const existing = windows.value.find((w) => w.type === 'sim-status')
+  if (existing && existing.type === 'sim-status') {
+    existing.title = 'Sim Status'
+    activateWindow(existing)
+    return existing.id
+  }
+  const id = 'win_sim_status'
+  const rect = openRectFor('sim-status')
+  const win: AppWindowState = {
+    id,
+    type: 'sim-status',
+    title: 'Sim Status',
+    x: rect.x,
+    y: rect.y,
+    width: Math.max(rect.width, 320),
+    height: Math.max(rect.height, 240),
+    zIndex: bumpZ(),
+    minimized: false,
+    preview: false,
+    maximized: false,
+    payload: {},
+  }
+  windows.value.push(win)
+  activeWindowId.value = id
+  return id
+}
+
 export const closeWindow = (id: string) => {
   windows.value = windows.value.filter((w) => w.id !== id)
   clearWindowStack(id)
@@ -453,10 +513,19 @@ export const pinWindow = (id: string) => {
 export const clearWindows = () => {
   // Keep Settings / Render Stats / Sim Skeleton across graph reloads.
   const kept = windows.value.filter(
-    (w) => w.type === 'settings' || w.type === 'render-stats' || w.type === 'sim-skeleton'
+    (w) =>
+      w.type === 'settings' ||
+      w.type === 'render-stats' ||
+      w.type === 'sim-skeleton' ||
+      w.type === 'sim-status'
   )
   for (const w of windows.value) {
-    if (w.type !== 'settings' && w.type !== 'render-stats' && w.type !== 'sim-skeleton') {
+    if (
+      w.type !== 'settings' &&
+      w.type !== 'render-stats' &&
+      w.type !== 'sim-skeleton' &&
+      w.type !== 'sim-status'
+    ) {
       clearWindowStack(w.id)
     }
   }

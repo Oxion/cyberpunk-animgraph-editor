@@ -9,6 +9,7 @@ import type { AnimgraphData, AnimgraphNode } from './animgraphTypes'
 import type { AnimClipSetupJson } from '../sim/clipLibrary'
 import type { AnimDatabaseLibraryJson } from '../sim/animDatabase'
 import type { RigLibraryJson } from '../sim/rigResource'
+import type { ClipPoseLibraryJson } from '../sim/clipPoseLibrary'
 
 /** Roots: world/stage; children: local offset to parent. */
 export interface RenderNode {
@@ -184,6 +185,11 @@ export interface AnimgraphProjectFile {
   entityTags?: Record<string, boolean>
   /** Offline Sample rig palette (one active). */
   rigLibrary?: RigLibraryJson
+  /**
+   * Processed GLB pose curves (optional embed for single-file download).
+   * FS save uses sibling `*.clipposes.json` instead.
+   */
+  clipPoseLibrary?: ClipPoseLibraryJson
 }
 
 /** Default id suggestion for the first diagram; not a hard requirement. */

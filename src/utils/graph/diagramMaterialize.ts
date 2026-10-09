@@ -150,10 +150,6 @@ function asAnimgraphData(payload: Record<string, unknown> & { $type: string }): 
   return payload as AnimgraphObject
 }
 
-function wrapPriority(data: Record<string, unknown>): number {
-  return typeof data.priority === 'number' ? data.priority : 0
-}
-
 function nodeColor(nodeType: string): string {
   const colors: Record<string, string> = {
     animAnimNode_StateMachine: '#ff6b6b',

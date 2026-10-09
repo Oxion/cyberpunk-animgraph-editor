@@ -112,7 +112,7 @@ import {
   qsFromPosRotScale,
   slerpQs,
 } from './poseFk'
-import { readBoneTrs, readStackBoneTrs, copyPose, createPose, DEFAULT_STACK_CAPACITY, type Pose } from './pose'
+import { copyPose, createPose, DEFAULT_STACK_CAPACITY, type Pose } from './pose'
 import {
   allocSampleScratch,
   sampleGraphPose,
@@ -145,7 +145,7 @@ import {
   diffSimNodeStates,
   emptySimSnapshot,
   SIM_UPDATE_WARNINGS_MAX,
-} from './simTypes'
+} from './simSnapshot'
 
 /** Classify SkAnim clip lookup for HUD (ok / empty / no-lib / missing / gated). */
 function classifyClipResolve(
@@ -647,6 +647,8 @@ export type SimStepOptions = {
   slotHost?: SimGraphSlotHost
   parentPoseUpdate?: () => void
   parentPoseSample?: (out: Pose) => boolean
+  /** Monotonic publish generation stamped onto the returned snapshot. */
+  poseGen?: number
 }
 
 function isGraphSlotType(t: string | null | undefined): boolean {
@@ -3145,8 +3147,6 @@ export class SimGraphRunner {
   private clipPoseLibrary: ClipPoseLibrary | null = null
   /** Active rig (from RigLibrary.getActive). */
   private activeRig: RigEntry | null = null
-  /** Bone names to copy into poseStats.inspect each frame. */
-  poseInspectBones: string[] = []
   /**
    * When true, Sample appends diagnostics (null-pose Blend2, …) into poseStats.warnings.
    * Off by default — lastWrittenNull bookkeeping skipped.
@@ -3303,59 +3303,6 @@ export class SimGraphRunner {
     if (!dest) return
     copyPose(dest, pose)
     this.capturedPoseThisFrame.add(handleId)
-  }
-
-  /** Prefer captured pose for a registered handle; else final sampleOut. */
-  private resolveHudPose(): { pose: Pose; handleId: string | null } | null {
-    if (!this.sampleOut) return null
-    for (const id of this.stackCaptureHandleIds) {
-      if (!this.capturedPoseThisFrame.has(id)) continue
-      const captured = this.capturedPoses.get(id)
-      if (captured) return { pose: captured, handleId: id }
-    }
-    return { pose: this.sampleOut, handleId: null }
-  }
-
-  private buildStackStats(
-    pose: Pose
-  ): NonNullable<SimSnapshot['poseStats']>['stack'] | undefined {
-    if (pose.stackCount <= 0) return undefined
-    const names: string[] = []
-    const bones: Record<string, NonNullable<ReturnType<typeof readStackBoneTrs>>> = {}
-    for (let i = 0; i < pose.stackCount; i++) {
-      const n = pose.stackNames[i] || `stack_${i}`
-      names.push(n)
-      const trs = readStackBoneTrs(pose, i)
-      if (trs) bones[n] = trs
-    }
-    return { count: pose.stackCount, names, bones }
-  }
-
-  private buildTrackStackStats(
-    pose: Pose
-  ): NonNullable<SimSnapshot['poseStats']>['trackStack'] | undefined {
-    if (pose.trackStackCount <= 0) return undefined
-    const names: string[] = []
-    const values: Record<string, number> = {}
-    for (let i = 0; i < pose.trackStackCount; i++) {
-      const n = pose.trackStackNames[i] || `track_stack_${i}`
-      names.push(n)
-      values[n] = pose.trackStackValues[i] ?? 0
-    }
-    return { count: pose.trackStackCount, names, values }
-  }
-
-  private readNamedTrs(pose: Pose, boneName: string): ReturnType<typeof readBoneTrs> {
-    const rig = this.activeRig
-    if (!rig) return null
-    const key = boneName.toLowerCase()
-    const idx = rig.boneIndexByName.get(key)
-    if (idx !== undefined) return readBoneTrs(pose, idx)
-    for (let si = 0; si < pose.stackCount; si++) {
-      if ((pose.stackNames[si] ?? '').toLowerCase() !== key) continue
-      return readStackBoneTrs(pose, si)
-    }
-    return null
   }
 
   /** Force StaticSwitch Init re-eval (entity tags / HasAnimation context changed). */
@@ -3715,30 +3662,12 @@ export class SimGraphRunner {
         )
       }
       flushSimSampleLog(sampleLog)
-      const hud = this.resolveHudPose()
-      const atNodePose = hud?.handleId ? hud.pose : null
-      const resultPose = this.sampleOut
-      const inspect: NonNullable<SimSnapshot['poseStats']>['inspect'] = {}
-      for (const boneName of this.poseInspectBones) {
-        const atNode = atNodePose ? this.readNamedTrs(atNodePose, boneName) : undefined
-        const result = this.readNamedTrs(resultPose, boneName) ?? undefined
-        if (!atNode && !result) continue
-        inspect[boneName] = {
-          ...(atNode ? { atNode } : {}),
-          ...(result ? { result } : {}),
-        }
-      }
-      const stackPose = atNodePose ?? resultPose
       poseStats = {
         ok: result.ok,
         reason: result.reason,
         boneCount: rig.boneNames.length,
         trackCount: rig.trackNames.length,
         sampleMs: result.sampleMs,
-        inspect: Object.keys(inspect).length ? inspect : undefined,
-        stack: this.buildStackStats(stackPose),
-        trackStack: this.buildTrackStackStats(stackPose),
-        stackSourceHandleId: hud?.handleId ?? undefined,
         missingGlb: result.missingGlb,
         warnings: result.warnings,
         updateWarnings,
@@ -3763,6 +3692,7 @@ export class SimGraphRunner {
       time,
       playing,
       speed,
+      poseGen: options?.poseGen ?? 0,
       sms,
       nodes,
       nodeDelta,
@@ -3774,11 +3704,17 @@ export class SimGraphRunner {
     }
   }
 
-  getSnapshotEmpty(time: number, playing: boolean, speed: number): SimSnapshot {
+  getSnapshotEmpty(
+    time: number,
+    playing: boolean,
+    speed: number,
+    poseGen = 0
+  ): SimSnapshot {
     const snap = emptySimSnapshot()
     snap.time = time
     snap.playing = playing
     snap.speed = speed
+    snap.poseGen = poseGen
     for (const [id, rt] of this.runtimes) {
       snap.sms[id] = rt.toState()
     }

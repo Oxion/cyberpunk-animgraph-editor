@@ -144,6 +144,7 @@ const iconFor = (type: string): string => {
   if (type === 'settings') return '⚙'
   if (type === 'render-stats') return '▤'
   if (type === 'sim-skeleton') return '◇'
+  if (type === 'sim-status') return '◫'
   return '▢'
 }
 </script>

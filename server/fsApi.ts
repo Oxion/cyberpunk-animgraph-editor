@@ -64,15 +64,20 @@ export function createFsRouter(projectRoot: string): Router {
     }
   })
 
-  router.post('/save', (req: Request, res: Response) => {
-    try {
-      const rawPath = (req.body?.path as string) || ''
-      const data = req.body?.data
-      res.json(api.saveJson(rawPath, data))
-    } catch (error) {
-      sendFsError(res, 'Failed to save file', error)
+  /** Path in query; body = file text (avoids nested JSON parse of huge projects). */
+  router.post(
+    '/save',
+    express.text({ type: '*/*', limit: '512mb' }),
+    (req: Request, res: Response) => {
+      try {
+        const rawPath = String(req.query.path ?? '')
+        const text = typeof req.body === 'string' ? req.body : ''
+        res.json(api.writeText(rawPath, text))
+      } catch (error) {
+        sendFsError(res, 'Failed to save file', error)
+      }
     }
-  })
+  )
 
   router.post('/mkdir', (req: Request, res: Response) => {
     try {
@@ -96,7 +101,6 @@ export function createFsRouter(projectRoot: string): Router {
 export function createFsApiApp(projectRoot: string): Express {
   ensureGraphsRoot(projectRoot)
   const app = express()
-  app.use(express.json({ limit: '50mb' }))
   app.use((req: Request, res: Response, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
@@ -106,6 +110,16 @@ export function createFsApiApp(projectRoot: string): Express {
       return
     }
     next()
+  })
+  // /api/fs/save uses express.text on the route — skip global json there.
+  const jsonParser = express.json({ limit: '50mb' })
+  app.use((req: Request, res: Response, next) => {
+    const url = req.url ?? ''
+    if (req.method === 'POST' && (url === '/api/fs/save' || url.startsWith('/api/fs/save?'))) {
+      next()
+      return
+    }
+    jsonParser(req, res, next)
   })
   app.get('/api/data', (_req, res) => {
     res.json({ message: 'Data from Animgraph Editor API' })

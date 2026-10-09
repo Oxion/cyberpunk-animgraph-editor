@@ -1,4 +1,4 @@
-import { computed, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { MAIN_DIAGRAM_ID } from '../utils/graph/diagramTypes'
 import {
   activeDiagramId,
@@ -34,17 +34,33 @@ import {
   SimGraphRunner,
   type SimGraphSlotHost,
 } from '../utils/sim/SimGraphRunner'
+import { SimInputBoard } from '../utils/sim/SimInputBoard'
 import {
   IDENTITY_QUAT_VEC4,
-  SimInputBoard,
+  ZERO_VEC4,
   type SimVec4,
-} from '../utils/sim/SimInputBoard'
-import { ZERO_VEC4 } from '../utils/sim/evalAnimMathExpressionVector'
+} from '../utils/sim/evalAnimMathExpressionVector'
 import { collectDiscoveredInputs } from '../utils/sim/SimStateMachine'
-import { emptySimSnapshot, type SimSnapshot } from '../utils/sim/simTypes'
+import type { SimSnapshot } from '../utils/sim/simTypes'
+import { emptySimSnapshot } from '../utils/sim/simSnapshot'
 import { isSimSampleLogEnabled } from '../utils/sim/simSampleLog'
-import { RigLibrary, type RigLibraryJson, type RigEntryView } from '../utils/sim/rigResource'
-import { ClipPoseLibrary, type ClipPoseSetView } from '../utils/sim/clipPoseLibrary'
+import { RigLibrary, type RigLibraryJson, type RigEntry, type RigEntryView } from '../utils/sim/rigResource'
+import {
+  ClipPoseLibrary,
+  type ClipPoseLibraryJson,
+  type ClipPoseSetView,
+} from '../utils/sim/clipPoseLibrary'
+import type { Pose } from '../utils/sim/pose'
+import {
+  buildRigBonesStats,
+  buildStackBonesStats,
+  buildStackNamesStats,
+  buildTrackStackStats,
+  poseRefKey,
+  type DerivedPoseRef,
+  type DerivedPoseStats,
+  type DerivedPoseStatsNeed,
+} from '../utils/sim/poseDerivedStats'
 
 function resolveRootDiagramId(ids: string[]): string | null {
   if (!ids.length) return null
@@ -63,6 +79,13 @@ function findDiagramIdBySlotName(ids: string[], slotName: string): string | null
   return ids.find((id) => id.toLowerCase() === lower) ?? null
 }
 
+type DerivedCacheEntry = DerivedPoseStats & {
+  /** Resolved once per cache key. */
+  pose?: Pose | null
+  resolved?: boolean
+}
+
+/** Sim runtime composable. Prefer singleton via `stores/animgraphSim`. */
 export function useAnimgraphSim() {
   const clock = shallowRef(new SimClock())
   const board = shallowRef(new SimInputBoard())
@@ -77,10 +100,15 @@ export function useAnimgraphSim() {
   const animDbRevision = ref(0)
   const rigRevision = ref(0)
   const clipPoseRevision = ref(0)
-  /** Per-diagram overlay snapshots from last publish. */
+  /** Per-diagram overlay snapshots from last publish (source of truth). */
   const snapshotsByDiagram = shallowRef<Record<string, SimSnapshot>>({})
-  // Shallow: publish replaces the whole object; avoid deep-walking nodes each frame.
-  const snapshot = shallowRef<SimSnapshot>(emptySimSnapshot())
+  /** Bumped each publish; stamped onto every diagram snapshot. */
+  let poseGenCounter = 0
+  /** Last stack-capture handle ids (selection); first is preferred HUD pose. */
+  const stackCaptureHandleIds = ref<string[]>([])
+  /** Cache: poseGen|diagramId|poseKey → resolved pose + filled derived fields. */
+  const derivedPoseCache = new Map<string, DerivedCacheEntry>()
+  let derivedPoseCacheGen = -1
   const enabled = ref(false)
   const active = ref(false)
   const eventDraft = ref('')
@@ -122,8 +150,36 @@ export function useAnimgraphSim() {
     rigRevision.value++
   }
 
+  /** Cached project pose payload (invalidated on bumpClipPose). */
+  let cachedClipPoseJson: ClipPoseLibraryJson | null = null
+  let cachedClipPoseCompact: string | null = null
+  let cachedClipPoseAtRev = -1
+
+  const getCachedClipPoseLibraryJson = (): ClipPoseLibraryJson | undefined => {
+    if (clipPoseLibrary.value.size === 0) return undefined
+    if (cachedClipPoseJson == null || cachedClipPoseAtRev !== clipPoseRevision.value) {
+      cachedClipPoseJson = clipPoseLibrary.value.toJson()
+      cachedClipPoseCompact = null
+      cachedClipPoseAtRev = clipPoseRevision.value
+    }
+    return cachedClipPoseJson
+  }
+
+  /** Compact JSON text for sidecar save (no pretty-print). */
+  const getCachedClipPoseCompactText = (): string | null => {
+    const json = getCachedClipPoseLibraryJson()
+    if (json == null || !(json.sets?.length > 0)) return null
+    if (cachedClipPoseCompact == null || cachedClipPoseAtRev !== clipPoseRevision.value) {
+      cachedClipPoseCompact = JSON.stringify(json)
+      cachedClipPoseAtRev = clipPoseRevision.value
+    }
+    return cachedClipPoseCompact
+  }
+
   const bumpClipPose = () => {
     clipPoseRevision.value++
+    cachedClipPoseJson = null
+    cachedClipPoseCompact = null
   }
 
   const syncSampleResourcesToRunners = () => {
@@ -156,18 +212,21 @@ export function useAnimgraphSim() {
     return r
   }
 
-  const publishActiveSnapshot = () => {
+  /**
+   * Active-diagram view into `snapshotsByDiagram` (not a separate store).
+   * Falls back to clock-only empty snap when this diagram was not stepped.
+   */
+  const snapshot = computed((): SimSnapshot => {
     const id = activeDiagramId.value
-    if (id && snapshotsByDiagram.value[id]) {
-      snapshot.value = snapshotsByDiagram.value[id]!
-      return
+    const hit = id ? snapshotsByDiagram.value[id] : undefined
+    if (hit) return hit
+    return {
+      ...emptySimSnapshot(),
+      time: clock.value.time,
+      playing: clock.value.playing,
+      speed: clock.value.speed,
     }
-    // No snap for this diagram this frame (e.g. GraphSlot not on active path).
-    snapshot.value = emptySimSnapshot()
-    snapshot.value.time = clock.value.time
-    snapshot.value.playing = clock.value.playing
-    snapshot.value.speed = clock.value.speed
-  }
+  })
 
   const discovered = computed(() => {
     void projectRef.value
@@ -420,13 +479,14 @@ export function useAnimgraphSim() {
   }
 
   /** Nested GraphSlot poses from last publish (survives until next publish). */
-  let lastNestedPoseBySlot = new Map<string, import('../utils/sim/pose').Pose>()
+  let lastNestedPoseBySlot = new Map<string, Pose>()
 
   const makeSlotHost = (
     snaps: Record<string, SimSnapshot>,
     stepped: Set<string>,
     dt: number,
-    nestedPoseBySlot: Map<string, import('../utils/sim/pose').Pose>
+    nestedPoseBySlot: Map<string, Pose>,
+    poseGen: number
   ): SimGraphSlotHost => ({
     stepNested(slotName, parentPoseUpdate, parentPoseSample) {
       const ids = listDiagramIds.value
@@ -445,9 +505,10 @@ export function useAnimgraphSim() {
           clock.value.speed,
           {
             endBoardFrame: false,
-            slotHost: makeSlotHost(snaps, stepped, dt, nestedPoseBySlot),
+            slotHost: makeSlotHost(snaps, stepped, dt, nestedPoseBySlot, poseGen),
             parentPoseUpdate,
             parentPoseSample,
+            poseGen,
           }
         )
         snaps[diagramId] = snap
@@ -480,7 +541,8 @@ export function useAnimgraphSim() {
     diagramId: string,
     dt: number,
     slotHost: SimGraphSlotHost,
-    endBoardFrame: boolean
+    endBoardFrame: boolean,
+    poseGen: number
   ): SimSnapshot => {
     const runner = ensureRunner(diagramId)
     nestStack.push(diagramId)
@@ -488,6 +550,7 @@ export function useAnimgraphSim() {
       return runner.step(dt, board.value, clock.value.time, clock.value.playing, clock.value.speed, {
         endBoardFrame,
         slotHost,
+        poseGen,
       })
     } finally {
       nestStack.pop()
@@ -499,21 +562,22 @@ export function useAnimgraphSim() {
     // resource loads) do not force a full diagram walk via snapshot watch.
     if (!active.value) return
     applyDraftsToBoard()
+    poseGenCounter += 1
+    const poseGen = poseGenCounter
     const snaps: Record<string, SimSnapshot> = {}
     const stepped = new Set<string>()
     lastNestedPoseBySlot = new Map()
-    const slotHost = makeSlotHost(snaps, stepped, dt, lastNestedPoseBySlot)
+    const slotHost = makeSlotHost(snaps, stepped, dt, lastNestedPoseBySlot, poseGen)
     const rootId = resolveRootDiagramId(listDiagramIds.value)
 
     // Only root Update; slotted diagrams tick solely when GraphSlot is on the active path.
     if (rootId) {
-      snaps[rootId] = stepDiagram(rootId, dt, slotHost, false)
+      snaps[rootId] = stepDiagram(rootId, dt, slotHost, false, poseGen)
       stepped.add(rootId)
     }
 
     board.value.endFrame()
     snapshotsByDiagram.value = snaps
-    publishActiveSnapshot()
   }
 
   const stopLoop = () => {
@@ -610,13 +674,9 @@ export function useAnimgraphSim() {
     { immediate: true }
   )
 
-  watch(activeDiagramId, () => {
-    publishActiveSnapshot()
-  })
-
-  onUnmounted(() => {
+  const dispose = () => {
     stopLoop()
-  })
+  }
 
   const play = () => {
     clock.value.play()
@@ -671,12 +731,6 @@ export function useAnimgraphSim() {
       }
     }
     snapshotsByDiagram.value = nextSnaps
-    publishActiveSnapshot()
-    snapshot.value = {
-      ...snapshot.value,
-      speed: clock.value.speed,
-      nodeDelta: snapshot.value.nodeDelta ? { changes: {}, removed: [] } : null,
-    }
   }
 
   const fireExternal = (name?: string) => {
@@ -1108,9 +1162,12 @@ export function useAnimgraphSim() {
     publish(0)
   }
 
-  const setPoseInspectBones = (names: string[]) => {
+  const setStackCaptureHandleIds = (ids: string[]) => {
+    const cleaned = ids.map((id) => id.trim()).filter(Boolean)
+    stackCaptureHandleIds.value = cleaned
     for (const runner of runners.values()) {
-      runner.poseInspectBones = names.map((n) => n.trim()).filter(Boolean)
+      // Only capture on diagrams that own the handle (avoid ranged looking for player_base ids).
+      runner.setStackCaptureHandleIds(cleaned.filter((id) => runner.hasHandle(id)))
     }
     publish(0)
   }
@@ -1131,13 +1188,79 @@ export function useAnimgraphSim() {
     publish(0)
   }
 
-  const setStackCaptureHandleIds = (ids: string[]) => {
-    const cleaned = ids.map((id) => id.trim()).filter(Boolean)
-    for (const runner of runners.values()) {
-      // Only capture on diagrams that own the handle (avoid ranged looking for player_base ids).
-      runner.setStackCaptureHandleIds(cleaned.filter((id) => runner.hasHandle(id)))
+  const resolveRunnerPose = (
+    diagramId: string,
+    poseRef: DerivedPoseRef
+  ): { pose: Pose | null; rig: RigEntry | null } => {
+    const runner = runners.get(diagramId) ?? ensureRunner(diagramId)
+    const rig = runner.getActiveRig()
+    if (poseRef === 'sample') {
+      return { pose: runner.getSampledPose(), rig }
     }
-    publish(0)
+    return {
+      pose: runner.getCapturedPose(poseRef.capture) ?? runner.getSampledPose(),
+      rig,
+    }
+  }
+
+  /**
+   * Pose-derived HUD stats (stack / tracks / rig bones).
+   * Pass the diagram snapshot so `poseGen` drives cache + Vue ticks.
+   * Pose is resolved once per cache key; builders only read that pose.
+   */
+  const getDerivedPoseStats = (
+    snap: SimSnapshot,
+    diagramId: string,
+    opts: {
+      pose?: DerivedPoseRef
+      need: DerivedPoseStatsNeed
+    }
+  ): Readonly<DerivedPoseStats> => {
+    const poseRef = opts.pose ?? 'sample'
+    const poseGen = snap.poseGen
+    if (derivedPoseCacheGen !== poseGen) {
+      derivedPoseCache.clear()
+      derivedPoseCacheGen = poseGen
+    }
+    const key = `${poseGen}|${diagramId}|${poseRefKey(poseRef)}`
+    let entry = derivedPoseCache.get(key)
+    if (!entry) {
+      entry = {}
+      derivedPoseCache.set(key, entry)
+    }
+
+    const need = opts.need
+    const wantsAny =
+      need.stackNames === true ||
+      need.stackBones === true ||
+      need.trackStack === true ||
+      need.rigBones === true
+    if (!wantsAny) return entry
+
+    if (!entry.resolved) {
+      const resolved = resolveRunnerPose(diagramId, poseRef)
+      entry.pose = resolved.pose
+      entry.rig = resolved.rig
+      entry.resolved = true
+    }
+
+    const pose = entry.pose
+    if (!pose) return entry
+
+    if (need.stackNames && entry.stackNames === undefined) {
+      entry.stackNames = buildStackNamesStats(pose)
+    }
+    if (need.stackBones && entry.stackBones === undefined) {
+      entry.stackBones = buildStackBonesStats(pose)
+    }
+    if (need.trackStack && entry.trackStack === undefined) {
+      entry.trackStack = buildTrackStackStats(pose)
+    }
+    if (need.rigBones && entry.rigBones === undefined) {
+      entry.rigBones = entry.rig ? buildRigBonesStats(pose, entry.rig) : undefined
+    }
+
+    return entry
   }
 
   const loadAnimDatabaseJson = (json: object, sourceLabel?: string): string => {
@@ -1221,7 +1344,8 @@ export function useAnimgraphSim() {
     animDatabaseLibraryToCompactJson(animDbLibrary.value)
 
   /** Project IO: omit empty libraries so old/small projects stay lean. */
-  const getProjectSimResources = () => {
+  const getProjectSimResources = (opts?: { includeClipPoses?: boolean }) => {
+    const includeClipPoses = opts?.includeClipPoses === true
     const clipSetup =
       clipLibrary.value.entryCount > 0 ? clipLibraryToCompactJson(clipLibrary.value) : undefined
     const animDatabaseLibrary =
@@ -1234,15 +1358,27 @@ export function useAnimgraphSim() {
         : undefined
     const rigLibraryJson =
       rigLibrary.value.size > 0 ? rigLibrary.value.toJson() : undefined
+    const clipPoseLibraryJson = includeClipPoses
+      ? getCachedClipPoseLibraryJson()
+      : undefined
+    const hasPoses = clipPoseLibrary.value.size > 0
     if (
       clipSetup == null &&
       animDatabaseLibrary == null &&
       entityTags == null &&
-      (rigLibraryJson == null || !(rigLibraryJson.entries?.length > 0))
+      (rigLibraryJson == null || !(rigLibraryJson.entries?.length > 0)) &&
+      !hasPoses
     ) {
       return null
     }
-    return { clipSetup, animDatabaseLibrary, entityTags, rigLibrary: rigLibraryJson }
+    return {
+      clipSetup,
+      animDatabaseLibrary,
+      entityTags,
+      rigLibrary: rigLibraryJson,
+      clipPoseLibrary: clipPoseLibraryJson,
+      clipPoseRevision: clipPoseRevision.value,
+    }
   }
 
   const applyProjectSimResources = (
@@ -1251,6 +1387,7 @@ export function useAnimgraphSim() {
       animDatabaseLibrary?: AnimDatabaseLibraryJson
       entityTags?: Record<string, boolean>
       rigLibrary?: RigLibraryJson
+      clipPoseLibrary?: ClipPoseLibraryJson
     } | null
   ) => {
     clipLibrary.value.clear()
@@ -1292,6 +1429,13 @@ export function useAnimgraphSim() {
         console.warn('Failed to restore project rigLibrary', err)
       }
     }
+    if (resources?.clipPoseLibrary != null) {
+      try {
+        clipPoseLibrary.value.loadFromJson(resources.clipPoseLibrary)
+      } catch (err) {
+        console.warn('Failed to restore project clipPoseLibrary', err)
+      }
+    }
     bumpClips()
     bumpAnimDb()
     bumpRigs()
@@ -1314,19 +1458,22 @@ export function useAnimgraphSim() {
   /**
    * Pooled pose + rig for skeleton viewport (not reactive — call each frame).
    * - full: root diagram sampleOut
-   * - active: open diagram sampleOut
-   * - atNode: Sample capture at selected handle (fallback → active/full)
+   * - selected: chosen diagram sampleOut (`selectedDiagramId`)
+   * - atNode: Sample capture at selected handle (fallback → open/selected/full)
    */
   const getSkeletonViewPose = (
-    source: 'full' | 'active' | 'atNode',
+    source: 'full' | 'selected' | 'atNode',
     options?: {
+      /** Prefer open diagram for atNode capture search / fallback. */
       activeDiagramId?: string | null
+      /** Diagram Sample out when source is `selected`. */
+      selectedDiagramId?: string | null
       captureHandleId?: string | null
     }
-  ): { pose: import('../utils/sim/pose').Pose; rig: import('../utils/sim/rigResource').RigEntry } | null => {
+  ): { pose: Pose; rig: RigEntry } | null => {
     const rootId = resolveRootDiagramId(listDiagramIds.value)
-    const activeId =
-      options?.activeDiagramId ?? activeDiagramId.value ?? rootId
+    const openId = options?.activeDiagramId ?? activeDiagramId.value ?? rootId
+    const selectedId = options?.selectedDiagramId ?? openId
     const pick = (diagramId: string | null | undefined) => {
       if (!diagramId) return null
       const runner = runners.get(diagramId) ?? ensureRunner(diagramId)
@@ -1338,7 +1485,7 @@ export function useAnimgraphSim() {
 
     if (source === 'full') return pick(rootId)
 
-    if (source === 'active') return pick(activeId)
+    if (source === 'selected') return pick(selectedId)
 
     // atNode
     const hid = options?.captureHandleId?.trim()
@@ -1352,12 +1499,12 @@ export function useAnimgraphSim() {
         if (!pose || !rig) return null
         return { pose, rig }
       }
-      const fromActive = tryCapture(activeId)
-      if (fromActive) {
+      const fromOpen = tryCapture(openId)
+      if (fromOpen) {
         if (isSimSampleLogEnabled()) {
-          console.log(`[sim-sample] viewport atNode=${hid} source=capture diagram=${activeId}`)
+          console.log(`[sim-sample] viewport atNode=${hid} source=capture diagram=${openId}`)
         }
-        return fromActive
+        return fromOpen
       }
       for (const id of runners.keys()) {
         const hit = tryCapture(id)
@@ -1370,11 +1517,11 @@ export function useAnimgraphSim() {
       }
       if (isSimSampleLogEnabled()) {
         console.log(
-          `[sim-sample] viewport atNode=${hid} source=FALLBACK-sampleOut active=${activeId} root=${rootId}`
+          `[sim-sample] viewport atNode=${hid} source=FALLBACK-sampleOut open=${openId} root=${rootId}`
         )
       }
     }
-    return pick(activeId) ?? pick(rootId)
+    return pick(openId) ?? pick(rootId)
   }
 
   return {
@@ -1427,7 +1574,8 @@ export function useAnimgraphSim() {
     removeRig,
     setActiveRig,
     clearRigLibrary,
-    setPoseInspectBones,
+    stackCaptureHandleIds,
+    getDerivedPoseStats,
     sampleWarningsEnabled,
     setSampleWarningsEnabled,
     updateWarningsEnabled,
@@ -1442,6 +1590,7 @@ export function useAnimgraphSim() {
     exportCompactClipLibrary,
     exportCompactAnimDatabaseLibrary,
     getProjectSimResources,
+    getCachedClipPoseCompactText,
     applyProjectSimResources,
     play,
     pause,
@@ -1475,5 +1624,7 @@ export function useAnimgraphSim() {
     setQuatFeature,
     setQuatFeatureAxis,
     rebind,
+    dispose,
   }
 }
+

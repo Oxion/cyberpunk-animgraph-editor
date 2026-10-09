@@ -98,86 +98,49 @@
       </Button>
     </div>
 
-    <div
-      class="max-h-40 shrink-0 overflow-y-auto rounded-sm border border-border bg-canvas px-2 py-1.5 text-[11px] text-muted-foreground"
-    >
-      <div v-if="!statusRows.length" class="font-data text-muted-foreground/70">No active path</div>
-      <div v-else class="flex flex-col gap-1">
-        <div
-          v-for="row in statusRows"
-          :key="row.key"
-          class="flex min-w-0 items-baseline gap-2"
-        >
-          <span class="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground/80">
-            {{ row.kind }}
-          </span>
-          <span class="font-data min-w-0 flex-1 truncate text-foreground" :title="row.detail">
-            {{ row.label }}
-          </span>
-          <span
-            v-if="row.meta"
-            class="font-data shrink-0 text-[10px]"
-            :class="row.tone === 'danger' ? 'text-destructive' : row.tone === 'warn' ? 'text-amber-500' : ''"
-          >{{ row.meta }}</span>
-        </div>
-      </div>
-      <div
-        v-if="statusFoot.length"
-        class="mt-1 flex flex-wrap gap-1 border-t border-border/60 pt-1"
+    <Separator />
+
+    <ButtonGroup class="w-full [&>*]:min-w-0 [&>*]:flex-1">
+      <Button
+        type="button"
+        size="sm"
+        :variant="simStatusBtnVariant"
+        class="h-7 gap-1.5 px-2.5 text-xs"
+        :class="simStatusBtnClass"
+        :title="simStatusBtnTitle"
+        @click="openSimStatusWindow()"
+      >
+        <Activity class="size-3.5 shrink-0" :size="14" />
+        Status
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        :variant="hasActiveRig ? simSkeletonBtnVariant : 'secondary'"
+        class="h-7 gap-1.5 px-2.5 text-xs"
+        :class="hasActiveRig ? simSkeletonBtnClass : 'opacity-80 text-muted-foreground'"
+        :title="simSkeletonBtnTitle"
+        :aria-disabled="!hasActiveRig"
+        @click="onSkeletonClick"
       >
         <span
-          v-for="chip in statusFoot"
-          :key="chip"
-          class="font-data rounded-sm bg-muted/50 px-1 py-0.5 text-[10px]"
+          v-if="!hasActiveRig"
+          role="button"
+          tabindex="0"
+          class="inline-flex shrink-0 rounded-sm hover:text-foreground"
+          title="Go to Resources → Rig to load a .rig.json"
+          @click.stop="goToRigResources"
+          @keydown.enter.stop.prevent="goToRigResources"
+          @keydown.space.stop.prevent="goToRigResources"
         >
-          {{ chip }}
+          <Info class="size-3.5" :size="14" />
         </span>
-      </div>
-      <div
-        v-if="sampleWarningsEnabled && snapshot.poseStats?.warnings?.length"
-        class="mt-1 border-t border-border/60 pt-1 font-data text-[10px] text-amber-400/90"
-      >
-        <p class="m-0 mb-0.5 text-[9px] uppercase tracking-wide text-muted-foreground/80">
-          Sample warnings ({{ snapshot.poseStats.warnings.length }})
-        </p>
-        <p
-          v-for="(w, i) in snapshot.poseStats.warnings"
-          :key="`s-${w.code}-${w.handleId}-${i}`"
-          class="m-0 truncate"
-          :title="w.message"
-        >
-          {{ w.message }}
-        </p>
-      </div>
-      <p
-        v-else-if="sampleWarningsEnabled && snapshot.poseStats"
-        class="mt-1 border-t border-border/60 pt-1 text-[10px] text-muted-foreground/70"
-      >
-        No sample warnings this frame
-      </p>
-      <div
-        v-if="updateWarningsEnabled && snapshot.poseStats?.updateWarnings?.length"
-        class="mt-1 border-t border-border/60 pt-1 font-data text-[10px] text-amber-400/90"
-      >
-        <p class="m-0 mb-0.5 text-[9px] uppercase tracking-wide text-muted-foreground/80">
-          Update warnings ({{ snapshot.poseStats.updateWarnings.length }})
-        </p>
-        <p
-          v-for="(w, i) in snapshot.poseStats.updateWarnings"
-          :key="`u-${w.code}-${w.handleId}-${i}`"
-          class="m-0 truncate"
-          :title="w.message"
-        >
-          {{ w.message }}
-        </p>
-      </div>
-      <p
-        v-else-if="updateWarningsEnabled && snapshot.poseStats"
-        class="mt-1 border-t border-border/60 pt-1 text-[10px] text-muted-foreground/70"
-      >
-        No update warnings this frame
-      </p>
-    </div>
+        <Bone v-else class="size-3.5 shrink-0" :size="14" />
+        Skeleton
+      </Button>
+    </ButtonGroup>
+
+    <Separator />
 
     <Tabs v-model="activeTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
       <div ref="mainTabsRowEl">
@@ -893,17 +856,6 @@
             >
               Clear rigs
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              class="h-7 rounded-sm px-2 text-xs"
-              :disabled="!activeRigBones.length"
-              title="Open stick skeleton 3D window"
-              @click="emit('openSkeleton')"
-            >
-              Skeleton 3D
-            </Button>
           </div>
           <p v-if="rigError" class="m-0 text-[11px] text-destructive">{{ rigError }}</p>
           <p class="font-data m-0 text-[11px] text-muted-foreground">
@@ -962,7 +914,7 @@
                 type="button"
                 class="flex w-full items-center gap-1 rounded-sm px-1 py-0.5 text-left hover:bg-muted/60"
                 :title="`Inspect ${bone}`"
-                @click="poseInspectDraft = bone; applyPoseInspect()"
+                @click="inspectBone(bone)"
               >
                 <span class="font-data min-w-0 flex-1 truncate text-[11px]">{{ bone }}</span>
               </button>
@@ -987,14 +939,14 @@
               class="h-7 min-w-0 flex-1 rounded-sm text-xs"
               placeholder="Inspect bone (e.g. Hips)"
               v-model="poseInspectDraft"
-              @keydown.enter.prevent="applyPoseInspect"
+              @keydown.enter.prevent="inspectBone(poseInspectDraft)"
             />
             <Button
               type="button"
               size="sm"
               variant="secondary"
               class="h-7 shrink-0 rounded-sm px-2 text-xs"
-              @click="applyPoseInspect"
+              @click="inspectBone(poseInspectDraft)"
             >
               Inspect
             </Button>
@@ -1007,11 +959,11 @@
             {{ snapshot.poseStats.ok ? 'ok' : snapshot.poseStats.reason || 'off' }}
             · {{ snapshot.poseStats.boneCount }} bones
             · {{ snapshot.poseStats.sampleMs.toFixed(2) }}ms
-            <template v-if="snapshot.poseStats.stack?.count">
-              · stack {{ snapshot.poseStats.stack.count }}
+            <template v-if="derivedPose.stackNames?.count">
+              · stack {{ derivedPose.stackNames.count }}
             </template>
-            <template v-if="snapshot.poseStats.trackStack?.count">
-              · tracks {{ snapshot.poseStats.trackStack.count }}
+            <template v-if="derivedPose.trackStack?.count">
+              · tracks {{ derivedPose.trackStack.count }}
             </template>
           </p>
           <p
@@ -1024,20 +976,20 @@
             <template v-if="snapshot.poseStats.missingGlb.length > 4">…</template>
           </p>
           <div
-            v-if="snapshot.poseStats?.stack?.count"
+            v-if="derivedPose.stackNames?.count"
             class="flex max-h-28 flex-col gap-0.5 overflow-y-auto border-t border-border/40 pt-1"
           >
             <p class="m-0 text-[9px] uppercase tracking-wide text-muted-foreground/80">
               Procedural (stack)
-              <template v-if="snapshot.poseStats?.stackSourceHandleId"> · captured</template>
+              <template v-if="derivedPoseCaptureId"> · captured</template>
             </p>
             <button
-              v-for="name in snapshot.poseStats.stack.names"
+              v-for="name in derivedPose.stackNames.names"
               :key="`stack-${name}`"
               type="button"
               class="flex w-full items-center gap-1 rounded-sm px-1 py-0.5 text-left hover:bg-muted/60"
               :title="`Inspect ${name}`"
-              @click="inspectStackBone(name)"
+              @click="inspectBone(name)"
             >
               <span class="font-data min-w-0 flex-1 truncate text-[11px] text-cyan-300/90">{{
                 name
@@ -1045,42 +997,37 @@
             </button>
           </div>
           <div
-            v-if="snapshot.poseStats?.trackStack?.count"
+            v-if="derivedPose.trackStack?.count"
             class="flex max-h-28 flex-col gap-0.5 overflow-y-auto border-t border-border/40 pt-1"
           >
             <p class="m-0 text-[9px] uppercase tracking-wide text-muted-foreground/80">
               Procedural tracks
-              <template v-if="snapshot.poseStats?.stackSourceHandleId"> · captured</template>
+              <template v-if="derivedPoseCaptureId"> · captured</template>
             </p>
             <div
-              v-for="name in snapshot.poseStats.trackStack.names"
+              v-for="name in derivedPose.trackStack.names"
               :key="`tstack-${name}`"
               class="font-data flex w-full items-baseline gap-1 px-1 py-0.5 text-[11px]"
             >
               <span class="min-w-0 flex-1 truncate text-amber-300/90">{{ name }}</span>
               <span class="shrink-0 tabular-nums text-muted-foreground">{{
-                formatTrackStackValue(snapshot.poseStats.trackStack.values[name])
+                formatTrackStackValue(derivedPose.trackStack.values[name])
               }}</span>
             </div>
           </div>
           <div
-            v-if="snapshot.poseStats?.inspect"
-            class="font-data max-h-36 overflow-y-auto text-[10px] text-muted-foreground"
+            v-if="inspectedBoneName && inspectedBoneTrs"
+            class="font-data max-h-36 overflow-y-auto border-t border-border/40 pt-1 text-[10px] text-muted-foreground"
           >
-            <div
-              v-for="(entry, name) in snapshot.poseStats.inspect"
-              :key="name"
-              class="mb-1 border-b border-border/30 pb-1 last:mb-0 last:border-0 last:pb-0"
-            >
-              <div class="text-[11px] text-foreground/80">{{ name }}</div>
-              <div v-if="entry.atNode" class="pl-1 text-cyan-300/90">
-                at node: {{ formatInspectTrs(entry.atNode) }}
-              </div>
-              <div v-if="entry.result" class="pl-1">
-                result: {{ formatInspectTrs(entry.result) }}
-              </div>
-            </div>
+            <div class="text-[11px] text-foreground/80">{{ inspectedBoneName }}</div>
+            <div class="pl-1">{{ formatInspectTrs(inspectedBoneTrs) }}</div>
           </div>
+          <p
+            v-else-if="inspectedBoneName"
+            class="m-0 border-t border-border/40 pt-1 text-[10px] text-muted-foreground/70"
+          >
+            No TRS for {{ inspectedBoneName }}
+          </p>
         </TabsContent>
 
         <!-- Entity tags (StaticSwitch Component/Visual/Rig mock) — saved in project -->
@@ -1162,10 +1109,12 @@
 import { computed, ref, type Ref } from 'vue'
 import { useResizeObserver } from '@vueuse/core'
 import {
+  Activity,
   Bone,
   Box,
   Database,
   Film,
+  Info,
   Layers,
   Package,
   PencilIcon,
@@ -1189,8 +1138,19 @@ import { DEFAULT_SIM_FPS } from '../utils/sim/SimClock'
 import type { AnimDatabase, AnimDatabaseStats } from '../utils/sim/animDatabase'
 import type { BoneTrs } from '../utils/sim/pose'
 import type { SimSnapshot } from '../utils/sim/simTypes'
-import { SimInputBoard } from '../utils/sim/SimInputBoard'
 import { Check, EllipsisVertical, TriangleAlert } from '@lucide/vue'
+import {
+  openSimSkeletonWindow,
+  openSimStatusWindow,
+  windowUiStateByType,
+  type AppWindowUiState,
+} from '../stores/appWindows'
+import {
+  simGetDerivedPoseStats,
+  simStackCaptureHandleIds,
+} from '../stores/animgraphSim'
+import { activeDiagramId } from '../stores/graphProject'
+import type { DerivedPoseRef } from '../utils/sim/poseDerivedStats'
 import AnimSetupEntryCard from '@/components/sim/AnimSetupEntryCard.vue'
 import {
   PropertyBoolToggle,
@@ -1199,6 +1159,7 @@ import {
   PropertyVecBlock,
 } from '@/components/nodeDetails'
 import { Button } from '@/components/ui/button'
+import { ButtonGroup } from '@/components/ui/button-group'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1206,6 +1167,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 const props = defineProps<{
@@ -1272,7 +1234,6 @@ const props = defineProps<{
   removeRig: (id: string) => void
   setActiveRig: (id: string | null) => void
   clearRigLibrary: () => void
-  setPoseInspectBones: (names: string[]) => void
   sampleWarningsEnabled?: boolean
   setSampleWarningsEnabled?: (on: boolean) => void
   updateWarningsEnabled?: boolean
@@ -1333,7 +1294,6 @@ const emit = defineEmits<{
   fireAnimEnd: []
   clearClips: []
   clearAnimDb: []
-  openSkeleton: []
 }>()
 
 const activeTab = ref<'events' | 'values' | 'resources'>('events')
@@ -1619,101 +1579,54 @@ const toggleClipExpand = (name: string) => {
   expandedClipName.value = expandedClipName.value === name ? '' : name
 }
 
-type StatusRow = {
-  key: string
-  kind: string
-  label: string
-  meta?: string
-  detail?: string
-  tone?: 'danger' | 'warn'
+/** Button chrome: closed | minimized | open (default / maximized / forward). */
+const windowToggleBtnVariant = (s: AppWindowUiState) => {
+  if (s === 'closed') return 'secondary' as const
+  if (s === 'minimized') return 'outline' as const
+  return 'default' as const
 }
 
-/** Compact HUD rows — all active clips + SMs (scroll in panel). */
-const statusRows = computed((): StatusRow[] => {
-  const rows: StatusRow[] = []
-  const st = props.snapshot.status
-  if (st?.rootHandleId) {
-    rows.push({
-      key: 'root',
-      kind: 'root',
-      label: st.rootHandleId,
-      detail: st.rootHandleId,
-    })
+const windowToggleBtnClass = (s: AppWindowUiState) => {
+  if (s === 'minimized') return 'opacity-80 text-muted-foreground'
+  return undefined
+}
+
+const windowToggleBtnTitle = (s: AppWindowUiState, label: string) => {
+  if (s === 'forward') return `${label} window is focused`
+  if (s === 'maximized') return `Bring maximized ${label.toLowerCase()} forward`
+  if (s === 'default') return `Bring ${label.toLowerCase()} window forward`
+  if (s === 'minimized') return `Restore ${label.toLowerCase()} window`
+  return `Open ${label.toLowerCase()} window`
+}
+
+const simStatusUiState = computed(() => windowUiStateByType('sim-status'))
+const simStatusBtnVariant = computed(() => windowToggleBtnVariant(simStatusUiState.value))
+const simStatusBtnClass = computed(() => windowToggleBtnClass(simStatusUiState.value))
+const simStatusBtnTitle = computed(() =>
+  windowToggleBtnTitle(simStatusUiState.value, 'Sim status')
+)
+
+const hasActiveRig = computed(() => (props.activeRigBones?.length ?? 0) > 0)
+
+const simSkeletonUiState = computed(() => windowUiStateByType('sim-skeleton'))
+const simSkeletonBtnVariant = computed(() => windowToggleBtnVariant(simSkeletonUiState.value))
+const simSkeletonBtnClass = computed(() => windowToggleBtnClass(simSkeletonUiState.value))
+const simSkeletonBtnTitle = computed(() => {
+  if (!hasActiveRig.value) {
+    return 'Load a .rig.json under Resources → Rig to open the skeleton preview'
   }
-  for (const c of st?.clips ?? []) {
-    const resolve = c.resolve ?? 'ok'
-    let meta: string
-    let tone: StatusRow['tone']
-    if (resolve === 'ok') {
-      meta = `${c.time.toFixed(2)}s · ${(c.progress * 100).toFixed(0)}%`
-    } else if (resolve === 'gated') {
-      meta = 'GATED'
-      tone = 'warn'
-    } else if (resolve === 'no-lib') {
-      meta = 'NO LIB'
-      tone = 'warn'
-    } else if (resolve === 'no-db') {
-      meta = 'NO DB'
-      tone = 'warn'
-    } else if (resolve === 'empty') {
-      meta = 'EMPTY'
-      tone = 'danger'
-    } else {
-      meta = 'MISSING'
-      tone = 'danger'
-    }
-    rows.push({
-      key: `clip-${c.handleId}`,
-      kind: 'clip',
-      label: `${c.animName} · #${c.handleId}`,
-      meta,
-      tone,
-      detail: `${c.animName} @ ${c.handleId} (${resolve})`,
-    })
-  }
-  const nodes = props.snapshot.nodes
-  for (const [id, sm] of Object.entries(props.snapshot.sms)) {
-    if (!nodes[id]?.active) continue
-    const trans = sm.isInTransition
-      ? `→${sm.targetStateIndex ?? '?'} ${(sm.transitionProgress * 100).toFixed(0)}%`
-      : undefined
-    const bits: string[] = []
-    if (sm.eligibleTransitionIds.length) bits.push(`elig ${sm.eligibleTransitionIds.length}`)
-    if (sm.instantChainLength > 1) bits.push(`×${sm.instantChainLength}`)
-    rows.push({
-      key: `sm-${id}`,
-      kind: 'sm',
-      label: `${id} · state ${sm.activeStateIndex}`,
-      meta: [trans, bits.join(' ')].filter(Boolean).join(' · ') || undefined,
-      detail: id,
-    })
-  }
-  return rows
+  return windowToggleBtnTitle(simSkeletonUiState.value, 'Sim skeleton')
 })
 
-const statusFoot = computed((): string[] => {
-  const chips: string[] = []
-  let wraps = 0
-  for (const [name, val] of Object.entries(props.wrapperWeights)) {
-    if ((val ?? 0) < SimInputBoard.WRAPPER_ACTIVE_THRESHOLD) continue
-    chips.push(`w:${name}`)
-    if (++wraps >= 4) break
-  }
-  let feats = 0
-  for (const [key, val] of Object.entries(props.featureDrafts)) {
-    const n = Number(val)
-    if (!Number.isFinite(n) || n === 0) continue
-    const sep = key.indexOf('\0')
-    const label = sep >= 0 ? `${key.slice(0, sep)}.${key.slice(sep + 1)}` : key
-    chips.push(`${label}=${n}`)
-    if (++feats >= 4) break
-  }
-  const activeSets = props.setupEntries.filter((e) => e.active).length
-  if (props.clipStats.entryCount) {
-    chips.push(`sets ${activeSets}/${props.clipStats.entryCount}`)
-  }
-  return chips
-})
+const goToRigResources = () => {
+  activeTab.value = 'resources'
+  resourcesSubTab.value = 'rig'
+}
+
+const onSkeletonClick = () => {
+  if (!hasActiveRig.value) return
+  openSimSkeletonWindow()
+}
 
 const featureValue = (feature: string, property: string) =>
   props.resolveFeatureValue(feature, property)
@@ -1951,9 +1864,43 @@ const onRigFile = async (ev: Event) => {
   }
 }
 
-const applyPoseInspect = () => {
-  const name = poseInspectDraft.value.trim()
-  props.setPoseInspectBones(name ? [name] : [])
+const derivedPoseCaptureId = computed(() => simStackCaptureHandleIds.value[0] ?? '')
+
+const derivedPoseRef = computed((): DerivedPoseRef => {
+  const id = derivedPoseCaptureId.value
+  return id ? { capture: id } : 'sample'
+})
+
+const derivedPose = computed(() => {
+  const snap = props.snapshot
+  void snap.poseGen
+  const diagramId = activeDiagramId.value ?? ''
+  if (!diagramId) return {}
+  return simGetDerivedPoseStats(snap, diagramId, {
+    pose: derivedPoseRef.value,
+    need: {
+      stackNames: true,
+      stackBones: true,
+      trackStack: true,
+      rigBones: true,
+    },
+  })
+})
+
+const inspectedBoneName = computed(() => poseInspectDraft.value.trim())
+
+const inspectedBoneTrs = computed(() => {
+  const name = inspectedBoneName.value
+  if (!name) return null
+  return (
+    derivedPose.value.rigBones?.bones[name] ??
+    derivedPose.value.stackBones?.bones[name] ??
+    null
+  )
+})
+
+const inspectBone = (name: string) => {
+  poseInspectDraft.value = name.trim()
 }
 
 const formatInspectTrs = (trs: BoneTrs) =>
@@ -1961,11 +1908,6 @@ const formatInspectTrs = (trs: BoneTrs) =>
 
 const formatTrackStackValue = (v: number | undefined) =>
   Number.isFinite(v) ? (v as number).toFixed(3) : '—'
-
-const inspectStackBone = (name: string) => {
-  poseInspectDraft.value = name
-  props.setPoseInspectBones([name])
-}
 
 const onAnimDbFile = async (ev: Event) => {
   animDbError.value = ''

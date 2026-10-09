@@ -17,11 +17,6 @@
 
 import type { SimVec4 } from './evalAnimMathExpressionVector'
 
-export type { SimVec4 }
-
-/** Identity quaternion for QuaternionInput defaults (xyzw). */
-export const IDENTITY_QUAT_VEC4: SimVec4 = { x: 0, y: 0, z: 0, w: 1 }
-
 /** FiredEvent phase for timeline events (animNode_Signal DurStart/DurEnd split). */
 export type SimAnimEventPhase = 'tick' | 'durStart' | 'durEnd'
 
