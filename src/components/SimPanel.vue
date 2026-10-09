@@ -140,17 +140,37 @@
     </div>
 
     <Tabs v-model="activeTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
-      <TabsList class="grid h-8 w-full shrink-0 grid-cols-3 rounded-sm bg-muted/60 p-0.5">
-        <TabsTrigger value="events" class="h-7 rounded-sm px-1 text-[11px]">
-          Events
-        </TabsTrigger>
-        <TabsTrigger value="values" class="h-7 rounded-sm px-1 text-[11px]">
-          Values
-        </TabsTrigger>
-        <TabsTrigger value="resources" class="h-7 rounded-sm px-1 text-[11px]">
-          Resources
-        </TabsTrigger>
-      </TabsList>
+      <div ref="mainTabsRowEl">
+        <TabsList class="grid h-8 w-full shrink-0 grid-cols-3 rounded-sm bg-muted/60 p-0.5">
+          <TabsTrigger
+            value="events"
+            class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+            title="Events"
+            aria-label="Events"
+          >
+            <Zap class="size-3.5 shrink-0" :size="14" />
+            <span v-if="!mainTabsIconOnly" class="truncate">Events</span>
+          </TabsTrigger>
+          <TabsTrigger
+            value="values"
+            class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+            title="Values"
+            aria-label="Values"
+          >
+            <SlidersHorizontal class="size-3.5 shrink-0" :size="14" />
+            <span v-if="!mainTabsIconOnly" class="truncate">Values</span>
+          </TabsTrigger>
+          <TabsTrigger
+            value="resources"
+            class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+            title="Resources"
+            aria-label="Resources"
+          >
+            <Package class="size-3.5 shrink-0" :size="14" />
+            <span v-if="!mainTabsIconOnly" class="truncate">Resources</span>
+          </TabsTrigger>
+        </TabsList>
+      </div>
 
       <TabsContent value="events" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
         <div class="flex shrink-0 flex-wrap items-center gap-1.5">
@@ -195,24 +215,66 @@
 
       <TabsContent value="values" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
         <Tabs v-model="valuesSubTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
-          <TabsList class="grid h-8 w-full shrink-0 grid-cols-4 rounded-sm bg-muted/60 p-0.5">
-            <TabsTrigger value="features" class="h-7 rounded-sm px-1 text-[11px]">
-              Features
-              <span v-if="featuresTabCount" class="ml-1 opacity-70">{{ featuresTabCount }}</span>
-            </TabsTrigger>
-            <TabsTrigger value="vars" class="h-7 rounded-sm px-1 text-[11px]">
-              Vars
-              <span v-if="varsCount" class="ml-1 opacity-70">{{ varsCount }}</span>
-            </TabsTrigger>
-            <TabsTrigger value="wrappers" class="h-7 rounded-sm px-1 text-[11px]">
-              Wrap
-              <span v-if="discovered.wrappers.length" class="ml-1 opacity-70">{{ discovered.wrappers.length }}</span>
-            </TabsTrigger>
-            <TabsTrigger value="tags" class="h-7 rounded-sm px-1 text-[11px]">
-              Tags
-              <span v-if="tagsCount" class="ml-1 opacity-70">{{ tagsCount }}</span>
-            </TabsTrigger>
-          </TabsList>
+          <div ref="valuesTabsRowEl">
+            <TabsList class="grid h-8 w-full shrink-0 grid-cols-4 rounded-sm bg-muted/60 p-0.5">
+              <TabsTrigger
+                value="features"
+                class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+                title="Features"
+                aria-label="Features"
+              >
+                <Sparkles class="size-3.5 shrink-0" :size="14" />
+                <span v-if="!valuesTabsIconOnly" class="truncate">Features</span>
+                <span
+                  v-if="featuresTabCount"
+                  class="shrink-0 opacity-70"
+                  :class="valuesTabsIconOnly ? 'text-[10px]' : 'ml-0.5'"
+                >{{ featuresTabCount }}</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="vars"
+                class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+                title="Vars"
+                aria-label="Vars"
+              >
+                <Variable class="size-3.5 shrink-0" :size="14" />
+                <span v-if="!valuesTabsIconOnly" class="truncate">Vars</span>
+                <span
+                  v-if="varsCount"
+                  class="shrink-0 opacity-70"
+                  :class="valuesTabsIconOnly ? 'text-[10px]' : 'ml-0.5'"
+                >{{ varsCount }}</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="wrappers"
+                class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+                title="Wrap"
+                aria-label="Wrap"
+              >
+                <Layers class="size-3.5 shrink-0" :size="14" />
+                <span v-if="!valuesTabsIconOnly" class="truncate">Wrap</span>
+                <span
+                  v-if="discovered.wrappers.length"
+                  class="shrink-0 opacity-70"
+                  :class="valuesTabsIconOnly ? 'text-[10px]' : 'ml-0.5'"
+                >{{ discovered.wrappers.length }}</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="tags"
+                class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+                title="Tags"
+                aria-label="Tags"
+              >
+                <Tags class="size-3.5 shrink-0" :size="14" />
+                <span v-if="!valuesTabsIconOnly" class="truncate">Tags</span>
+                <span
+                  v-if="tagsCount"
+                  class="shrink-0 opacity-70"
+                  :class="valuesTabsIconOnly ? 'text-[10px]' : 'ml-0.5'"
+                >{{ tagsCount }}</span>
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="features" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
             <Input
@@ -371,24 +433,66 @@
 
       <TabsContent value="resources" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
         <Tabs v-model="resourcesSubTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
-          <TabsList class="grid h-8 w-full shrink-0 grid-cols-4 rounded-sm bg-muted/60 p-0.5">
-            <TabsTrigger value="sets" class="h-7 rounded-sm px-1 text-[11px]">
-              Anim sets
-              <span v-if="clipStats.entryCount" class="ml-1 opacity-70">{{ clipStats.entryCount }}</span>
-            </TabsTrigger>
-            <TabsTrigger value="db" class="h-7 rounded-sm px-1 text-[11px]">
-              Anim DB
-              <span v-if="animDbStats.dbCount" class="ml-1 opacity-70">{{ animDbStats.dbCount }}</span>
-            </TabsTrigger>
-            <TabsTrigger value="rig" class="h-7 rounded-sm px-1 text-[11px]">
-              Rig
-              <span v-if="rigEntries.length" class="ml-1 opacity-70">{{ rigEntries.length }}</span>
-            </TabsTrigger>
-            <TabsTrigger value="entity" class="h-7 rounded-sm px-1 text-[11px]">
-              Entity
-              <span v-if="entityTagsCount" class="ml-1 opacity-70">{{ entityTagsCount }}</span>
-            </TabsTrigger>
-          </TabsList>
+          <div ref="resourcesTabsRowEl">
+            <TabsList class="grid h-8 w-full shrink-0 grid-cols-4 rounded-sm bg-muted/60 p-0.5">
+              <TabsTrigger
+                value="sets"
+                class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+                title="Anim sets"
+                aria-label="Anim sets"
+              >
+                <Film class="size-3.5 shrink-0" :size="14" />
+                <span v-if="!resourcesTabsIconOnly" class="truncate">Anim sets</span>
+                <span
+                  v-if="clipStats.entryCount"
+                  class="shrink-0 opacity-70"
+                  :class="resourcesTabsIconOnly ? 'text-[10px]' : 'ml-0.5'"
+                >{{ clipStats.entryCount }}</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="db"
+                class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+                title="Anim DB"
+                aria-label="Anim DB"
+              >
+                <Database class="size-3.5 shrink-0" :size="14" />
+                <span v-if="!resourcesTabsIconOnly" class="truncate">Anim DB</span>
+                <span
+                  v-if="animDbStats.dbCount"
+                  class="shrink-0 opacity-70"
+                  :class="resourcesTabsIconOnly ? 'text-[10px]' : 'ml-0.5'"
+                >{{ animDbStats.dbCount }}</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="rig"
+                class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+                title="Rig"
+                aria-label="Rig"
+              >
+                <Bone class="size-3.5 shrink-0" :size="14" />
+                <span v-if="!resourcesTabsIconOnly" class="truncate">Rig</span>
+                <span
+                  v-if="rigEntries.length"
+                  class="shrink-0 opacity-70"
+                  :class="resourcesTabsIconOnly ? 'text-[10px]' : 'ml-0.5'"
+                >{{ rigEntries.length }}</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="entity"
+                class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+                title="Entity"
+                aria-label="Entity"
+              >
+                <Box class="size-3.5 shrink-0" :size="14" />
+                <span v-if="!resourcesTabsIconOnly" class="truncate">Entity</span>
+                <span
+                  v-if="entityTagsCount"
+                  class="shrink-0 opacity-70"
+                  :class="resourcesTabsIconOnly ? 'text-[10px]' : 'ml-0.5'"
+                >{{ entityTagsCount }}</span>
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
         <!-- Anim sets -->
         <TabsContent value="sets" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
@@ -1015,8 +1119,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { PencilIcon, TrashIcon } from 'lucide-vue-next'
+import { computed, ref, type Ref } from 'vue'
+import { useResizeObserver } from '@vueuse/core'
+import {
+  Bone,
+  Box,
+  Database,
+  Film,
+  Layers,
+  Package,
+  PencilIcon,
+  SlidersHorizontal,
+  Sparkles,
+  Tags,
+  TrashIcon,
+  Variable,
+  Zap,
+} from 'lucide-vue-next'
 import type {
   AnimSetupEntryView,
   ClipLibraryStats,
@@ -1179,6 +1298,31 @@ const emit = defineEmits<{
 const activeTab = ref<'events' | 'values' | 'resources'>('events')
 const valuesSubTab = ref<'features' | 'vars' | 'wrappers' | 'tags'>('features')
 const resourcesSubTab = ref<'sets' | 'db' | 'rig' | 'entity'>('sets')
+
+/** Below this tabs-row width, show icons only. */
+const TABS_ICON_ONLY_MAX_WIDTH = 360
+
+function observeTabsIconOnly(
+  el: Ref<HTMLElement | null>,
+  iconOnly: Ref<boolean>
+) {
+  useResizeObserver(el, (entries) => {
+    const width = entries[0]?.contentRect.width ?? 0
+    iconOnly.value = width > 0 && width < TABS_ICON_ONLY_MAX_WIDTH
+  })
+}
+
+const mainTabsRowEl = ref<HTMLElement | null>(null)
+const mainTabsIconOnly = ref(false)
+observeTabsIconOnly(mainTabsRowEl, mainTabsIconOnly)
+
+const valuesTabsRowEl = ref<HTMLElement | null>(null)
+const valuesTabsIconOnly = ref(false)
+observeTabsIconOnly(valuesTabsRowEl, valuesTabsIconOnly)
+
+const resourcesTabsRowEl = ref<HTMLElement | null>(null)
+const resourcesTabsIconOnly = ref(false)
+observeTabsIconOnly(resourcesTabsRowEl, resourcesTabsIconOnly)
 const eventsFilter = ref('')
 const featuresFilter = ref('')
 const varsFilter = ref('')
