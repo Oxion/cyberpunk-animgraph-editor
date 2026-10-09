@@ -72,20 +72,30 @@
       </div>
     </div>
 
-    <div class="flex shrink-0 flex-wrap items-center gap-3 text-muted-foreground">
-      <span class="font-data">t={{ snapshot.time.toFixed(2) }}s · f={{ simFrame }}</span>
-      <div class="flex min-w-[160px] flex-1 items-center gap-2">
-        <Label class="shrink-0 text-[11px] text-muted-foreground">Speed</Label>
-        <Slider
-          class="flex-1"
-          :model-value="[snapshot.speed]"
-          :min="0.25"
-          :max="4"
-          :step="0.25"
-          @update:model-value="onSpeedSlider"
-        />
-        <span class="font-data w-10 shrink-0 text-right">{{ snapshot.speed.toFixed(2) }}×</span>
-      </div>
+    <div class="flex shrink-0 flex-wrap items-center gap-2 text-muted-foreground">
+      <span class="font-data shrink-0">t={{ snapshot.time.toFixed(2) }}s · f={{ simFrame }}</span>
+      <PropertyNumberSlider
+        class="min-w-[140px] flex-1"
+        label="Speed (fps)"
+        :model-value="simSpeedFps"
+        :value-min="0"
+        :value-max="DEFAULT_SIM_FPS * 100"
+        :slider-min="0"
+        :slider-max="DEFAULT_SIM_FPS * 4"
+        :step="1"
+        :decimals="0"
+        @update:model-value="onSpeedFps"
+      />
+      <Button
+        type="button"
+        size="icon-xs"
+        variant="outline"
+        title="Reset speed to default fps"
+        :disabled="simSpeedFps === DEFAULT_SIM_FPS"
+        @click="onSpeedFps(DEFAULT_SIM_FPS)"
+      >
+        <RotateCcw class="size-3.5" :size="14" />
+      </Button>
     </div>
 
     <div
@@ -1159,6 +1169,7 @@ import {
   Layers,
   Package,
   PencilIcon,
+  RotateCcw,
   SlidersHorizontal,
   Sparkles,
   Tags,
@@ -1195,8 +1206,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Slider } from '@/components/ui/slider'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 const props = defineProps<{
@@ -1845,9 +1854,12 @@ const onWrapperWeight = (name: string, raw: string | number) => {
   props.applyWrapperWeight(name, value)
 }
 
-const onSpeedSlider = (value: number[] | undefined) => {
-  const n = value?.[0]
-  if (typeof n === 'number' && Number.isFinite(n)) emit('setSpeed', n)
+/** Display/edit sim clock speed as frames per second (1× = DEFAULT_SIM_FPS). */
+const simSpeedFps = computed(() => props.snapshot.speed * DEFAULT_SIM_FPS)
+
+const onSpeedFps = (fps: number) => {
+  if (!Number.isFinite(fps)) return
+  emit('setSpeed', fps / DEFAULT_SIM_FPS)
 }
 
 const onEntryPriority = (id: string, raw: string | number) => {

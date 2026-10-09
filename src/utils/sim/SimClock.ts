@@ -40,6 +40,6 @@ export class SimClock {
   }
 
   setSpeed(speed: number): void {
-    this.speed = Math.max(0.05, Math.min(8, speed))
+    this.speed = Math.max(0, Math.min(100, speed))
   }
 }
