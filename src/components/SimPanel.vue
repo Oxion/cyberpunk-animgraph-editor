@@ -499,49 +499,41 @@
 
         <!-- Anim sets -->
         <TabsContent value="sets" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
-          <div class="flex shrink-0 flex-wrap items-center gap-1.5">
-            <input
-              ref="animsetFileInput"
-              type="file"
-              accept=".json,application/json"
-              class="hidden"
-              @change="onAnimsetFile"
-            />
-            <input
-              ref="animsetGlbFileInput"
-              type="file"
-              accept=".glb,model/gltf-binary"
-              class="hidden"
-              @change="onAnimsetGlbFile"
-            />
+          <input
+            ref="animsetFileInput"
+            type="file"
+            accept=".json,application/json"
+            class="hidden"
+            @change="onAnimsetFile"
+          />
+          <input
+            ref="animsetGlbFileInput"
+            type="file"
+            accept=".glb,model/gltf-binary"
+            class="hidden"
+            @change="onAnimsetGlbFile"
+          />
+          <div class="flex shrink-0 items-center gap-1.5">
+            <p class="font-data m-0 min-w-0 flex-1 text-[11px] text-muted-foreground">
+              {{ clipStats.entryCount }} sets · {{ clipStats.clipCount }} clips ·
+              {{ clipStats.eventCount }} events
+              <span v-if="clipPoseAnimCount">
+                · {{ clipPoseAnimCount }} glb anims
+              </span>
+            </p>
             <Button
               type="button"
               size="sm"
               variant="secondary"
-              class="h-7 rounded-sm px-2 text-xs"
+              class="h-7 w-7 shrink-0 rounded-sm px-0"
+              title="Load .anims.json"
+              aria-label="Load .anims.json"
               @click="animsetFileInput?.click()"
             >
-              Load .anims.json
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              class="h-7 rounded-sm px-2 text-xs"
-              :disabled="!clipStats.entryCount"
-              @click="emit('clearClips')"
-            >
-              Clear sets
+              <UploadIcon class="size-3.5" :size="14" />
             </Button>
           </div>
           <p v-if="clipsError" class="m-0 text-[11px] text-destructive">{{ clipsError }}</p>
-          <p class="font-data m-0 text-[11px] text-muted-foreground">
-            {{ clipStats.entryCount }} sets · {{ clipStats.clipCount }} clips ·
-            {{ clipStats.eventCount }} events
-            <span v-if="clipPoseAnimCount">
-              · {{ clipPoseAnimCount }} glb anims
-            </span>
-          </p>
 
           <div
             v-if="setupEntries.length"
@@ -712,38 +704,30 @@
 
         <!-- Anim databases -->
         <TabsContent value="db" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
-          <div class="flex shrink-0 flex-wrap items-center gap-1.5">
-            <input
-              ref="animDbFileInput"
-              type="file"
-              accept=".json,application/json"
-              class="hidden"
-              @change="onAnimDbFile"
-            />
+          <input
+            ref="animDbFileInput"
+            type="file"
+            accept=".json,application/json"
+            class="hidden"
+            @change="onAnimDbFile"
+          />
+          <div class="flex shrink-0 items-center gap-1.5">
+            <p class="font-data m-0 min-w-0 flex-1 text-[11px] text-muted-foreground">
+              {{ animDbStats.dbCount }} DB · {{ animDbStats.rowCount }} rows
+            </p>
             <Button
               type="button"
               size="sm"
               variant="secondary"
-              class="h-7 rounded-sm px-2 text-xs"
+              class="h-7 w-7 shrink-0 rounded-sm px-0"
+              title="Load .csv.json"
+              aria-label="Load .csv.json"
               @click="animDbFileInput?.click()"
             >
-              Load .csv.json
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              class="h-7 rounded-sm px-2 text-xs"
-              :disabled="!animDbStats.dbCount"
-              @click="emit('clearAnimDb')"
-            >
-              Clear DBs
+              <UploadIcon class="size-3.5" :size="14" />
             </Button>
           </div>
           <p v-if="animDbError" class="m-0 text-[11px] text-destructive">{{ animDbError }}</p>
-          <p class="font-data m-0 text-[11px] text-muted-foreground">
-            {{ animDbStats.dbCount }} DB · {{ animDbStats.rowCount }} rows
-          </p>
 
           <div
             v-if="animDatabases.length"
@@ -829,38 +813,30 @@
 
         <!-- Rig palette -->
         <TabsContent value="rig" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
-          <div class="flex shrink-0 flex-wrap items-center gap-1.5">
-            <input
-              ref="rigFileInput"
-              type="file"
-              accept=".json,application/json"
-              class="hidden"
-              @change="onRigFile"
-            />
+          <input
+            ref="rigFileInput"
+            type="file"
+            accept=".json,application/json"
+            class="hidden"
+            @change="onRigFile"
+          />
+          <div class="flex shrink-0 items-center gap-1.5">
+            <p class="font-data m-0 min-w-0 flex-1 text-[11px] text-muted-foreground">
+              {{ rigEntries.length }} loaded · Sample uses active only
+            </p>
             <Button
               type="button"
               size="sm"
               variant="secondary"
-              class="h-7 rounded-sm px-2 text-xs"
+              class="h-7 w-7 shrink-0 rounded-sm px-0"
+              title="Load .rig.json"
+              aria-label="Load .rig.json"
               @click="rigFileInput?.click()"
             >
-              Load .rig.json
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              class="h-7 rounded-sm px-2 text-xs"
-              :disabled="!rigEntries.length"
-              @click="props.clearRigLibrary()"
-            >
-              Clear rigs
+              <UploadIcon class="size-3.5" :size="14" />
             </Button>
           </div>
           <p v-if="rigError" class="m-0 text-[11px] text-destructive">{{ rigError }}</p>
-          <p class="font-data m-0 text-[11px] text-muted-foreground">
-            {{ rigEntries.length }} loaded · Sample uses active only
-          </p>
           <div v-if="rigEntries.length" class="flex shrink-0 flex-col gap-1 overflow-y-auto max-h-[30%]">
             <div
               v-for="entry in rigEntries"
@@ -908,16 +884,13 @@
               <p class="m-0 text-[9px] uppercase tracking-wide text-muted-foreground/80">
                 Bones ({{ filteredRigBones.length }}/{{ activeRigBones.length }})
               </p>
-              <button
+              <p
                 v-for="bone in filteredRigBones"
                 :key="bone"
-                type="button"
-                class="flex w-full items-center gap-1 rounded-sm px-1 py-0.5 text-left hover:bg-muted/60"
-                :title="`Inspect ${bone}`"
-                @click="inspectBone(bone)"
+                class="font-data m-0 truncate px-1 text-[11px]"
               >
-                <span class="font-data min-w-0 flex-1 truncate text-[11px]">{{ bone }}</span>
-              </button>
+                {{ bone }}
+              </p>
               <p
                 v-if="activeRigParts.length"
                 class="m-0 mt-1 text-[9px] uppercase tracking-wide text-muted-foreground/80"
@@ -933,101 +906,6 @@
               </p>
             </div>
           </template>
-
-          <div class="flex shrink-0 items-center gap-1 border-t border-border/60 pt-1.5">
-            <Input
-              class="h-7 min-w-0 flex-1 rounded-sm text-xs"
-              placeholder="Inspect bone (e.g. Hips)"
-              v-model="poseInspectDraft"
-              @keydown.enter.prevent="inspectBone(poseInspectDraft)"
-            />
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              class="h-7 shrink-0 rounded-sm px-2 text-xs"
-              @click="inspectBone(poseInspectDraft)"
-            >
-              Inspect
-            </Button>
-          </div>
-          <p
-            v-if="snapshot.poseStats"
-            class="font-data m-0 text-[10px] text-muted-foreground"
-          >
-            Sample:
-            {{ snapshot.poseStats.ok ? 'ok' : snapshot.poseStats.reason || 'off' }}
-            · {{ snapshot.poseStats.boneCount }} bones
-            · {{ snapshot.poseStats.sampleMs.toFixed(2) }}ms
-            <template v-if="derivedPose.stackNames?.count">
-              · stack {{ derivedPose.stackNames.count }}
-            </template>
-            <template v-if="derivedPose.trackStack?.count">
-              · tracks {{ derivedPose.trackStack.count }}
-            </template>
-          </p>
-          <p
-            v-if="snapshot.poseStats?.missingGlb?.length"
-            class="font-data m-0 text-[10px] text-amber-400/90"
-            :title="snapshot.poseStats.missingGlb.join(', ')"
-          >
-            Missing glb ({{ snapshot.poseStats.missingGlb.length }}):
-            {{ snapshot.poseStats.missingGlb.slice(0, 4).join(', ') }}
-            <template v-if="snapshot.poseStats.missingGlb.length > 4">…</template>
-          </p>
-          <div
-            v-if="derivedPose.stackNames?.count"
-            class="flex max-h-28 flex-col gap-0.5 overflow-y-auto border-t border-border/40 pt-1"
-          >
-            <p class="m-0 text-[9px] uppercase tracking-wide text-muted-foreground/80">
-              Procedural (stack)
-              <template v-if="derivedPoseCaptureId"> · captured</template>
-            </p>
-            <button
-              v-for="name in derivedPose.stackNames.names"
-              :key="`stack-${name}`"
-              type="button"
-              class="flex w-full items-center gap-1 rounded-sm px-1 py-0.5 text-left hover:bg-muted/60"
-              :title="`Inspect ${name}`"
-              @click="inspectBone(name)"
-            >
-              <span class="font-data min-w-0 flex-1 truncate text-[11px] text-cyan-300/90">{{
-                name
-              }}</span>
-            </button>
-          </div>
-          <div
-            v-if="derivedPose.trackStack?.count"
-            class="flex max-h-28 flex-col gap-0.5 overflow-y-auto border-t border-border/40 pt-1"
-          >
-            <p class="m-0 text-[9px] uppercase tracking-wide text-muted-foreground/80">
-              Procedural tracks
-              <template v-if="derivedPoseCaptureId"> · captured</template>
-            </p>
-            <div
-              v-for="name in derivedPose.trackStack.names"
-              :key="`tstack-${name}`"
-              class="font-data flex w-full items-baseline gap-1 px-1 py-0.5 text-[11px]"
-            >
-              <span class="min-w-0 flex-1 truncate text-amber-300/90">{{ name }}</span>
-              <span class="shrink-0 tabular-nums text-muted-foreground">{{
-                formatTrackStackValue(derivedPose.trackStack.values[name])
-              }}</span>
-            </div>
-          </div>
-          <div
-            v-if="inspectedBoneName && inspectedBoneTrs"
-            class="font-data max-h-36 overflow-y-auto border-t border-border/40 pt-1 text-[10px] text-muted-foreground"
-          >
-            <div class="text-[11px] text-foreground/80">{{ inspectedBoneName }}</div>
-            <div class="pl-1">{{ formatInspectTrs(inspectedBoneTrs) }}</div>
-          </div>
-          <p
-            v-else-if="inspectedBoneName"
-            class="m-0 border-t border-border/40 pt-1 text-[10px] text-muted-foreground/70"
-          >
-            No TRS for {{ inspectedBoneName }}
-          </p>
         </TabsContent>
 
         <!-- Entity tags (StaticSwitch Component/Visual/Rig mock) — saved in project -->
@@ -1123,6 +1001,7 @@ import {
   Sparkles,
   Tags,
   TrashIcon,
+  UploadIcon,
   Variable,
   Zap,
 } from 'lucide-vue-next'
@@ -1136,7 +1015,6 @@ import type { ClipPoseSetView } from '../utils/sim/clipPoseLibrary'
 import type { RigEntryView } from '../utils/sim/rigResource'
 import { DEFAULT_SIM_FPS } from '../utils/sim/SimClock'
 import type { AnimDatabase, AnimDatabaseStats } from '../utils/sim/animDatabase'
-import type { BoneTrs } from '../utils/sim/pose'
 import type { SimSnapshot } from '../utils/sim/simTypes'
 import { Check, EllipsisVertical, TriangleAlert } from '@lucide/vue'
 import {
@@ -1145,12 +1023,6 @@ import {
   windowUiStateByType,
   type AppWindowUiState,
 } from '../stores/appWindows'
-import {
-  simGetDerivedPoseStats,
-  simStackCaptureHandleIds,
-} from '../stores/animgraphSim'
-import { activeDiagramId } from '../stores/graphProject'
-import type { DerivedPoseRef } from '../utils/sim/poseDerivedStats'
 import AnimSetupEntryCard from '@/components/sim/AnimSetupEntryCard.vue'
 import {
   PropertyBoolToggle,
@@ -1233,7 +1105,6 @@ const props = defineProps<{
   loadRigJson: (json: unknown, sourceLabel?: string) => string
   removeRig: (id: string) => void
   setActiveRig: (id: string | null) => void
-  clearRigLibrary: () => void
   sampleWarningsEnabled?: boolean
   setSampleWarningsEnabled?: (on: boolean) => void
   updateWarningsEnabled?: boolean
@@ -1292,8 +1163,6 @@ const emit = defineEmits<{
   fireExternal: [string?]
   fireAnimEvent: [string?]
   fireAnimEnd: []
-  clearClips: []
-  clearAnimDb: []
 }>()
 
 const activeTab = ref<'events' | 'values' | 'resources'>('events')
@@ -1346,7 +1215,6 @@ const clipsError = ref('')
 const animDbError = ref('')
 const rigError = ref('')
 const rigBonesFilter = ref('')
-const poseInspectDraft = ref('')
 const animsetFileInput = ref<HTMLInputElement | null>(null)
 const animsetGlbFileInput = ref<HTMLInputElement | null>(null)
 const glbTargetEntryId = ref<string | null>(null)
@@ -1863,51 +1731,6 @@ const onRigFile = async (ev: Event) => {
     rigError.value = err instanceof Error ? err.message : String(err)
   }
 }
-
-const derivedPoseCaptureId = computed(() => simStackCaptureHandleIds.value[0] ?? '')
-
-const derivedPoseRef = computed((): DerivedPoseRef => {
-  const id = derivedPoseCaptureId.value
-  return id ? { capture: id } : 'sample'
-})
-
-const derivedPose = computed(() => {
-  const snap = props.snapshot
-  void snap.poseGen
-  const diagramId = activeDiagramId.value ?? ''
-  if (!diagramId) return {}
-  return simGetDerivedPoseStats(snap, diagramId, {
-    pose: derivedPoseRef.value,
-    need: {
-      stackNames: true,
-      stackBones: true,
-      trackStack: true,
-      rigBones: true,
-    },
-  })
-})
-
-const inspectedBoneName = computed(() => poseInspectDraft.value.trim())
-
-const inspectedBoneTrs = computed(() => {
-  const name = inspectedBoneName.value
-  if (!name) return null
-  return (
-    derivedPose.value.rigBones?.bones[name] ??
-    derivedPose.value.stackBones?.bones[name] ??
-    null
-  )
-})
-
-const inspectBone = (name: string) => {
-  poseInspectDraft.value = name.trim()
-}
-
-const formatInspectTrs = (trs: BoneTrs) =>
-  `t(${trs.tx.toFixed(3)}, ${trs.ty.toFixed(3)}, ${trs.tz.toFixed(3)})`
-
-const formatTrackStackValue = (v: number | undefined) =>
-  Number.isFinite(v) ? (v as number).toFixed(3) : '—'
 
 const onAnimDbFile = async (ev: Event) => {
   animDbError.value = ''

@@ -254,7 +254,6 @@
                 :load-rig-json="simLoadRigJson"
                 :remove-rig="simRemoveRig"
                 :set-active-rig="simSetActiveRig"
-                :clear-rig-library="simClearRigLibrary"
                 :sample-warnings-enabled="simSampleWarningsEnabled"
                 :set-sample-warnings-enabled="simSetSampleWarningsEnabled"
                 :update-warnings-enabled="simUpdateWarningsEnabled"
@@ -291,8 +290,6 @@
                 @fire-external="simFireExternal"
                 @fire-anim-event="simFireAnimEvent"
                 @fire-anim-end="simFireAnimEnd"
-                @clear-clips="simClearClipLibrary"
-                @clear-anim-db="simClearAnimDatabaseLibrary"
               />
             </SidebarPanel>
 
@@ -631,10 +628,7 @@ import {
   simApplyProjectSimResources,
   simBoolFeatureDrafts,
   simBoolVarDrafts,
-  simClearAnimDatabaseLibrary,
   simClearAnimsetGlb,
-  simClearClipLibrary,
-  simClearRigLibrary,
   simClipNames,
   simClipPoseSets,
   simClipStats,
