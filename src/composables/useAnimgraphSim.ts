@@ -103,6 +103,7 @@ export function useAnimgraphSim() {
   const wrapperWeightDrafts = ref<Record<string, number>>({})
   /** Sample-path diagnostics (Blend2 null inputs, …). Off by default. */
   const sampleWarningsEnabled = ref(false)
+  const updateWarningsEnabled = ref(false)
 
   let raf = 0
   let lastTs = 0
@@ -151,6 +152,7 @@ export function useAnimgraphSim() {
     r.setClipPoseLibrary(clipPoseLibrary.value)
     r.setActiveRig(rigLibrary.value.getActive())
     r.sampleWarningsEnabled = sampleWarningsEnabled.value
+    r.updateWarningsEnabled = updateWarningsEnabled.value
     return r
   }
 
@@ -1121,6 +1123,14 @@ export function useAnimgraphSim() {
     publish(0)
   }
 
+  const setUpdateWarningsEnabled = (on: boolean) => {
+    updateWarningsEnabled.value = on
+    for (const runner of runners.values()) {
+      runner.updateWarningsEnabled = on
+    }
+    publish(0)
+  }
+
   const setStackCaptureHandleIds = (ids: string[]) => {
     const cleaned = ids.map((id) => id.trim()).filter(Boolean)
     for (const runner of runners.values()) {
@@ -1420,6 +1430,8 @@ export function useAnimgraphSim() {
     setPoseInspectBones,
     sampleWarningsEnabled,
     setSampleWarningsEnabled,
+    updateWarningsEnabled,
+    setUpdateWarningsEnabled,
     setStackCaptureHandleIds,
     loadAnimDatabaseJson,
     loadAnimDatabaseLibraryJson,

@@ -59,6 +59,14 @@
               Sample warnings
               <Check v-if="sampleWarningsEnabled" class="ml-auto size-3.5 opacity-80" />
             </DropdownMenuItem>
+            <DropdownMenuItem
+              class="gap-2 text-xs"
+              @select="setUpdateWarningsEnabled?.(!updateWarningsEnabled)"
+            >
+              <TriangleAlert class="size-3.5" />
+              Update warnings
+              <Check v-if="updateWarningsEnabled" class="ml-auto size-3.5 opacity-80" />
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -120,11 +128,11 @@
         class="mt-1 border-t border-border/60 pt-1 font-data text-[10px] text-amber-400/90"
       >
         <p class="m-0 mb-0.5 text-[9px] uppercase tracking-wide text-muted-foreground/80">
-          Warnings ({{ snapshot.poseStats.warnings.length }})
+          Sample warnings ({{ snapshot.poseStats.warnings.length }})
         </p>
         <p
           v-for="(w, i) in snapshot.poseStats.warnings"
-          :key="`${w.code}-${w.handleId}-${i}`"
+          :key="`s-${w.code}-${w.handleId}-${i}`"
           class="m-0 truncate"
           :title="w.message"
         >
@@ -136,6 +144,28 @@
         class="mt-1 border-t border-border/60 pt-1 text-[10px] text-muted-foreground/70"
       >
         No sample warnings this frame
+      </p>
+      <div
+        v-if="updateWarningsEnabled && snapshot.poseStats?.updateWarnings?.length"
+        class="mt-1 border-t border-border/60 pt-1 font-data text-[10px] text-amber-400/90"
+      >
+        <p class="m-0 mb-0.5 text-[9px] uppercase tracking-wide text-muted-foreground/80">
+          Update warnings ({{ snapshot.poseStats.updateWarnings.length }})
+        </p>
+        <p
+          v-for="(w, i) in snapshot.poseStats.updateWarnings"
+          :key="`u-${w.code}-${w.handleId}-${i}`"
+          class="m-0 truncate"
+          :title="w.message"
+        >
+          {{ w.message }}
+        </p>
+      </div>
+      <p
+        v-else-if="updateWarningsEnabled && snapshot.poseStats"
+        class="mt-1 border-t border-border/60 pt-1 text-[10px] text-muted-foreground/70"
+      >
+        No update warnings this frame
       </p>
     </div>
 
@@ -1236,6 +1266,8 @@ const props = defineProps<{
   setPoseInspectBones: (names: string[]) => void
   sampleWarningsEnabled?: boolean
   setSampleWarningsEnabled?: (on: boolean) => void
+  updateWarningsEnabled?: boolean
+  setUpdateWarningsEnabled?: (on: boolean) => void
   loadAnimDatabaseJson: (json: object, sourceLabel?: string) => string
   removeAnimDatabase: (pathKey: string) => void
   updateSetupEntry: (

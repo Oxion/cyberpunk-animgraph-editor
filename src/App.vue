@@ -258,6 +258,8 @@
                 :set-pose-inspect-bones="simSetPoseInspectBones"
                 :sample-warnings-enabled="simSampleWarningsEnabled"
                 :set-sample-warnings-enabled="simSetSampleWarningsEnabled"
+                :update-warnings-enabled="simUpdateWarningsEnabled"
+                :set-update-warnings-enabled="simSetUpdateWarningsEnabled"
                 :load-anim-database-json="simLoadAnimDatabaseJson"
                 :remove-anim-database="simRemoveAnimDatabase"
                 :update-setup-entry="simUpdateSetupEntry"
@@ -1133,6 +1135,8 @@ const {
   setPoseInspectBones: simSetPoseInspectBones,
   sampleWarningsEnabled: simSampleWarningsEnabled,
   setSampleWarningsEnabled: simSetSampleWarningsEnabled,
+  updateWarningsEnabled: simUpdateWarningsEnabled,
+  setUpdateWarningsEnabled: simSetUpdateWarningsEnabled,
   setStackCaptureHandleIds: simSetStackCaptureHandleIds,
   loadAnimDatabaseJson: simLoadAnimDatabaseJson,
   clearAnimDatabaseLibrary: simClearAnimDatabaseLibrary,

@@ -133,8 +133,19 @@ import {
   SimStateMachineRuntime,
   updateStateMachine,
 } from './SimStateMachine'
-import type { SimNodeState, SimSnapshot, SimActiveClip, SimClipResolve, SimSampleWarning } from './simTypes'
-import { diffSimNodeStates, emptySimSnapshot } from './simTypes'
+import type {
+  SimNodeState,
+  SimSnapshot,
+  SimActiveClip,
+  SimClipResolve,
+  SimSampleWarning,
+  SimUpdateWarning,
+} from './simTypes'
+import {
+  diffSimNodeStates,
+  emptySimSnapshot,
+  SIM_UPDATE_WARNINGS_MAX,
+} from './simTypes'
 
 /** Classify SkAnim clip lookup for HUD (ok / empty / no-lib / missing / gated). */
 function classifyClipResolve(
@@ -184,6 +195,8 @@ function runSkSpeedAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
   const speed = speedH ? readFloatSource(speedH, ctx, 1) : 1
   const fields = readSkAnimClockFields(d)
   const clock = ensureClipClock(ctx.clipClocks, node.HandleId)
+  // Warn once per frame (SM pre-tick + Update both call this).
+  if (!clock.stepped) noteClipZeroSpeed(ctx, node, speed)
   if (ctx.clipLibrary && ctx.clipLibrary.entryCount > 0) {
     const result = advanceClipClock(
       clock,
@@ -233,6 +246,7 @@ function runSkPhaseAnimClipClock(
 
   const fields = readSkAnimClockFields(d)
   const clock = ensureClipClock(ctx.clipClocks, node.HandleId)
+  if (mode === 'speed' && !clock.stepped) noteClipZeroSpeed(ctx, node, speedScale)
   const isWrap = (n: string) => ctx.board.isWrapperActive(n)
   const animName = fields.animation || 'None'
   const clip =
@@ -587,6 +601,29 @@ type WalkCtx = FloatEvalCtx & {
   boneQuatDyn: Map<string, BoneOpQuatState>
   boneTranslateDyn: Map<string, BoneOpTranslateState>
   mathExprPoseCache: MathExprPoseFrameCache
+  /** When true, Update appends diagnostics into updateWarnings. */
+  updateWarningsEnabled?: boolean
+  updateWarnings?: SimUpdateWarning[]
+}
+
+const CLIP_ZERO_SPEED_EPS = 1e-8
+
+function pushUpdateWarning(ctx: WalkCtx, w: SimUpdateWarning): void {
+  if (!ctx.updateWarningsEnabled || !ctx.updateWarnings) return
+  if (ctx.updateWarnings.length >= SIM_UPDATE_WARNINGS_MAX) return
+  ctx.updateWarnings.push(w)
+}
+
+/** Speed≈0 freezes clip time — AnimEnd / loop events never fire. */
+function noteClipZeroSpeed(ctx: WalkCtx, node: AnimgraphNode, speed: number): void {
+  if (!Number.isFinite(speed) || Math.abs(speed) >= CLIP_ZERO_SPEED_EPS) return
+  const anim = readCName((node.Data ?? {}).animation) || 'None'
+  pushUpdateWarning(ctx, {
+    code: 'clip-zero-speed',
+    handleId: node.HandleId,
+    speed,
+    message: `Clip speed≈0 (${anim}, #${node.HandleId}) — AnimEnd unreachable`,
+  })
 }
 
 /** Project GraphSlot attach: resolve slot name → nested diagram Update. */
@@ -3116,6 +3153,10 @@ export class SimGraphRunner {
    */
   sampleWarningsEnabled = false
   /**
+   * When true, Update appends diagnostics (clip zero-speed, …) into poseStats.updateWarnings.
+   */
+  updateWarningsEnabled = false
+  /**
    * Handles whose full pose is snapshotted during Sample (at that node).
    * Selection registers any node — inspect/stack HUD use the capture.
    */
@@ -3445,6 +3486,9 @@ export class SimGraphRunner {
     const sampleWarnings: SimSampleWarning[] | undefined = this.sampleWarningsEnabled
       ? []
       : undefined
+    const updateWarnings: SimUpdateWarning[] | undefined = this.updateWarningsEnabled
+      ? []
+      : undefined
     this.updateSucc.clear()
     clearBoneOpFrameCache(this.boneOpCache)
     clearMathExprPoseFrameCache(this.mathExprPoseCache)
@@ -3537,6 +3581,8 @@ export class SimGraphRunner {
       boneQuatDyn: this.boneQuatDyn,
       boneTranslateDyn: this.boneTranslateDyn,
       mathExprPoseCache: this.mathExprPoseCache,
+      updateWarningsEnabled: this.updateWarningsEnabled,
+      updateWarnings,
     }
 
     const root = findRootHandle(this.handles, this.originalAnimgraph)
@@ -3695,6 +3741,7 @@ export class SimGraphRunner {
         stackSourceHandleId: hud?.handleId ?? undefined,
         missingGlb: result.missingGlb,
         warnings: result.warnings,
+        updateWarnings,
       }
     } else {
       simSampleLogLine(
@@ -3708,6 +3755,7 @@ export class SimGraphRunner {
         boneCount: rig?.boneNames.length ?? 0,
         trackCount: rig?.trackNames.length ?? 0,
         sampleMs: 0,
+        updateWarnings,
       }
     }
 

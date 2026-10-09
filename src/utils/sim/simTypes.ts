@@ -78,6 +78,18 @@ export type SimSampleWarning = {
 /** Cap per Sample frame to keep HUD bounded. */
 export const SIM_SAMPLE_WARNINGS_MAX = 64
 
+/** Update-path diagnostic (clip clocks / speed / AnimEnd). */
+export type SimUpdateWarning = {
+  code: 'clip-zero-speed'
+  handleId: string
+  message: string
+  /** Effective playback speed when code is clip-zero-speed */
+  speed?: number
+}
+
+/** Cap per Update frame to keep HUD bounded. */
+export const SIM_UPDATE_WARNINGS_MAX = 64
+
 /** Active SkAnim clip clock sample (all stepped clocks this frame). */
 export interface SimActiveClip {
   handleId: string
@@ -131,6 +143,8 @@ export interface SimPoseStats {
   missingGlb?: string[]
   /** Sample warnings this frame (only when detect enabled) */
   warnings?: SimSampleWarning[]
+  /** Update warnings this frame (only when detect enabled) */
+  updateWarnings?: SimUpdateWarning[]
 }
 
 export interface SimSnapshot {
