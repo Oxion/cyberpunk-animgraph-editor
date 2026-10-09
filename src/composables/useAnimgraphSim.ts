@@ -493,6 +493,9 @@ export function useAnimgraphSim() {
   }
 
   const publish = (dt: number) => {
+    // Overlay applies undefined when inactive — skip step so callers (drafts, capture,
+    // resource loads) do not force a full diagram walk via snapshot watch.
+    if (!active.value) return
     applyDraftsToBoard()
     const snaps: Record<string, SimSnapshot> = {}
     const stepped = new Set<string>()
