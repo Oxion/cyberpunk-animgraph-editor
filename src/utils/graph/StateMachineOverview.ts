@@ -1,13 +1,14 @@
 import type { RenderNode } from './diagramTypes'
 import { forEachDirectChild, getChildSlot } from './nodeChildSlots'
 
+/** Diagram PropertyGroup order under an SM root (materialize rewrite + overview). */
 export const STATE_MACHINE_SECTIONS = [
   'anyStateInterpolator',
+  'frozenState',
   'conditionalEntries',
   'globalTransitions',
-  'states',
   'transitions',
-  'frozenState',
+  'states',
 ] as const
 
 export type StateMachineSectionId = (typeof STATE_MACHINE_SECTIONS)[number]

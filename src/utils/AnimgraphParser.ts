@@ -41,6 +41,7 @@ import type {
 } from './graph/animgraphTypes'
 import type { AnimgraphVisualizerData, DiagramConnection, RenderData, RenderNode, SerializedRenderNode } from './graph/diagramTypes'
 import { getConnectionKey } from './graph/diagramModel'
+import { STATE_MACHINE_SECTIONS } from './graph/StateMachineOverview'
 
 export interface ParsedNode {
   id: string
@@ -431,9 +432,6 @@ export class AnimgraphParser {
       )
 
     const stateIds = idsOf('states')
-    const allTransitionIds = idsOf('transitions')
-    const allGlobalTransitionIds = idsOf('globalTransitions')
-    const conditionalEntryIds = idsOf('conditionalEntries')
     const anyStateInterpolatorIds = idsOf('anyStateInterpolator')
     const frozenStateIds = idsOf('frozenState')
 
@@ -482,12 +480,9 @@ export class AnimgraphParser {
       attachSection(group)
     }
 
-    attachWrappedSection('conditionalEntries', 'conditionalEntries')
-    attachWrappedSection('transitions', 'transitions')
-    attachWrappedSection('globalTransitions', 'globalTransitions')
-
-    const interpolatorIds = anyStateInterpolatorIds.filter((id) => !diagramChainClaimed.has(id))
-    if (interpolatorIds.length > 0) {
+    const attachAnyStateInterpolator = () => {
+      const interpolatorIds = anyStateInterpolatorIds.filter((id) => !diagramChainClaimed.has(id))
+      if (interpolatorIds.length === 0) return
       interpolatorIds.forEach((id) => diagramChainClaimed.add(id))
       const interpolatorNodes = interpolatorIds
         .map((id) => allNodes.get(id))
@@ -499,31 +494,33 @@ export class AnimgraphParser {
         interpolatorNodes,
         allNodes
       )
-      if (anyStateInterpolatorGroup) {
-        anyStateInterpolatorGroup.metadata = {
-          ...anyStateInterpolatorGroup.metadata,
-          smDiagramRole: 'anyStateInterpolator',
-        }
-        attachSection(anyStateInterpolatorGroup)
+      if (!anyStateInterpolatorGroup) return
+      anyStateInterpolatorGroup.metadata = {
+        ...anyStateInterpolatorGroup.metadata,
+        smDiagramRole: 'anyStateInterpolator',
       }
+      attachSection(anyStateInterpolatorGroup)
     }
 
-    frozenStateIds.forEach((frozenStateId) => {
-      const frozenRender = allNodes.get(frozenStateId)
-      if (!frozenRender) return
-      diagramChainClaimed.add(frozenStateId)
-      const frozenGroup = this.createRenderGroup(
-        renderNode.id,
-        'frozenState',
-        'frozenState',
-        [frozenRender],
-        allNodes,
-        { stateId: frozenStateId, smDiagramRole: 'frozenState' }
-      )
-      attachSection(frozenGroup)
-    })
+    const attachFrozenState = () => {
+      frozenStateIds.forEach((frozenStateId) => {
+        const frozenRender = allNodes.get(frozenStateId)
+        if (!frozenRender) return
+        diagramChainClaimed.add(frozenStateId)
+        const frozenGroup = this.createRenderGroup(
+          renderNode.id,
+          'frozenState',
+          'frozenState',
+          [frozenRender],
+          allNodes,
+          { stateId: frozenStateId, smDiagramRole: 'frozenState' }
+        )
+        attachSection(frozenGroup)
+      })
+    }
 
-    if (diagramStateNodes.length > 0) {
+    const attachStates = () => {
+      if (diagramStateNodes.length === 0) return
       const statesGroup = this.createRenderGroup(
         renderNode.id,
         'states',
@@ -536,14 +533,26 @@ export class AnimgraphParser {
       attachSection(statesGroup)
     }
 
-    const diagramPropertyKeys = new Set([
-      'states',
-      'transitions',
-      'globalTransitions',
-      'conditionalEntries',
-      'anyStateInterpolator',
-      'frozenState',
-    ])
+    for (const sectionId of STATE_MACHINE_SECTIONS) {
+      switch (sectionId) {
+        case 'anyStateInterpolator':
+          attachAnyStateInterpolator()
+          break
+        case 'frozenState':
+          attachFrozenState()
+          break
+        case 'conditionalEntries':
+        case 'globalTransitions':
+        case 'transitions':
+          attachWrappedSection(sectionId, sectionId)
+          break
+        case 'states':
+          attachStates()
+          break
+      }
+    }
+
+    const diagramPropertyKeys = new Set<string>(STATE_MACHINE_SECTIONS)
     sections.forEach((childNodes, propertyName) => {
       if (diagramPropertyKeys.has(propertyName) || childNodes.length === 0) return
 
