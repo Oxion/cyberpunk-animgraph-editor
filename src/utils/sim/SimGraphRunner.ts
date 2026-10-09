@@ -525,15 +525,6 @@ function markActive(
   nodes[id] = { ...prev, active: true, ...patch }
 }
 
-function markInactive(
-  nodes: Record<string, SimNodeState>,
-  id: string,
-  force = false
-): void {
-  if (!force && nodes[id]?.active) return
-  nodes[id] = { ...(nodes[id] ?? {}), active: false }
-}
-
 /** Shared float-eval context (board + stateful damp/spring/latch/signal). */
 type FloatEvalCtx = {
   board: SimInputBoard
@@ -965,40 +956,6 @@ function forEachLinkedInput(
     const n = handler.count(node)
     for (let i = 0; i < n; i++) {
       visit(resolveHandle(handles, handler.get(node, i)))
-    }
-  }
-}
-
-/** Dim an unused pose branch (Switch/Blend unused inputs) without Update.
- * Skip nodes already Update()'d this frame — shared base poses (e.g. BlendAdditive
- * inputNode) must stay lit even if also reachable from an unused branch.
- */
-function markInactiveBranch(
-  node: AnimgraphNode | null,
-  handles: Map<string, AnimgraphNode>,
-  nodes: Record<string, SimNodeState>,
-  seen: Set<string>,
-  activeVisited: Set<string>
-): void {
-  if (!node) return
-  if (seen.has(node.HandleId)) return
-  if (activeVisited.has(node.HandleId)) return
-  seen.add(node.HandleId)
-  markInactive(nodes, node.HandleId, true)
-
-  forEachLinkedInput(node, handles, (linked) =>
-    markInactiveBranch(linked, handles, nodes, seen, activeVisited)
-  )
-  // State / SM pose graphs live in contain fields, not pins.
-  const d = node.Data ?? {}
-  for (const key of ['nodes', 'outputNode', 'states'] as const) {
-    const val = d[key]
-    if (Array.isArray(val)) {
-      for (const ref of val) {
-        markInactiveBranch(resolveHandle(handles, ref), handles, nodes, seen, activeVisited)
-      }
-    } else if (val != null) {
-      markInactiveBranch(resolveHandle(handles, val), handles, nodes, seen, activeVisited)
     }
   }
 }
@@ -2462,15 +2419,6 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
         followUpdate(node, out, ctx)
       }
     }
-    // Explicit inactive: missing snapshot keys stay alpha 1 in overlay — SM
-    // overview state nodes would never dim without this.
-    states.forEach((ref, i) => {
-      if (i === rt.activeStateIndex) return
-      if (rt.isInTransition && i === rt.targetStateIndex) return
-      const h = resolveHandle(handles, ref)
-      if (!h) return
-      markInactiveBranch(h, handles, nodes, new Set(), ctx.visited)
-    })
     if (rt.firingTransitionHandleId) {
       const blendAlpha = evaluateSmTransitionBlendAlpha(
         node,
@@ -2629,14 +2577,8 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     markActive(nodes, node.HandleId, { weight, alpha: weight })
     const first = resolveHandle(handles, d.firstInputNode)
     const second = resolveHandle(handles, d.secondInputNode)
-    if (first) {
-      if (weight < 1) followUpdate(node, first, ctx)
-      else markInactiveBranch(first, handles, nodes, new Set(), ctx.visited)
-    }
-    if (second) {
-      if (weight > 0) followUpdate(node, second, ctx)
-      else markInactiveBranch(second, handles, nodes, new Set(), ctx.visited)
-    }
+    if (first && weight < 1) followUpdate(node, first, ctx)
+    if (second && weight > 0) followUpdate(node, second, ctx)
     return
   }
 
@@ -2656,7 +2598,6 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       const activeSecond =
         i === select.secondIndex && blendMultipleSecondInputActive(select.alpha)
       if (activeFirst || activeSecond) followUpdate(node, h, ctx)
-      else markInactiveBranch(h, handles, nodes, new Set(), ctx.visited)
     })
     return
   }
@@ -2674,10 +2615,9 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     // Badge = selected input index (0-based), matching engine SelectInputs
     markActive(nodes, node.HandleId, { weight: index, alpha: 1 })
     inputs.forEach((ref, i) => {
+      if (i !== index) return
       const h = resolveHandle(handles, ref)
-      if (!h) return
-      if (i === index) followUpdate(node, h, ctx)
-      else markInactiveBranch(h, handles, nodes, new Set(), ctx.visited)
+      if (h) followUpdate(node, h, ctx)
     })
     return
   }
@@ -2702,13 +2642,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     markActive(nodes, node.HandleId, { weight: useTrue ? 1 : 0, alpha: 1 })
     const trueIn = resolveHandle(handles, d.True ?? d.true)
     const falseIn = resolveHandle(handles, d.False ?? d.false)
-    if (useTrue) {
-      followUpdate(node, trueIn, ctx)
-      if (falseIn) markInactiveBranch(falseIn, handles, nodes, new Set(), ctx.visited)
-    } else {
-      followUpdate(node, falseIn, ctx)
-      if (trueIn) markInactiveBranch(trueIn, handles, nodes, new Set(), ctx.visited)
-    }
+    followUpdate(node, useTrue ? trueIn : falseIn, ctx)
     return
   }
 
@@ -2728,10 +2662,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const additive = resolveHandle(handles, d.addedInputNode ?? d.additiveInputNode)
     // Base pose always updates (engine always LinkSafeUpdate inputNode)
     followUpdate(node, base, ctx)
-    if (additive) {
-      if (isBlendAdditiveInputActive(alpha)) followUpdate(node, additive, ctx)
-      else markInactiveBranch(additive, handles, nodes, new Set(), ctx.visited)
-    }
+    if (additive && isBlendAdditiveInputActive(alpha)) followUpdate(node, additive, ctx)
     return
   }
 
@@ -2746,10 +2677,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const base = resolveHandle(handles, d.inputNode)
     const overrideIn = resolveHandle(handles, d.overrideInputNode)
     followUpdate(node, base, ctx)
-    if (overrideIn) {
-      if (blendOverrideInputActive(weight)) followUpdate(node, overrideIn, ctx)
-      else markInactiveBranch(overrideIn, handles, nodes, new Set(), ctx.visited)
-    }
+    if (overrideIn && blendOverrideInputActive(weight)) followUpdate(node, overrideIn, ctx)
     return
   }
 
@@ -2773,10 +2701,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const base = resolveHandle(handles, d.base)
     const blend = resolveHandle(handles, d.blend)
     followUpdate(node, base, ctx)
-    if (blend) {
-      if (blendActive) followUpdate(node, blend, ctx)
-      else markInactiveBranch(blend, handles, nodes, new Set(), ctx.visited)
-    }
+    if (blend && blendActive) followUpdate(node, blend, ctx)
     return
   }
 
