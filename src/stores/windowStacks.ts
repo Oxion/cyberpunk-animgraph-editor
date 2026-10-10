@@ -68,9 +68,24 @@ export function getWindowStackTop(windowId: string): GraphViewEntry | null {
 export function pushWindowStack(windowId: string, entry: GraphViewEntry) {
   const prev = windowStacks.value[windowId]
   if (!prev || prev.length === 0) return
+  // Namespace so body renderer sync can treat win_* ids as window-owned.
+  const id = entry.id.startsWith(`${windowId}__`) ? entry.id : `${windowId}__${entry.id}`
   windowStacks.value = {
     ...windowStacks.value,
-    [windowId]: [...prev, entry],
+    [windowId]: [...prev, { ...entry, id }],
+  }
+}
+
+/** View id registered for the focused layer of a window (stack top). */
+export function getWindowTopViewId(windowId: string): string | null {
+  return getWindowStackTop(windowId)?.id ?? null
+}
+
+export function forEachWindowStackEntry(
+  fn: (windowId: string, entry: GraphViewEntry) => void
+): void {
+  for (const [windowId, stack] of Object.entries(windowStacks.value)) {
+    for (const entry of stack) fn(windowId, entry)
   }
 }
 

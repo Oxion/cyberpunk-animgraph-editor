@@ -12,6 +12,7 @@ import {
   setMainRendererForDiagram,
   syncBodyRendererActivity,
 } from '../stores/diagramRenderers'
+import { getWindowStack } from '../stores/windowStacks'
 
 export const diagramViewReadyRef = ref(false)
 let diagramRenderToken = 0
@@ -139,11 +140,14 @@ export function softActivateDiagram(diagramId: string) {
   ensureDiagramRenderer(diagramId)
   activateMainRenderer(diagramId)
 
-  // Suspend window renderers that belong to other diagrams (keep alive).
+  // Suspend window stack layers that belong to other diagrams (keep alive).
   for (const win of windows.value) {
     const owned = windowProjectDiagramId(win)
     if (owned == null) continue
-    getDiagramViewApi(win.id)?.getRenderer()?.setSuspended(owned !== diagramId)
+    const suspended = owned !== diagramId
+    for (const entry of getWindowStack(win.id)) {
+      getDiagramViewApi(entry.id)?.getRenderer()?.setSuspended(suspended)
+    }
   }
 
   syncBodyRendererActivity()

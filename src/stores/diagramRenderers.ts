@@ -3,7 +3,7 @@ import type { PixiGraphRenderer } from '../utils/PixiGraphRenderer'
 import { currentView } from './bodyViews'
 import { activeDiagramId } from './graphProject'
 import { windows } from './appWindows'
-import { getWindowStackTop } from './windowStacks'
+import { getWindowStackTop, getWindowTopViewId } from './windowStacks'
 
 /** Stable id for the active Main Pixi canvas (legacy callers). */
 export const MAIN_RENDERER_ID = 'main'
@@ -148,7 +148,8 @@ export function forEachMainDiagramRenderer(
 export function getActiveDiagramRenderer(): PixiGraphRenderer | null {
   const surface = focusedDiagramSurface.value
   if (surface?.kind === 'window') {
-    return getDiagramViewRenderer(surface.windowId)
+    const viewId = getWindowTopViewId(surface.windowId)
+    return viewId ? getDiagramViewRenderer(viewId) : null
   }
   const top = currentView.value
   if (top.kind === 'graph-scope' || top.kind === 'state-links') {

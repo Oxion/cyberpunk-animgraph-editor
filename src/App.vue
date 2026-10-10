@@ -422,21 +422,27 @@
         />
         <SimStatusWindowContent v-else-if="win.type === 'sim-status'" />
         <div
-          v-else-if="win.type === 'lens' && windowRenderData(win.id) && windowLensTop(win.id)"
+          v-else-if="win.type === 'lens' && windowRenderData(win.id)"
           class="app-window-stack-host"
         >
-          <LensWindowContent
-            :ref="(el) => bindWindowDiagramRef(win.id, el)"
-            :graph-data="windowRenderData(win.id)!"
-            :root-node-id="windowLensTop(win.id)!.payload.scopeRootId"
-            :hide-scope-root="Boolean(windowLensTop(win.id)!.payload.hideScopeRoot)"
-            :present-op="getGraphViewPresentOps(windowLensTop(win.id)!, windowRenderData(win.id)!)"
-            @node-select="(ids, primary) => handleWindowLensNodeSelect(windowDiagramId(win.id), ids, primary)"
-            @open-scope="(nodeId) => pushScopeIntoWindow(win.id, nodeId)"
-            @pin-connect="(payload) => onViewPinConnect(windowDiagramId(win.id), payload)"
-            @pin-rewire="(payload) => onViewPinRewire(windowDiagramId(win.id), payload)"
-            @ready="updateConnectionSettings"
-          />
+          <template v-for="entry in getWindowStack(win.id)" :key="entry.id">
+            <LensWindowContent
+              v-if="entry.kind === 'graph-scope' && entry.payload.scopeRootId"
+              v-show="isWindowStackTop(win.id, entry)"
+              class="app-window-stack-layer"
+              :ref="(el) => bindWindowDiagramRef(entry.id, el)"
+              :graph-data="windowRenderData(win.id)!"
+              :root-node-id="entry.payload.scopeRootId"
+              :hide-scope-root="Boolean(entry.payload.hideScopeRoot)"
+              :present-op="getGraphViewPresentOps(entry, windowRenderData(win.id)!)"
+              :active="isWindowStackTop(win.id, entry)"
+              @node-select="(ids, primary) => handleWindowLensNodeSelect(windowDiagramId(win.id), ids, primary)"
+              @open-scope="(nodeId) => pushScopeIntoWindow(win.id, nodeId)"
+              @pin-connect="(payload) => onViewPinConnect(windowDiagramId(win.id), payload)"
+              @pin-rewire="(payload) => onViewPinRewire(windowDiagramId(win.id), payload)"
+              @ready="updateConnectionSettings"
+            />
+          </template>
           <GraphViewBreadcrumb
             v-if="windowStackBreadcrumbItems(win.id).length > 1"
             :items="windowStackBreadcrumbItems(win.id)"
@@ -447,30 +453,38 @@
           v-else-if="win.type === 'state-links' && windowRenderData(win.id)"
           class="app-window-stack-host"
         >
-          <StateLinksViewContent
-            v-if="windowStackTopKind(win.id) === 'state-links'"
-            :ref="(el) => bindWindowDiagramRef(win.id, el)"
-            :graph-data="windowRenderData(win.id)!"
-            :state-node-id="win.payload.stateNodeId"
-            @node-select="(ids, primary) => handleWindowLensNodeSelect(windowDiagramId(win.id), ids, primary)"
-            @open-scope="(diagramNodeId) => openStateLinksRootChild(win.id, diagramNodeId)"
-            @pin-connect="(payload) => onViewPinConnect(windowDiagramId(win.id), payload)"
-            @pin-rewire="(payload) => onViewPinRewire(windowDiagramId(win.id), payload)"
-            @ready="updateConnectionSettings"
-          />
-          <LensWindowContent
-            v-else-if="windowLensTop(win.id)"
-            :ref="(el) => bindWindowDiagramRef(win.id, el)"
-            :graph-data="windowRenderData(win.id)!"
-            :root-node-id="windowLensTop(win.id)!.payload.scopeRootId"
-            :hide-scope-root="Boolean(windowLensTop(win.id)!.payload.hideScopeRoot)"
-            :present-op="getGraphViewPresentOps(windowLensTop(win.id)!, windowRenderData(win.id)!)"
-            @node-select="(ids, primary) => handleWindowLensNodeSelect(windowDiagramId(win.id), ids, primary)"
-            @open-scope="(nodeId) => pushScopeIntoWindow(win.id, nodeId)"
-            @pin-connect="(payload) => onViewPinConnect(windowDiagramId(win.id), payload)"
-            @pin-rewire="(payload) => onViewPinRewire(windowDiagramId(win.id), payload)"
-            @ready="updateConnectionSettings"
-          />
+          <template v-for="entry in getWindowStack(win.id)" :key="entry.id">
+            <StateLinksViewContent
+              v-if="entry.kind === 'state-links' && entry.payload.stateNodeId"
+              v-show="isWindowStackTop(win.id, entry)"
+              class="app-window-stack-layer"
+              :ref="(el) => bindWindowDiagramRef(entry.id, el)"
+              :graph-data="windowRenderData(win.id)!"
+              :state-node-id="entry.payload.stateNodeId"
+              :active="isWindowStackTop(win.id, entry)"
+              @node-select="(ids, primary) => handleWindowLensNodeSelect(windowDiagramId(win.id), ids, primary)"
+              @open-scope="(diagramNodeId) => openStateLinksRootChild(win.id, diagramNodeId)"
+              @pin-connect="(payload) => onViewPinConnect(windowDiagramId(win.id), payload)"
+              @pin-rewire="(payload) => onViewPinRewire(windowDiagramId(win.id), payload)"
+              @ready="updateConnectionSettings"
+            />
+            <LensWindowContent
+              v-else-if="entry.kind === 'graph-scope' && entry.payload.scopeRootId"
+              v-show="isWindowStackTop(win.id, entry)"
+              class="app-window-stack-layer"
+              :ref="(el) => bindWindowDiagramRef(entry.id, el)"
+              :graph-data="windowRenderData(win.id)!"
+              :root-node-id="entry.payload.scopeRootId"
+              :hide-scope-root="Boolean(entry.payload.hideScopeRoot)"
+              :present-op="getGraphViewPresentOps(entry, windowRenderData(win.id)!)"
+              :active="isWindowStackTop(win.id, entry)"
+              @node-select="(ids, primary) => handleWindowLensNodeSelect(windowDiagramId(win.id), ids, primary)"
+              @open-scope="(nodeId) => pushScopeIntoWindow(win.id, nodeId)"
+              @pin-connect="(payload) => onViewPinConnect(windowDiagramId(win.id), payload)"
+              @pin-rewire="(payload) => onViewPinRewire(windowDiagramId(win.id), payload)"
+              @ready="updateConnectionSettings"
+            />
+          </template>
           <GraphViewBreadcrumb
             v-if="windowStackBreadcrumbItems(win.id).length > 1"
             :items="windowStackBreadcrumbItems(win.id)"
@@ -898,8 +912,8 @@ import { bodyOverlayEntries, bodyViewBreadcrumbs, bodyViewTop, type DiagramBodyV
 import {
   getWindowStack,
   getWindowStackTop,
+  getWindowTopViewId,
   jumpWindowStack,
-  popWindowStack,
   pushWindowStack,
   windowStackRevision,
 } from './stores/windowStacks'
@@ -917,7 +931,6 @@ import {
 import type { AppWindowState, RenderStatsWindowPayload } from './types/AppWindow'
 import type { AnimgraphNode } from './utils/graph/animgraphTypes'
 import type { DiagramConnection, RenderData } from './utils/graph/diagramTypes'
-import { MAIN_DIAGRAM_ID } from './utils/graph/diagramTypes'
 import type { DirectChildrenLayoutMode } from './utils/graph/DirectChildrenLayout'
 import { getConnectionKey } from './utils/graph/diagramModel'
 import { NodeDefinitionRegistry } from './utils/NodeDefinition'
@@ -989,12 +1002,8 @@ const onBodyLayerClose = (body: DiagramBodyView) => {
 // Touch revision so window stack template updates.
 void windowStackRevision
 
-const windowLensTop = (windowId: string): GraphViewEntry<'graph-scope'> | null => {
-  const top = getWindowStackTop(windowId)
-  return top?.kind === 'graph-scope' ? top : null
-}
-
-const windowStackTopKind = (windowId: string) => getWindowStackTop(windowId)?.kind ?? null
+const isWindowStackTop = (windowId: string, entry: GraphViewEntry) =>
+  getWindowStackTop(windowId)?.id === entry.id
 
 const windowStackBreadcrumbItems = (windowId: string) =>
   getWindowStack(windowId).map((entry, index) => ({
@@ -1116,11 +1125,6 @@ const openStateLinksRootChild = (windowId: string, nodeId: string) => {
 }
 
 const onWindowClose = (windowId: string) => {
-  const stack = getWindowStack(windowId)
-  if (stack.length > 1) {
-    popWindowStack(windowId)
-    return
-  }
   closeWindow(windowId)
 }
 
@@ -1314,7 +1318,8 @@ watch(
 )
 
 const fitAppWindow = (windowId: string) => {
-  getDiagramViewApi(windowId)?.fitView?.()
+  const viewId = getWindowTopViewId(windowId)
+  if (viewId) getDiagramViewApi(viewId)?.fitView?.()
 }
 
 const debugTiles = ref(false)
@@ -1350,6 +1355,10 @@ const getRenderStatsForWindow = (win: AppWindowState) => {
   const { source, sourceId } = win.payload
   if (source === 'main') {
     return getDiagramViewRenderer(MAIN_RENDERER_ID)?.getRenderStats() ?? null
+  }
+  if (source === 'window') {
+    const viewId = getWindowTopViewId(sourceId) ?? sourceId
+    return getDiagramViewRenderer(viewId)?.getRenderStats() ?? null
   }
   return getDiagramViewRenderer(sourceId)?.getRenderStats() ?? null
 }
@@ -1407,19 +1416,13 @@ const applySimOverlayToAllRenderers = () => {
   forEachDiagramViewRenderer((renderer, viewId) => {
     // Active Main already painted above via forEachMainDiagramRenderer.
     if (viewId === MAIN_RENDERER_ID) return
-    let diagramId = activeDiagramId.value ?? MAIN_DIAGRAM_ID
-    if (viewId.startsWith('win_')) {
-      diagramId = windowDiagramId(viewId)
-    } else {
-      const body = bodyViews.value.find((v) => v.id === viewId)
-      if (body) diagramId = bodyViewTop(body).projectDiagramId
-    }
+    const diagramId = diagramIdForViewId(viewId)
     renderer.applySimOverlay(live ? simSnapshotForDiagram(diagramId) : undefined)
   })
 }
 
-const bindWindowDiagramRef = (windowId: string, el: unknown) => {
-  bindDiagramViewRef(windowId, el)
+const bindWindowDiagramRef = (viewId: string, el: unknown) => {
+  bindDiagramViewRef(viewId, el)
   if (el) applySimOverlayToAllRenderers()
 }
 
@@ -2374,16 +2377,15 @@ onUnmounted(() => {
 
 .app-window-stack-host {
   position: relative;
-  display: flex;
-  flex-direction: column;
   width: 100%;
   height: 100%;
   min-height: 0;
   overflow: hidden;
 }
 
-.app-window-stack-host > :first-child {
-  flex: 1;
+.app-window-stack-layer {
+  position: absolute;
+  inset: 0;
   min-height: 0;
 }
 

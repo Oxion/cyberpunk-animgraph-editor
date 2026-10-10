@@ -1,0 +1,5 @@
+export type { WindowOpenPolicy, WindowReuseKind } from './types'
+export { getWindowOpenPolicy, windowOpenPolicies } from './registry'
+export { lensWindowTitle } from './policies/lens'
+export { stateLinksWindowTitle } from './policies/stateLinks'
+export { renderStatsWindowTitle } from './policies/renderStats'

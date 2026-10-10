@@ -1,10 +1,12 @@
 import { computed, ref } from 'vue'
 import type {
   AppWindowOpenOptions,
+  AppWindowPayloadByType,
   AppWindowRect,
   AppWindowState,
   AppWindowType,
   LensWindowPayload,
+  OpenWindowSpec,
   RenderStatsWindowPayload,
   SimSkeletonWindowPayload,
   SimStatusWindowPayload,
@@ -28,28 +30,16 @@ import {
 } from '../utils/windows/layoutMemory'
 import { getWindowPresentOps } from '../utils/windows/presentOps'
 import {
-  clearWindowStack,
-  initLensWindowStack,
-  initStateLinksWindowStack,
-} from './windowStacks'
+  getWindowOpenPolicy,
+  lensWindowTitle,
+  stateLinksWindowTitle,
+  type WindowOpenPolicy,
+} from '../utils/windows/openPolicy'
+import { clearWindowStack } from './windowStacks'
 import { currentLoadedPath } from './loadedProjectPath'
 import { activeDiagramId } from './graphProject'
 
 let zCounter = 100
-
-function lensWindowTitle(payload: LensWindowPayload, preview: boolean): string {
-  const prefix = payload.quickLens ? 'Quick Lens' : preview ? 'Preview Lens' : 'Lens'
-  return `${prefix} · ${payload.rootLabel}`
-}
-
-function stateLinksWindowTitle(payload: StateLinksWindowPayload, preview: boolean): string {
-  const label = payload.rootLabel
-  return preview ? `Preview · ${label}` : label
-}
-
-function renderStatsWindowTitle(payload: RenderStatsWindowPayload): string {
-  return `Render Stats · ${payload.label}`
-}
 
 export const windows = ref<AppWindowState[]>([])
 export const activeWindowId = ref<string | null>(null)
@@ -60,8 +50,10 @@ const bumpZ = () => {
 }
 
 const findPreviewWindow = (type: AppWindowType): AppWindowState | undefined => {
-  return windows.value.find((w) => w.type === type && w.preview && !w.minimized)
-    ?? windows.value.find((w) => w.type === type && w.preview)
+  return (
+    windows.value.find((w) => w.type === type && w.preview && !w.minimized) ??
+    windows.value.find((w) => w.type === type && w.preview)
+  )
 }
 
 const activateWindow = (win: AppWindowState) => {
@@ -137,193 +129,130 @@ const openRectFor = (type: AppWindowType, options: AppWindowOpenOptions = {}): O
   }
 }
 
-export const openLensWindow = (payload: LensWindowPayload, options: AppWindowOpenOptions | number = {}) => {
-  const opts: AppWindowOpenOptions =
-    typeof options === 'number' ? { offsetIndex: options } : options
-  const preview = Boolean(opts.preview ?? payload.quickLens)
+const normalizeOpenOptions = (
+  options: AppWindowOpenOptions | number | undefined
+): AppWindowOpenOptions => (typeof options === 'number' ? { offsetIndex: options } : options ?? {})
 
-  if (preview) {
-    const existing = findPreviewWindow('lens')
-    if (existing && existing.type === 'lens') {
-      existing.payload = { ...payload }
-      existing.preview = true
-      existing.title = lensWindowTitle(payload, true)
-      if (opts.maximized && !existing.maximized) {
-        existing.restoreRect = {
-          x: existing.x,
-          y: existing.y,
-          width: existing.width,
-          height: existing.height,
-        }
-        existing.maximized = true
-      } else if (!opts.maximized && opts.maximized === false && existing.maximized) {
-        // keep maximized unless explicitly clearing — usually replace keeps maximize state
-      }
-      activateWindow(existing)
-      initLensWindowStack(existing.id, {
-        scopeRootId: payload.rootNodeId,
-        label: payload.rootLabel,
-        hideScopeRoot: payload.hideScopeRoot,
-        projectDiagramId: payload.projectDiagramId,
-      })
-      return existing.id
+function findReusableWindow<T extends AppWindowType>(
+  type: T,
+  payload: AppWindowPayloadByType[T],
+  preview: boolean,
+  policy: WindowOpenPolicy<T>
+): Extract<AppWindowState, { type: T }> | undefined {
+  if (policy.reuse === 'none') return undefined
+  if (policy.reuse === 'preview') {
+    if (!preview) return undefined
+    const existing = findPreviewWindow(type)
+    return existing?.type === type
+      ? (existing as Extract<AppWindowState, { type: T }>)
+      : undefined
+  }
+  if (policy.reuse === 'singleton') {
+    const existing = windows.value.find((w) => w.type === type)
+    return existing?.type === type
+      ? (existing as Extract<AppWindowState, { type: T }>)
+      : undefined
+  }
+  // match
+  const existing = windows.value.find(
+    (w) =>
+      w.type === type &&
+      policy.matchExisting?.(w as Extract<AppWindowState, { type: T }>, payload)
+  )
+  return existing?.type === type
+    ? (existing as Extract<AppWindowState, { type: T }>)
+    : undefined
+}
+
+function promoteMaximized(win: AppWindowState, options: AppWindowOpenOptions) {
+  if (options.maximized && !win.maximized) {
+    win.restoreRect = {
+      x: win.x,
+      y: win.y,
+      width: win.width,
+      height: win.height,
     }
+    win.maximized = true
+  }
+}
+
+function applyMinSize(
+  rect: OpenGeometry,
+  minSize: { width: number; height: number } | undefined
+): { width: number; height: number } {
+  if (rect.fromMemory || !minSize) {
+    return { width: rect.width, height: rect.height }
+  }
+  return {
+    width: Math.max(rect.width, minSize.width),
+    height: Math.max(rect.height, minSize.height),
+  }
+}
+
+/** Unified open path for all `AppWindowType`s. */
+export function openWindow(spec: OpenWindowSpec): string {
+  const options = normalizeOpenOptions(spec.options)
+  const policy = getWindowOpenPolicy(spec.type)
+  const payload = spec.payload as AppWindowPayloadByType[typeof spec.type]
+  const preview = policy.resolvePreview(payload, options)
+
+  const existing = findReusableWindow(spec.type, payload, preview, policy)
+  if (existing) {
+    existing.payload = { ...payload } as typeof existing.payload
+    existing.preview = preview
+    existing.title = policy.title(payload, preview)
+    promoteMaximized(existing, options)
+    activateWindow(existing)
+    policy.afterOpen?.(existing, 'reuse')
+    return existing.id
   }
 
-  const id = `win_lens_${Date.now()}_${payload.rootNodeId}`
-  const rect = openRectFor('lens', opts)
-  const win: AppWindowState = {
+  const rect = openRectFor(spec.type, options)
+  const size = applyMinSize(rect, policy.minSize)
+  const id = policy.makeId(payload)
+  const win = {
     id,
-    type: 'lens',
-    title: lensWindowTitle(payload, preview),
+    type: spec.type,
+    title: policy.title(payload, preview),
     x: rect.x,
     y: rect.y,
-    width: rect.width,
-    height: rect.height,
+    width: size.width,
+    height: size.height,
     zIndex: bumpZ(),
     minimized: false,
     preview,
     maximized: rect.maximized,
-    payload,
-  }
+    payload: { ...payload },
+    ...(policy.autoSize ? { autoSizePending: !rect.fromMemory } : {}),
+  } as AppWindowState
+
   if (rect.maximized) {
     win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
   }
   windows.value.push(win)
   activeWindowId.value = id
-  initLensWindowStack(id, {
-    scopeRootId: payload.rootNodeId,
-    label: payload.rootLabel,
-    hideScopeRoot: payload.hideScopeRoot,
-    projectDiagramId: payload.projectDiagramId,
-  })
+  const created = win as Extract<AppWindowState, { type: typeof spec.type }>
+  policy.afterOpen?.(created, 'create')
   return id
 }
+
+export const openLensWindow = (
+  payload: LensWindowPayload,
+  options: AppWindowOpenOptions | number = {}
+) => openWindow({ type: 'lens', payload, options })
 
 export const openSmRingWindow = (
   payload: SmRingWindowPayload,
   options: AppWindowOpenOptions | number = {}
-) => {
-  const opts: AppWindowOpenOptions =
-    typeof options === 'number' ? { offsetIndex: options } : options
-  const preview = Boolean(opts.preview)
-  const id = `win_smring_${Date.now()}_${payload.stateMachineNodeId}`
-  const rect = openRectFor('sm-ring', opts)
-  const win: AppWindowState = {
-    id,
-    type: 'sm-ring',
-    title: `SM Ring · ${payload.rootLabel}`,
-    x: rect.x,
-    y: rect.y,
-    width: rect.width,
-    height: rect.height,
-    zIndex: bumpZ(),
-    minimized: false,
-    preview,
-    maximized: rect.maximized,
-    payload,
-  }
-  if (rect.maximized) {
-    win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
-  }
-  windows.value.push(win)
-  activeWindowId.value = id
-  return id
-}
+) => openWindow({ type: 'sm-ring', payload, options })
 
 export const openStateLinksWindow = (
   payload: StateLinksWindowPayload,
   options: AppWindowOpenOptions | number = {}
-) => {
-  const opts: AppWindowOpenOptions =
-    typeof options === 'number' ? { offsetIndex: options } : options
-  const preview = opts.preview !== false // state-links default to preview
+) => openWindow({ type: 'state-links', payload, options })
 
-  if (preview) {
-    const existing = findPreviewWindow('state-links')
-    if (existing && existing.type === 'state-links') {
-      existing.payload = { ...payload }
-      existing.preview = true
-      existing.title = stateLinksWindowTitle(payload, true)
-      if (opts.maximized && !existing.maximized) {
-        existing.restoreRect = {
-          x: existing.x,
-          y: existing.y,
-          width: existing.width,
-          height: existing.height,
-        }
-        existing.maximized = true
-      }
-      activateWindow(existing)
-      initStateLinksWindowStack(existing.id, {
-        stateNodeId: payload.stateNodeId,
-        label: payload.rootLabel,
-        stateMachineNodeId: payload.stateMachineNodeId,
-        projectDiagramId: payload.projectDiagramId,
-      })
-      return existing.id
-    }
-  }
-
-  const id = `win_statelinks_${Date.now()}_${payload.stateNodeId}`
-  const rect = openRectFor('state-links', opts)
-  const win: AppWindowState = {
-    id,
-    type: 'state-links',
-    title: stateLinksWindowTitle(payload, preview),
-    x: rect.x,
-    y: rect.y,
-    width: rect.width,
-    height: rect.height,
-    zIndex: bumpZ(),
-    minimized: false,
-    preview,
-    maximized: rect.maximized,
-    payload,
-  }
-  if (rect.maximized) {
-    win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
-  }
-  windows.value.push(win)
-  activeWindowId.value = id
-  initStateLinksWindowStack(id, {
-    stateNodeId: payload.stateNodeId,
-    label: payload.rootLabel,
-    stateMachineNodeId: payload.stateMachineNodeId,
-    projectDiagramId: payload.projectDiagramId,
-  })
-  return id
-}
-
-export const openSettingsWindow = () => {
-  const existing = windows.value.find((w) => w.type === 'settings')
-  if (existing) {
-    activateWindow(existing)
-    return existing.id
-  }
-  const id = 'win_settings'
-  const rect = openRectFor('settings')
-  const win: AppWindowState = {
-    id,
-    type: 'settings',
-    title: 'Settings',
-    x: rect.x,
-    y: rect.y,
-    width: rect.fromMemory ? rect.width : Math.max(rect.width, 640),
-    height: rect.fromMemory ? rect.height : Math.max(rect.height, 440),
-    zIndex: bumpZ(),
-    minimized: false,
-    preview: false,
-    maximized: rect.maximized,
-    payload: {},
-  }
-  if (rect.maximized) {
-    win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
-  }
-  windows.value.push(win)
-  activeWindowId.value = id
-  return id
-}
+export const openSettingsWindow = () =>
+  openWindow({ type: 'settings', payload: {} })
 
 export const closeSettingsWindow = () => {
   const existing = windows.value.find((w) => w.type === 'settings')
@@ -340,76 +269,12 @@ export const toggleSettingsWindow = (open?: boolean) => {
   else closeSettingsWindow()
 }
 
-export const openRenderStatsWindow = (payload: RenderStatsWindowPayload) => {
-  const existing = windows.value.find(
-    (w) =>
-      w.type === 'render-stats' &&
-      w.payload.source === payload.source &&
-      w.payload.sourceId === payload.sourceId
-  )
-  if (existing && existing.type === 'render-stats') {
-    existing.payload = { ...payload }
-    existing.title = renderStatsWindowTitle(payload)
-    activateWindow(existing)
-    return existing.id
-  }
-
-  const id = `win_render_stats_${payload.source}_${payload.sourceId}`
-  const rect = openRectFor('render-stats')
-  const win: AppWindowState = {
-    id,
-    type: 'render-stats',
-    title: renderStatsWindowTitle(payload),
-    x: rect.x,
-    y: rect.y,
-    width: rect.fromMemory ? rect.width : Math.max(rect.width, 320),
-    height: rect.fromMemory ? rect.height : Math.max(rect.height, 180),
-    zIndex: bumpZ(),
-    minimized: false,
-    preview: false,
-    maximized: rect.maximized,
-    autoSizePending: !rect.fromMemory,
-    payload: { ...payload },
-  }
-  if (rect.maximized) {
-    win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
-  }
-  windows.value.push(win)
-  activeWindowId.value = id
-  return id
-}
+export const openRenderStatsWindow = (payload: RenderStatsWindowPayload) =>
+  openWindow({ type: 'render-stats', payload: { ...payload } })
 
 export const openSimSkeletonWindow = (payload?: Partial<SimSkeletonWindowPayload>) => {
   const diagramId = payload?.diagramId || activeDiagramId.value || 'main'
-  const existing = windows.value.find((w) => w.type === 'sim-skeleton')
-  if (existing && existing.type === 'sim-skeleton') {
-    existing.payload = { diagramId }
-    existing.title = 'Sim Skeleton'
-    activateWindow(existing)
-    return existing.id
-  }
-  const id = 'win_sim_skeleton'
-  const rect = openRectFor('sim-skeleton')
-  const win: AppWindowState = {
-    id,
-    type: 'sim-skeleton',
-    title: 'Sim Skeleton',
-    x: rect.x,
-    y: rect.y,
-    width: rect.fromMemory ? rect.width : Math.max(rect.width, 480),
-    height: rect.fromMemory ? rect.height : Math.max(rect.height, 400),
-    zIndex: bumpZ(),
-    minimized: false,
-    preview: false,
-    maximized: rect.maximized,
-    payload: { diagramId },
-  }
-  if (rect.maximized) {
-    win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
-  }
-  windows.value.push(win)
-  activeWindowId.value = id
-  return id
+  return openWindow({ type: 'sim-skeleton', payload: { diagramId } })
 }
 
 /** Size mode when a window exists. */
@@ -419,13 +284,10 @@ export type AppWindowSizeUiState = 'minimized' | 'default' | 'maximized'
  * Presentation state for window toggle buttons / chrome.
  * Priority: closed → minimized → forward → maximized → default.
  */
-export type AppWindowUiState =
-  | 'closed'
-  | 'forward'
-  | AppWindowSizeUiState
+export type AppWindowUiState = 'closed' | 'forward' | AppWindowSizeUiState
 
 export function resolveWindowUiState(
-  win: AppWindowState | undefined | null,
+  win: AppWindowState | undefined | null
 ): AppWindowUiState {
   if (!win) return 'closed'
   if (win.minimized) return 'minimized'
@@ -443,36 +305,8 @@ export function windowUiStateById(id: string): AppWindowUiState {
   return resolveWindowUiState(windows.value.find((w) => w.id === id))
 }
 
-export const openSimStatusWindow = (_payload?: Partial<SimStatusWindowPayload>) => {
-  const existing = windows.value.find((w) => w.type === 'sim-status')
-  if (existing && existing.type === 'sim-status') {
-    existing.title = 'Sim Status'
-    activateWindow(existing)
-    return existing.id
-  }
-  const id = 'win_sim_status'
-  const rect = openRectFor('sim-status')
-  const win: AppWindowState = {
-    id,
-    type: 'sim-status',
-    title: 'Sim Status',
-    x: rect.x,
-    y: rect.y,
-    width: rect.fromMemory ? rect.width : Math.max(rect.width, 320),
-    height: rect.fromMemory ? rect.height : Math.max(rect.height, 240),
-    zIndex: bumpZ(),
-    minimized: false,
-    preview: false,
-    maximized: rect.maximized,
-    payload: {},
-  }
-  if (rect.maximized) {
-    win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
-  }
-  windows.value.push(win)
-  activeWindowId.value = id
-  return id
-}
+export const openSimStatusWindow = (_payload?: Partial<SimStatusWindowPayload>) =>
+  openWindow({ type: 'sim-status', payload: {} })
 
 export const closeWindow = (id: string) => {
   const closing = windows.value.find((w) => w.id === id)
@@ -618,7 +452,10 @@ export function windowProjectDiagramId(win: AppWindowState): string | null {
 }
 
 /** Windows visible for the active diagram (+ always settings / render-stats). */
-export function isWindowForActiveDiagram(win: AppWindowState, diagramId: string | null): boolean {
+export function isWindowForActiveDiagram(
+  win: AppWindowState,
+  diagramId: string | null
+): boolean {
   const owned = windowProjectDiagramId(win)
   if (owned == null) return true
   return Boolean(diagramId && owned === diagramId)
@@ -630,4 +467,3 @@ export const taskbarItems = computed(() => {
     .filter((w) => isWindowForActiveDiagram(w, diagramId))
     .map(mapToTaskbarItem)
 })
-

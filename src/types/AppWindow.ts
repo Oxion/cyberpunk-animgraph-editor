@@ -82,32 +82,28 @@ type AppWindowBase = {
   autoSizePending?: boolean
 }
 
-export type AppWindowState =
-  | (AppWindowBase & {
-      type: 'lens'
-      payload: LensWindowPayload
-    })
-  | (AppWindowBase & {
-      type: 'sm-ring'
-      payload: SmRingWindowPayload
-    })
-  | (AppWindowBase & {
-      type: 'state-links'
-      payload: StateLinksWindowPayload
-    })
-  | (AppWindowBase & {
-      type: 'settings'
-      payload: Record<string, never>
-    })
-  | (AppWindowBase & {
-      type: 'render-stats'
-      payload: RenderStatsWindowPayload
-    })
-  | (AppWindowBase & {
-      type: 'sim-skeleton'
-      payload: SimSkeletonWindowPayload
-    })
-  | (AppWindowBase & {
-      type: 'sim-status'
-      payload: SimStatusWindowPayload
-    })
+export type AppWindowPayloadByType = {
+  lens: LensWindowPayload
+  'sm-ring': SmRingWindowPayload
+  'state-links': StateLinksWindowPayload
+  settings: Record<string, never>
+  'render-stats': RenderStatsWindowPayload
+  'sim-skeleton': SimSkeletonWindowPayload
+  'sim-status': SimStatusWindowPayload
+}
+
+export type AppWindowState = {
+  [K in AppWindowType]: AppWindowBase & {
+    type: K
+    payload: AppWindowPayloadByType[K]
+  }
+}[AppWindowType]
+
+/** Discriminated open request — one arm per `AppWindowType`. */
+export type OpenWindowSpec = {
+  [K in AppWindowType]: {
+    type: K
+    payload: AppWindowPayloadByType[K]
+    options?: AppWindowOpenOptions | number
+  }
+}[AppWindowType]
