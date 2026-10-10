@@ -1333,6 +1333,9 @@ export class PixiGraphRenderer {
     if (this._diagramNodeIdToPixiDiagramNodeMap.has(diagramNode.id)) return true
 
     const viewRootDiagramNodeIdsSet = this._resolveViewRootDiagramNodeIdsSet()
+    // hideScopeRoot view roots (e.g. State PropertyGroups) sit under an overview-leaf
+    // parent — check self before the parent walk so incremental remount (undo) works.
+    if (viewRootDiagramNodeIdsSet.has(diagramNode.id)) return true
 
     let currentDiagramNode = diagramNode.parent
     while (currentDiagramNode) {
@@ -1340,7 +1343,7 @@ export class PixiGraphRenderer {
       if (viewRootDiagramNodeIdsSet.has(currentDiagramNode.id)) return true
       currentDiagramNode = currentDiagramNode.parent
     }
-    return viewRootDiagramNodeIdsSet.has(diagramNode.id)
+    return false
   }
 
   // #region Internal: Rendering
