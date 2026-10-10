@@ -25,6 +25,8 @@ export const PIN_ENDPOINT_COLOR: { [K in PinEndpointType]: string } = {
   // Pin-override / non-value endpoints — personal colors (exact accept types)
   animAnimNodeSourceChannel_WeightedQuat: '#e67e22',
   animAnimNodeSourceChannel_WeightedVector: '#1abc9c',
+  animDangleConstraint_Simulation: '#e6b84d',
   animIAnimStateTransitionCondition: '#e74c3c',
   animIAnimStateTransitionInterpolator: '#3498db',
+  animIDyngConstraint: '#a67c52',
 }

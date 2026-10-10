@@ -13,8 +13,10 @@ export const PIN_ENDPOINT_TYPES = [
   'animAnimNode_VectorValue',
   'animAnimNodeSourceChannel_WeightedQuat',
   'animAnimNodeSourceChannel_WeightedVector',
+  'animDangleConstraint_Simulation',
   'animIAnimStateTransitionCondition',
   'animIAnimStateTransitionInterpolator',
+  'animIDyngConstraint',
 ] as const
 
 export type PinEndpointType = (typeof PIN_ENDPOINT_TYPES)[number]
