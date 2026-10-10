@@ -698,6 +698,31 @@ export const NODE_DEFINITION_ENTRIES: ReadonlyArray<readonly [string, NodeDefini
     ['animAnimNode_RotateBone', {
       description: 'Rotate bone with input'
     }],
+    ['animAnimNode_RotateBoneByQuaternion', {
+      description: 'Rotate bone by quaternion with input',
+      dataTemplate: {
+        "$type": "animAnimNode_RotateBoneByQuaternion",
+        "bone": {
+          "$type": "animTransformIndex",
+          "name": {
+            "$type": "CName",
+            "$storage": "string",
+            "$value": "None"
+          }
+        },
+        "id": 4294967295,
+        "inputNode": {
+          "$type": "animPoseLink",
+          "node": null
+        },
+        "quaternionNode": {
+          "$type": "animQuaternionLink",
+          "node": null
+        },
+        "resetOnActivation": 1,
+        "useIncrementalMode": 0
+      }
+    }],
     ['animAnimNode_SetBonePosition', {
       description: 'Set bone position with input'
     }],
@@ -1273,6 +1298,24 @@ export const NODE_DEFINITION_ENTRIES: ReadonlyArray<readonly [string, NodeDefini
       description: 'Integer edge to feature condition with no connections'
     }],
 
+    ['animAnimStateTransitionCondition_IntEdgeGreaterFromZeroFeature', {
+      description: 'Integer edge greater-from-zero feature condition',
+      dataTemplate: {
+        "$type": "animAnimStateTransitionCondition_IntEdgeGreaterFromZeroFeature",
+        "featureName": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "featurePropertyName": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "greaterThenValue": 0
+      }
+    }],
+
     ['animAnimStateTransitionCondition_ExternalEvent', {
       description: 'External event condition with no connections',
       dataTemplate: {
@@ -1298,6 +1341,23 @@ export const NODE_DEFINITION_ENTRIES: ReadonlyArray<readonly [string, NodeDefini
       dataTemplate: {
         "$type": "animAnimStateTransitionCondition_BoolFeature",
         "compareValue": 1,
+        "featureName": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        },
+        "featurePropertyName": {
+          "$type": "CName",
+          "$storage": "string",
+          "$value": "None"
+        }
+      }
+    }],
+
+    ['animAnimStateTransitionCondition_BoolEdgeFeature', {
+      description: 'Boolean edge feature condition (fires on value change)',
+      dataTemplate: {
+        "$type": "animAnimStateTransitionCondition_BoolEdgeFeature",
         "featureName": {
           "$type": "CName",
           "$storage": "string",
