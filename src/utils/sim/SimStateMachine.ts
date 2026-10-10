@@ -655,7 +655,7 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
 /** Engine animAnimStateInterpolationType. */
 export type AnimStateInterpolationType = 'Linear' | 'EaseIn' | 'EaseOut' | 'EaseInOut'
 
-/** Engine animMath.h EasyInCubic. */
+/** Engine animMath EasyInCubic. */
 export function easyInCubic(t: number): number {
   return t * t * t
 }

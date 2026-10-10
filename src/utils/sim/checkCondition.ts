@@ -210,7 +210,7 @@ export function checkCondition(
     }
 
     case 'animAnimStateTransitionCondition_Timed': {
-      // Countdown i_timeLeftToFire; fire when < 0 (animStateTransition.cpp)
+      // Countdown i_timeLeftToFire; fire when < 0 (animStateTransition)
       if (!ctx.conditionDyn) return 'unknown'
       const id = condition.HandleId
       const timeTo = readNumber(
@@ -243,7 +243,7 @@ export function checkCondition(
       return sawUnknown ? 'unknown' : true
     }
     case 'animAnimStateTransitionCondition_WrapperValue': {
-      // animStateTransitionCondition_WrapperValue.cpp — FindVariableValue active bit
+      // animStateTransitionCondition_WrapperValue — FindVariableValue active bit
       const name = readCName(data.wrapperName)
       if (!name || name === 'None') return false
       const active = board.isWrapperActive(name)

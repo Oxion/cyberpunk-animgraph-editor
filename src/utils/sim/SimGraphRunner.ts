@@ -48,6 +48,7 @@ import {
   type MathExprPoseVectorSocketSnap,
 } from './boneOpDyn'
 import {
+  clampValueBySpeed,
   createFloatRandomState,
   createFloatSinusState,
   evalCurveFloatData,
@@ -1272,7 +1273,7 @@ function evalSignalFloat(node: AnimgraphNode, fctx: FloatEvalCtx): number {
 
 /**
  * AnimNode_EventValue — latch last-frame valued timeline event value.
- * Holds until next matching valued event (animNode_Numeric.cpp).
+ * Holds until next matching valued event (animNode_Numeric).
  */
 function evalEventValueFloat(node: AnimgraphNode, fctx: FloatEvalCtx): number {
   const id = node.HandleId
@@ -1435,6 +1436,7 @@ function isFloatValueNodeType(t: string): boolean {
     t === 'animAnimNode_IntLatch' ||
     t === 'animAnimNode_FloatInterpolation' ||
     t === 'animAnimNode_FloatCumulative' ||
+    t === 'animAnimNode_ValueBySpeed' ||
     t === 'animAnimNode_CurveFloatValue' ||
     t === 'animAnimNode_FloatRandom' ||
     t === 'animAnimNode_FloatTimeDependentSinus' ||
@@ -1897,6 +1899,10 @@ function readFloatSource(
     return evalFloatCumulative(source, fctx, depth)
   }
 
+  if (t === 'animAnimNode_ValueBySpeed') {
+    return evalValueBySpeed(source, fctx, depth)
+  }
+
   // Engine AnimNode_FloatToBoolConverter — 0.f != input.
   if (t === 'animAnimNode_FloatToBoolConverter') {
     const input = resolveHandle(handles, d.inputNode ?? d.input)
@@ -2003,6 +2009,44 @@ function readFloatSource(
     d.value ?? d.floatValue ?? d.defaultValue ?? d.defaultInitialValue,
     fallback
   )
+}
+
+/**
+ * Engine AnimNode_ValueBySpeed::OnUpdate —
+ * current = ClampToRange(previous + speed * dt); OnActivated may reset to default.
+ */
+function evalValueBySpeed(
+  source: AnimgraphNode,
+  fctx: FloatEvalCtx,
+  depth: number
+): number {
+  const id = source.HandleId
+  if (fctx.floatUpdated.has(id)) {
+    return fctx.floatDyn.get(id)?.value ?? readNumber(source.Data?.defaultValue, 0)
+  }
+  const d = source.Data ?? {}
+  const defaultValue = readNumber(d.defaultValue, 0)
+  const rangeMin = readNumber(d.rangeMin, 0)
+  const rangeMax = readNumber(d.rangeMax, 1)
+  // Engine: OnActivated resets when resetOnActivation. Inactive floatDyn drop ⇒ re-init.
+  // resetOnActivation=false keeps floatDyn across inactive frames (see step cleanup).
+
+  let state = fctx.floatDyn.get(id)
+  if (!state) {
+    state = { value: defaultValue, velocity: 0 }
+    fctx.floatDyn.set(id, state)
+  }
+
+  const speedNode = resolveHandle(fctx.handles, d.speed)
+  const speed = speedNode ? readFloatSource(speedNode, fctx, 0, depth + 1) : 0
+  state.value = clampValueBySpeed(
+    state.value + speed * fctx.dt,
+    d.clampType,
+    rangeMin,
+    rangeMax
+  )
+  fctx.floatUpdated.add(id)
+  return state.value
 }
 
 /**
@@ -2218,7 +2262,7 @@ function evalStatefulFloatNode(
   }
 }
 
-/** MRound-style index for Switch (animNode_Switch.cpp SelectInputsAndCalculateAlpha). */
+/** MRound-style index for Switch (animNode_Switch SelectInputsAndCalculateAlpha). */
 function switchIndexFromWeight(weight: number, numInputs: number): number {
   if (numInputs <= 0) return -1
   if (numInputs === 1) return 0
@@ -2434,7 +2478,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const states = Array.isArray(d.states) ? d.states : []
 
     // Engine OnUpdate: Update current state FIRST so AnimEnd/events feed CheckTransitions
-    // same frame (animNode_StateMachine.cpp — "prevent one frame delay").
+    // same frame (animNode_StateMachine — "prevent one frame delay").
     if (!rt.isInTransition) {
       const pre = resolveHandle(handles, states[rt.activeStateIndex])
       if (pre) {
@@ -2706,7 +2750,6 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   }
 
   if (t === 'animAnimNode_BlendOverride') {
-    // animNode_BlendOverride.cpp OnUpdate:
     // always Update input + weight; clamp control 0..1; Update override if > 0.01.
     const weightNode = resolveHandle(handles, d.weightNode)
     if (weightNode) updateFromNode(weightNode, ctx)
@@ -2721,7 +2764,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   }
 
   if (t === 'animAnimNode_BlendByMaskDynamic') {
-    // animNode_BlendOverride.cpp OnUpdate: always Update base + weight;
+    // always Update base + weight;
     // GetValue mask (default -1) / weight (default 0, clamped 0..1);
     // Update blend only if weight > 0.01 and mask index in masks[].
     const weightNode = resolveHandle(handles, d.weight)
@@ -2815,6 +2858,67 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   ) {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
     markActive(nodes, node.HandleId, { weight: readNumber(d.weight, 1), alpha: 1 })
+    return
+  }
+
+  // Ik2: Base with inputPoseNode (not OnePoseInput)
+  if (t === 'animAnimNode_Ik2') {
+    const poseIn = resolveHandle(handles, d.inputPoseNode)
+    followUpdate(node, poseIn, ctx)
+    const wNode = resolveHandle(handles, d.weightNode)
+    const posNode = resolveHandle(handles, d.endTargetPositionNode)
+    const oriNode = resolveHandle(handles, d.endTargetOrientationNode)
+    if (wNode) updateFromNode(wNode, ctx)
+    if (posNode) updateFromNode(posNode, ctx)
+    if (oriNode) updateFromNode(oriNode, ctx)
+    const weight = wNode ? readFloatSource(wNode, ctx, 1) : 1
+    const snap = {
+      weight,
+      hasEndPos: !!posNode,
+      endPosMs: { x: 0, y: 0, z: 0 },
+      hasEndOri: !!oriNode,
+      endOriMs: { ...IDENTITY_QUAT_STATE },
+      twist: 0,
+    }
+    if (posNode) {
+      const v = readVectorSource(posNode, ctx, ZERO_VEC4)
+      snap.endPosMs = { x: v.x, y: v.y, z: v.z }
+    }
+    if (oriNode) {
+      const q = readQuatSource(oriNode, ctx)
+      snap.endOriMs = { ...q }
+    }
+    ctx.boneOpCache.ik2.set(node.HandleId, snap)
+    markActive(nodes, node.HandleId, { weight, alpha: 1 })
+    return
+  }
+
+  // Ik2Constraint: OnePoseInput + weight/twist links
+  if (t === 'animAnimNode_Ik2Constraint') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const wNode = resolveHandle(handles, d.weightNode)
+    const twistNode = resolveHandle(handles, d.twistNode)
+    if (wNode) updateFromNode(wNode, ctx)
+    if (twistNode) updateFromNode(twistNode, ctx)
+    const staticW = readNumber(d.weight, 1)
+    const weight = wNode ? readFloatSource(wNode, ctx, staticW) : staticW
+    const staticTwist = readNumber(d.twistValue, 0)
+    const twist = twistNode ? readFloatSource(twistNode, ctx, staticTwist) : staticTwist
+    ctx.boneOpCache.ik2.set(node.HandleId, {
+      weight,
+      hasEndPos: false,
+      endPosMs: { x: 0, y: 0, z: 0 },
+      hasEndOri: false,
+      endOriMs: { ...IDENTITY_QUAT_STATE },
+      twist,
+    })
+    markActive(nodes, node.HandleId, { weight, alpha: 1 })
+    return
+  }
+
+  if (t === 'animAnimNode_AddIkRequest' || t === 'animAnimNode_ReadIkRequest') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    markActive(nodes, node.HandleId, { weight: 1, alpha: 1 })
     return
   }
 
@@ -3552,7 +3656,15 @@ export class SimGraphRunner {
 
     // Drop dyn state for nodes not updated this frame (deactivated → re-init on reactivate)
     for (const id of [...this.floatDyn.keys()]) {
-      if (!floatUpdated.has(id)) this.floatDyn.delete(id)
+      if (floatUpdated.has(id)) continue
+      const node = this.handles.get(id)
+      if (node && handleType(node) === 'animAnimNode_ValueBySpeed') {
+        const d = node.Data ?? {}
+        const resetOnAct =
+          d.resetOnActivation === undefined ? true : readBool(d.resetOnActivation)
+        if (!resetOnAct) continue
+      }
+      this.floatDyn.delete(id)
     }
     for (const id of [...this.vectorDyn.keys()]) {
       if (!floatUpdated.has(id)) this.vectorDyn.delete(id)

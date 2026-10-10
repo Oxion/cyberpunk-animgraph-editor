@@ -1,5 +1,5 @@
 /**
- * AnimNode_Signal — latch + blendIn/Out + cooldown (animNode_Signal.cpp).
+ * AnimNode_Signal — latch + blendIn/Out + cooldown (animNode_Signal).
  */
 
 import { readBool, readCName, readNumber } from './simDataUtils'

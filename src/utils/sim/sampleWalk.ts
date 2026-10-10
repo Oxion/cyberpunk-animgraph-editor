@@ -47,6 +47,7 @@ import {
   ZERO_VEC4,
 } from './evalAnimMathExpressionVector'
 import { evalCurveFloatData } from './floatDyn'
+import { applyIk2 } from './ik2Solver'
 import {
   applyAimConstraint,
   applyFloatTrackDirectConn,
@@ -176,6 +177,21 @@ export type SampleCtx = {
    * `sampled` cleared each Sample; `poses` may be reused across frames.
    */
   joinPoseCache?: { sampled: Set<string>; poses: Map<string, Pose> }
+  /**
+   * Engine SampleOutput.m_ikTargets — shared for one Sample pass (Add/ReadIkRequest).
+   * Cleared at sampleGraphPose begin. Blend cross-merge deferred.
+   */
+  ikTargets?: Map<string, IkTargetSnap>
+}
+
+/** Offline IK request snap (AddIkRequest → ReadIkRequest). */
+export type IkTargetSnap = {
+  chain: string
+  posMs: { x: number; y: number; z: number }
+  rotMs: { x: number; y: number; z: number; w: number }
+  weightPosition: number
+  weightRotation: number
+  priority: number
 }
 
 export type SampleResult = {
@@ -324,6 +340,8 @@ export function sampleGraphPose(
   if (ctx.warningsEnabled && !ctx.warnings) ctx.warnings = []
   ctx.lastWrittenNull = false
   ctx.poseScratch.depth = 0
+  if (!ctx.ikTargets) ctx.ikTargets = new Map()
+  else ctx.ikTargets.clear()
   if (!ctx.updateSucc) {
     simSampleLogLine(ctx.sampleLog, 'sampleGraphPose without updateSucc map')
   }
@@ -564,6 +582,15 @@ function sampleNodeDispatch(
     case 'animAnimNode_AimConstraint_ObjectUp':
     case 'animAnimNode_AimConstraint_ObjectRotationUp':
       return sampleAimConstraint(node, ctx, out, visited)
+
+    case 'animAnimNode_Ik2':
+      return sampleIk2(node, ctx, out, visited)
+    case 'animAnimNode_Ik2Constraint':
+      return sampleIk2Constraint(node, ctx, out, visited)
+    case 'animAnimNode_AddIkRequest':
+      return sampleAddIkRequest(node, ctx, out, visited)
+    case 'animAnimNode_ReadIkRequest':
+      return sampleReadIkRequest(node, ctx, out, visited)
 
     case 'animAnimNode_Join':
       return sampleJoin(node, ctx, out, visited)
@@ -2588,6 +2615,296 @@ function resolveAimUpPoint(
     return { ok: false, detail: `up bone "${boneName}" MS resolve failed` }
   }
   return { ok: true, x: ms.tx, y: ms.ty, z: ms.tz }
+}
+
+/** Resolve IAnimNodeSourceChannel_Vector → MS point (Aim up-channel subset). */
+function resolveSourceChannelVector(
+  raw: unknown,
+  pose: Pose,
+  ctx: SampleCtx
+): { ok: true; x: number; y: number; z: number } | { ok: false } {
+  const ch = resolveEmbeddedData(raw, ctx.handles)
+  if (!ch) return { ok: false }
+  const chType = String(ch.$type ?? '')
+  if (chType.includes('StaticVector')) {
+    const v = readVector3FromData(ch.data ?? ch.value ?? ch)
+    return { ok: true, x: v.x, y: v.y, z: v.z }
+  }
+  const boneName = readTransformIndexFromRaw(ch.transformIndex ?? ch.transform)
+  const idx = resolveUnifiedName(pose, ctx.rig, boneName)
+  if (idx < 0) return { ok: false }
+  const ms = { ...IDENTITY_QS }
+  if (!getTransformMs(pose, ctx.rig, idx, ms)) return { ok: false }
+  return { ok: true, x: ms.tx, y: ms.ty, z: ms.tz }
+}
+
+/** WeightedQuat channel → MS orientation + weight. */
+function resolveWeightedQuatChannel(
+  raw: unknown,
+  pose: Pose,
+  ctx: SampleCtx
+): { weight: number; qx: number; qy: number; qz: number; qw: number } {
+  const e = resolveEmbeddedData(raw, ctx.handles)
+  if (!e) return { weight: 0, qx: 0, qy: 0, qz: 0, qw: 1 }
+  let weight = readNumber(e.weight, 1)
+  const trackName = readNamedTrackFieldName(e.weightFloatTrack)
+  if (trackName && trackName !== 'None') {
+    const ti = resolveTrackUnified(pose, ctx.rig, trackName)
+    if (ti >= 0) weight = readTrackValue(pose, ti)
+  }
+  weight = Math.min(1, Math.max(0, weight))
+  if (!(weight > 0)) return { weight: 0, qx: 0, qy: 0, qz: 0, qw: 1 }
+  const ch = resolveEmbeddedData(e.channel, ctx.handles) ?? e
+  const boneName = readTransformIndexFromRaw(ch.transformIndex ?? ch.transform)
+  const idx = resolveUnifiedName(pose, ctx.rig, boneName)
+  if (idx < 0) return { weight: 0, qx: 0, qy: 0, qz: 0, qw: 1 }
+  const ms = { ...IDENTITY_QS }
+  if (!getTransformMs(pose, ctx.rig, idx, ms)) {
+    return { weight: 0, qx: 0, qy: 0, qz: 0, qw: 1 }
+  }
+  return { weight, qx: ms.qx, qy: ms.qy, qz: ms.qz, qw: ms.qw }
+}
+
+function sampleIk2(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  // Base + inputPoseNode — prefer updateSucc, fallback Data link
+  const kids = updateKids(ctx, node.HandleId)
+  let ok = true
+  if (kids.length) {
+    ok = sampleByHandleId(kids[0], ctx, out, visited)
+  } else {
+    const poseIn = resolveHandle(ctx.handles, node.Data?.inputPoseNode)
+    if (poseIn) ok = sampleNode(poseIn, ctx, out, visited)
+    else {
+      logMissingUpdateSucc(ctx, node, 'Ik2 expected inputPoseNode')
+      writeRefPose(ctx, out)
+      return false
+    }
+  }
+
+  const d = node.Data ?? {}
+  const snap = ctx.boneOpCache?.ik2.get(node.HandleId)
+  let weight = snap?.weight ?? 1
+  if (!resolveHandle(ctx.handles, d.weightNode)) {
+    const trackName = readNamedTrackFieldName(d.floatTrack)
+    const trackIdx = resolveTrackUnified(out, ctx.rig, trackName)
+    if (trackIdx >= 0) weight = readTrackValue(out, trackIdx)
+  }
+  if (!(weight > 0)) return ok
+
+  const hasPosLink = !!resolveHandle(ctx.handles, d.endTargetPositionNode) || !!snap?.hasEndPos
+  const hasOriLink =
+    !!resolveHandle(ctx.handles, d.endTargetOrientationNode) || !!snap?.hasEndOri
+
+  let endPos = {
+    x: snap?.endPosMs.x ?? 0,
+    y: snap?.endPosMs.y ?? 0,
+    z: snap?.endPosMs.z ?? 0,
+  }
+  let endOri = {
+    x: snap?.endOriMs.x ?? 0,
+    y: snap?.endOriMs.y ?? 0,
+    z: snap?.endOriMs.z ?? 0,
+    w: snap?.endOriMs.w ?? 1,
+  }
+
+  if (!(hasPosLink && hasOriLink)) {
+    const fallbackName = readTransformIndexFromRaw(d.bone)
+    const fallbackIdx = resolveUnifiedName(out, ctx.rig, fallbackName)
+    if (fallbackIdx >= 0) {
+      const ms = { ...IDENTITY_QS }
+      if (getTransformMs(out, ctx.rig, fallbackIdx, ms)) {
+        if (!hasPosLink) endPos = { x: ms.tx, y: ms.ty, z: ms.tz }
+        if (!hasOriLink) endOri = { x: ms.qx, y: ms.qy, z: ms.qz, w: ms.qw }
+      }
+    }
+  }
+  if (hasPosLink && snap?.hasEndPos) {
+    endPos = { x: snap.endPosMs.x, y: snap.endPosMs.y, z: snap.endPosMs.z }
+  }
+  if (hasOriLink && snap?.hasEndOri) {
+    endOri = {
+      x: snap.endOriMs.x,
+      y: snap.endOriMs.y,
+      z: snap.endOriMs.z,
+      w: snap.endOriMs.w,
+    }
+  }
+
+  const offset = readVector3FromData(d.endBoneOffsetPositionLS)
+  applyIk2(out, ctx.rig, {
+    firstBoneName: readTransformIndexFromRaw(d.firstBone),
+    secondBoneName: readTransformIndexFromRaw(d.secondBone),
+    endBoneName: readTransformIndexFromRaw(d.endBone),
+    hingeAxis: d.hingeAxis,
+    minHingeAngleDegrees: readNumber(d.minHingeAngleDegrees, 0),
+    maxHingeAngleDegrees: readNumber(d.maxHingeAngleDegrees, 180),
+    firstBoneIkGain: readNumber(d.firstBoneIkGain, 1),
+    secondBoneIkGain: readNumber(d.secondBoneIkGain, 1),
+    endBoneIkGain: readNumber(d.endBoneIkGain, 1),
+    enforceEndPosition:
+      d.enforceEndPosition === undefined ? true : readBool(d.enforceEndPosition),
+    enforceEndOrientation: readBool(d.enforceEndOrientation),
+    endBoneOffsetPositionLS: offset,
+    weight,
+    twistDeg: 0,
+    usePoleVector: false,
+    poleVectorMS: { x: 0, y: 0, z: 0 },
+    endTargetPositionMS: endPos,
+    endTargetRotationMS: endOri,
+  })
+  return ok
+}
+
+function sampleIk2Constraint(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'Ik2Constraint')
+  const d = node.Data ?? {}
+  const snap = ctx.boneOpCache?.ik2.get(node.HandleId)
+  let weight = snap?.weight ?? readNumber(d.weight, 1)
+  if (resolveHandle(ctx.handles, d.weightNode)) {
+    weight = snap?.weight ?? weight
+  }
+  const trackName = readNamedTrackFieldName(d.weightFloatTrack)
+  const trackIdx = resolveTrackUnified(out, ctx.rig, trackName)
+  if (trackIdx >= 0) {
+    weight = Math.min(1, Math.max(0, readTrackValue(out, trackIdx)))
+  }
+  if (!(weight > 0)) return ok
+
+  const target = resolveSourceChannelVector(d.inputTarget, out, ctx)
+  if (!target.ok) return ok
+
+  const poleRaw = d.inputPoleVector
+  const usePole = !!poleRaw && !!resolveEmbeddedData(poleRaw, ctx.handles)
+  let pole = { x: 0, y: 0, z: 0 }
+  if (usePole) {
+    const p = resolveSourceChannelVector(poleRaw, out, ctx)
+    if (p.ok) pole = { x: p.x, y: p.y, z: p.z }
+  }
+
+  const ori = resolveWeightedQuatChannel(d.inputTargetOrientation, out, ctx)
+  const maxHinge = readNumber(d.maxHingeAngle, 0)
+  const cosineMax = maxHinge > 0 ? Math.cos((maxHinge * Math.PI) / 180) : -1
+
+  applyIk2(out, ctx.rig, {
+    firstBoneName: readTransformIndexFromRaw(d.firstBoneIndex),
+    secondBoneName: readTransformIndexFromRaw(d.secondBoneIndex),
+    endBoneName: readTransformIndexFromRaw(d.endBoneIndex),
+    hingeAxis: d.hingeAxis,
+    minHingeAngleDegrees: 0,
+    maxHingeAngleDegrees: maxHinge > 0 ? maxHinge : 180,
+    firstBoneIkGain: 1,
+    secondBoneIkGain: 1,
+    endBoneIkGain: 1,
+    enforceEndPosition: true,
+    enforceEndOrientation: ori.weight > 0,
+    endBoneOffsetPositionLS: { x: 0, y: 0, z: 0 },
+    weight,
+    twistDeg: snap?.twist ?? readNumber(d.twistValue, 0),
+    usePoleVector: usePole,
+    poleVectorMS: pole,
+    endTargetPositionMS: { x: target.x, y: target.y, z: target.z },
+    endTargetRotationMS: { x: ori.qx, y: ori.qy, z: ori.qz, w: ori.qw },
+    cosineMaxHingeAngle: cosineMax,
+    cosineMinHingeAngle: 1,
+  })
+  return ok
+}
+
+function sampleAddIkRequest(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'AddIkRequest')
+  const d = node.Data ?? {}
+  const chain = readCName(d.ikChain)
+  if (!chain || chain === 'None') return ok
+  const map = ctx.ikTargets
+  if (!map) return ok
+
+  const boneName = readTransformIndexFromRaw(d.targetBone)
+  const boneIdx = resolveUnifiedName(out, ctx.rig, boneName)
+  const ms = { ...IDENTITY_QS }
+  if (boneIdx >= 0) getTransformMs(out, ctx.rig, boneIdx, ms)
+
+  const posOff = readVector3FromData(d.positionOffset)
+  const rotRaw =
+    d.rotationOffset && typeof d.rotationOffset === 'object'
+      ? (d.rotationOffset as Record<string, unknown>)
+      : null
+  const hasRotOff = !!rotRaw
+  const rotOff = hasRotOff
+    ? {
+        x: readNumber(rotRaw.i ?? rotRaw.X ?? rotRaw.x, 0),
+        y: readNumber(rotRaw.j ?? rotRaw.Y ?? rotRaw.y, 0),
+        z: readNumber(rotRaw.k ?? rotRaw.Z ?? rotRaw.z, 0),
+        w: readNumber(rotRaw.r ?? rotRaw.W ?? rotRaw.w, 1),
+      }
+    : { x: 0, y: 0, z: 0, w: 1 }
+  const priority = Math.trunc(readNumber(d.priority, 0))
+  const prev = map.get(chain)
+  if (prev && prev.priority > priority) return ok
+
+  map.set(chain, {
+    chain,
+    posMs: {
+      x: ms.tx + posOff.x,
+      y: ms.ty + posOff.y,
+      z: ms.tz + posOff.z,
+    },
+    rotMs: hasRotOff
+      ? rotOff
+      : { x: ms.qx, y: ms.qy, z: ms.qz, w: ms.qw },
+    weightPosition: readNumber(d.weightPosition, 1),
+    weightRotation: readNumber(d.weightRotation, 1),
+    priority,
+  })
+  return ok
+}
+
+function sampleReadIkRequest(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'ReadIkRequest')
+  const d = node.Data ?? {}
+  const chain = readCName(d.ikChain)
+  const req = chain && chain !== 'None' ? ctx.ikTargets?.get(chain) : undefined
+  if (!req) return ok
+  const outName = readTransformIndexFromRaw(d.outTransform)
+  const outIdx = resolveUnifiedName(out, ctx.rig, outName)
+  if (outIdx < 0) {
+    if (outName) warnBoneMissing(ctx, node.HandleId, outName)
+    return ok
+  }
+  if (req.weightPosition > 0) {
+    setBoneTranslationMs(out, ctx.rig, outIdx, req.posMs.x, req.posMs.y, req.posMs.z)
+  }
+  if (req.weightRotation > 0) {
+    setBoneRotationMs(
+      out,
+      ctx.rig,
+      outIdx,
+      req.rotMs.x,
+      req.rotMs.y,
+      req.rotMs.z,
+      req.rotMs.w
+    )
+  }
+  return ok
 }
 
 function sampleAimConstraint(

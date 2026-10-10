@@ -30,6 +30,16 @@ export type ParentConstraintSnap = {
   offsetE: BoneOpTranslateState
 }
 
+/** Ik2 / Ik2Constraint Update snapshot (weight + end target + twist). */
+export type Ik2FrameSnap = {
+  weight: number
+  hasEndPos: boolean
+  endPosMs: BoneOpTranslateState
+  hasEndOri: boolean
+  endOriMs: BoneOpQuatState
+  twist: number
+}
+
 /** Per-frame values computed in Update, consumed in Sample. */
 export type BoneOpFrameCache = {
   /** RotateBone: angle degrees after scale/bias/clamp */
@@ -48,6 +58,8 @@ export type BoneOpFrameCache = {
   parentConstraint: Map<string, ParentConstraintSnap>
   /** FloatTrackDirectConnConstraint / TransformToTrack weight+mul */
   floatTrackConn: Map<string, { weight: number; mulFactor: number }>
+  /** Ik2 / Ik2Constraint */
+  ik2: Map<string, Ik2FrameSnap>
 }
 
 export function createBoneOpFrameCache(): BoneOpFrameCache {
@@ -60,6 +72,7 @@ export function createBoneOpFrameCache(): BoneOpFrameCache {
     limitWeight: new Map(),
     parentConstraint: new Map(),
     floatTrackConn: new Map(),
+    ik2: new Map(),
   }
 }
 
@@ -72,6 +85,7 @@ export function clearBoneOpFrameCache(cache: BoneOpFrameCache): void {
   cache.limitWeight.clear()
   cache.parentConstraint.clear()
   cache.floatTrackConn.clear()
+  cache.ik2.clear()
 }
 
 export const IDENTITY_QUAT_STATE: BoneOpQuatState = { x: 0, y: 0, z: 0, w: 1 }

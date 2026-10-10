@@ -2,18 +2,20 @@
  * Parity notes vs RED AnimGraph runtime in common/animation.
  *
  * Primary sources:
- * - animGraph.cpp — Update then Sample frame phases
- * - animNode_StateMachine.cpp — CheckTransitions / FireTransition / progress
- * - animStateTransition.h — CheckConditionContext, IAnimStateTransitionCondition
- * - animNode_Blend2.cpp — CalculateWeightFromInputValue
- * - animNode_BlendOverride.cpp — BlendOverride / BlendByMaskDynamic OnUpdate / ACTIVATION_THRESHOLD
+ * - animGraph — Update then Sample frame phases
+ * - animNode_StateMachine — CheckTransitions / FireTransition / progress
+ * - animStateTransition — CheckConditionContext, IAnimStateTransitionCondition
+ * - animNode_Blend2 — CalculateWeightFromInputValue
+ * - animNode_BlendOverride — BlendOverride / BlendByMaskDynamic OnUpdate / ACTIVATION_THRESHOLD
  * - PoseBlendMethod_Mask / BoneBranch — Sample blend
  *
  * Offline sim implements Update (+ numeric weights) and Sample (glb pose).
- * IK / motion extraction / sync TimeWarper remain out of scope.
+ * Ik2 / Ik2Constraint / AddIkRequest / ReadIkRequest are supported.
+ * ValueBySpeed: OnUpdate integrates speed×dt with ClampType (None/Clamp/WrappedClamp).
+ * HumanIk / FloorIk / LookAt / motion extraction / sync TimeWarper remain out of scope.
  */
 
-/** animNode_StateMachine.cpp — instant transition chain cap */
+/** animNode_StateMachine — instant transition chain cap */
 export const MAX_INSTANT_TRANSITION_SEQUENCE_LENGTH = 16
 
 /**

@@ -87,7 +87,7 @@ export class SimInputBoard {
   footPhases = new Set<string>()
   /**
    * Previous frame's timeline events — AnimEvent conditions read this
-   * (animStateTransitionCondition_AnimEvent.cpp → m_lastFrameFiredEvents).
+   * (animStateTransitionCondition_AnimEvent → m_lastFrameFiredEvents).
    */
   lastFrameAnimEvents = new Set<string>()
   /** Previous frame phases — Signal start/end DurStart/DurEnd filter */
@@ -98,7 +98,7 @@ export class SimInputBoard {
   lastFrameFootPhases = new Set<string>()
   /**
    * Previous frame's anim-end names — Signal / TriggerBranch read these
-   * (animNode_Signal.cpp → m_lastFrameAnimEndEvents).
+   * (animNode_Signal → m_lastFrameAnimEndEvents).
    */
   lastFrameAnimEndEvents = new Set<string>()
   /** Anim-end names this frame (SkAnim PushAnimEndEvent) */

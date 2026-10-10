@@ -1,6 +1,6 @@
 /**
  * Stateful float nodes: DampFloat / SpringDamp / CriticalSpringDamp / FloatLatch.
- * Math mirrors common/animation animNode_Damp.cpp + engine springDampers.h.
+ * Math mirrors common/animation animNode_Damp + engine springDampers.h.
  */
 
 import { readBool, readNumber, readVector4 } from './simDataUtils'
@@ -111,6 +111,19 @@ export function wrapAroundRange(
     return value - rangeLength * Math.floor((value - rangeMin) / rangeLength)
   }
   return rangeMin
+}
+
+/** AnimNode_ValueBySpeed::ClampToRange — None / Clamp / WrappedClamp. */
+export function clampValueBySpeed(
+  value: number,
+  clampType: unknown,
+  rangeMin: number,
+  rangeMax: number
+): number {
+  const t = typeof clampType === 'string' ? clampType : 'Clamp'
+  if (t === 'None') return value
+  if (t === 'WrappedClamp') return wrapAroundRange(value, true, rangeMin, rangeMax)
+  return Math.min(rangeMax, Math.max(rangeMin, value))
 }
 
 export function shortestSignedDistance(
