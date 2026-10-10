@@ -45,7 +45,10 @@ import {
   presentReplacedProject,
 } from './projectViewSession'
 import { toolManager } from './toolManager'
+import { currentLoadedPath } from './loadedProjectPath'
 import { diagramViewReadyRef } from '../composables/useMainDiagramMount'
+
+export { currentLoadedPath }
 
 export type GraphDocumentIoHost = {
   directChildrenLayoutMode: Ref<DirectChildrenLayoutMode>
@@ -842,8 +845,6 @@ export const showSaveAsDialog = ref(false)
 export const showWelcomeOpen = ref(false)
 export const showAddAnimgraphDialog = ref(false)
 export const loadingFromServer = ref(false)
-/** Absolute FS path when opened/saved via API; null after drop/sample until Save As. */
-export const currentLoadedPath = ref<string | null>(null)
 
 export const openWelcomePanel = () => {
   if (hasProject.value) showWelcomeOpen.value = true

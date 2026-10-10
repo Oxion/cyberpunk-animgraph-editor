@@ -766,6 +766,7 @@ import {
   sizeWindowToContent,
   taskbarItems,
   toggleMaximizeWindow,
+  toggleMinimize,
   updateWindowRect,
   windows,
   isWindowForActiveDiagram,
@@ -1220,7 +1221,7 @@ const onTaskbarSelect = (id: string) => {
     return
   }
   // Keep body view open — windows sit on top for continued State Links clicking.
-  focusWindow(id)
+  toggleMinimize(id)
 }
 
 const onDiagramViewReady = (viewId: string) => {

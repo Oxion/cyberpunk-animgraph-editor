@@ -12,17 +12,27 @@ import type {
   StateLinksWindowPayload,
 } from '../types/AppWindow'
 import {
+  WINDOW_CASCADE_STEP,
   WINDOW_CHROME_HEADER,
   WINDOW_MIN_HEIGHT,
   computeWindowOpenRect,
   maxWindowHeightAt,
 } from '../utils/windows/placement'
+import {
+  clampSavedLayout,
+  flushSaveWindowLayout,
+  getSavedWindowLayout,
+  scheduleSaveWindowLayout,
+  setSavedWindowLayout,
+  type SavedWindowLayout,
+} from '../utils/windows/layoutMemory'
 import { getWindowPresentOps } from '../utils/windows/presentOps'
 import {
   clearWindowStack,
   initLensWindowStack,
   initStateLinksWindowStack,
 } from './windowStacks'
+import { currentLoadedPath } from './loadedProjectPath'
 import { activeDiagramId } from './graphProject'
 
 let zCounter = 100
@@ -63,24 +73,74 @@ const activateWindow = (win: AppWindowState) => {
 const nextCascadeIndex = () =>
   windows.value.filter((w) => !w.minimized && !w.maximized).length
 
-const openRectFor = (type: AppWindowType, options: AppWindowOpenOptions = {}) => {
+type OpenGeometry = {
+  x: number
+  y: number
+  width: number
+  height: number
+  maximized: boolean
+  /** True when geometry came from per-project memory (skip auto-size). */
+  fromMemory: boolean
+}
+
+const layoutSnapshot = (win: AppWindowState): SavedWindowLayout => {
+  if (win.maximized && win.restoreRect) {
+    return { ...win.restoreRect, maximized: true }
+  }
+  return {
+    x: win.x,
+    y: win.y,
+    width: win.width,
+    height: win.height,
+    maximized: win.maximized,
+  }
+}
+
+const persistWindowLayout = (win: AppWindowState, immediate = false) => {
+  const path = currentLoadedPath.value
+  const layout = layoutSnapshot(win)
+  if (immediate) {
+    flushSaveWindowLayout()
+    setSavedWindowLayout(path, win.type, layout)
+    return
+  }
+  scheduleSaveWindowLayout(path, win.type, layout)
+}
+
+const openRectFor = (type: AppWindowType, options: AppWindowOpenOptions = {}): OpenGeometry => {
   const ops = getWindowPresentOps(type)
   const cascadeIndex =
     ops.placement === 'dialog' ? (options.offsetIndex ?? 0) : nextCascadeIndex()
-  return computeWindowOpenRect({
+  const fallback = computeWindowOpenRect({
     preset: ops.placement,
     width: options.preferredWidth ?? ops.preferredWidth,
     widthFraction: options.preferredWidth != null ? undefined : ops.widthFraction,
     height: ops.preferredHeight,
     cascadeIndex,
   })
+  const saved = getSavedWindowLayout(currentLoadedPath.value, type)
+  if (!saved) {
+    return { ...fallback, maximized: Boolean(options.maximized), fromMemory: false }
+  }
+  const clamped = clampSavedLayout(saved, cascadeIndex * WINDOW_CASCADE_STEP)
+  const maximized =
+    options.maximized !== undefined
+      ? Boolean(options.maximized)
+      : Boolean(clamped.maximized) && cascadeIndex === 0
+  return {
+    x: clamped.x,
+    y: clamped.y,
+    width: clamped.width,
+    height: clamped.height,
+    maximized,
+    fromMemory: true,
+  }
 }
 
 export const openLensWindow = (payload: LensWindowPayload, options: AppWindowOpenOptions | number = {}) => {
   const opts: AppWindowOpenOptions =
     typeof options === 'number' ? { offsetIndex: options } : options
   const preview = Boolean(opts.preview ?? payload.quickLens)
-  const maximized = Boolean(opts.maximized)
 
   if (preview) {
     const existing = findPreviewWindow('lens')
@@ -88,7 +148,7 @@ export const openLensWindow = (payload: LensWindowPayload, options: AppWindowOpe
       existing.payload = { ...payload }
       existing.preview = true
       existing.title = lensWindowTitle(payload, true)
-      if (maximized && !existing.maximized) {
+      if (opts.maximized && !existing.maximized) {
         existing.restoreRect = {
           x: existing.x,
           y: existing.y,
@@ -96,7 +156,7 @@ export const openLensWindow = (payload: LensWindowPayload, options: AppWindowOpe
           height: existing.height,
         }
         existing.maximized = true
-      } else if (!maximized && opts.maximized === false && existing.maximized) {
+      } else if (!opts.maximized && opts.maximized === false && existing.maximized) {
         // keep maximized unless explicitly clearing — usually replace keeps maximize state
       }
       activateWindow(existing)
@@ -123,10 +183,10 @@ export const openLensWindow = (payload: LensWindowPayload, options: AppWindowOpe
     zIndex: bumpZ(),
     minimized: false,
     preview,
-    maximized,
+    maximized: rect.maximized,
     payload,
   }
-  if (maximized) {
+  if (rect.maximized) {
     win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
   }
   windows.value.push(win)
@@ -147,7 +207,6 @@ export const openSmRingWindow = (
   const opts: AppWindowOpenOptions =
     typeof options === 'number' ? { offsetIndex: options } : options
   const preview = Boolean(opts.preview)
-  const maximized = Boolean(opts.maximized)
   const id = `win_smring_${Date.now()}_${payload.stateMachineNodeId}`
   const rect = openRectFor('sm-ring', opts)
   const win: AppWindowState = {
@@ -161,10 +220,10 @@ export const openSmRingWindow = (
     zIndex: bumpZ(),
     minimized: false,
     preview,
-    maximized,
+    maximized: rect.maximized,
     payload,
   }
-  if (maximized) {
+  if (rect.maximized) {
     win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
   }
   windows.value.push(win)
@@ -179,7 +238,6 @@ export const openStateLinksWindow = (
   const opts: AppWindowOpenOptions =
     typeof options === 'number' ? { offsetIndex: options } : options
   const preview = opts.preview !== false // state-links default to preview
-  const maximized = Boolean(opts.maximized)
 
   if (preview) {
     const existing = findPreviewWindow('state-links')
@@ -187,7 +245,7 @@ export const openStateLinksWindow = (
       existing.payload = { ...payload }
       existing.preview = true
       existing.title = stateLinksWindowTitle(payload, true)
-      if (maximized && !existing.maximized) {
+      if (opts.maximized && !existing.maximized) {
         existing.restoreRect = {
           x: existing.x,
           y: existing.y,
@@ -220,10 +278,10 @@ export const openStateLinksWindow = (
     zIndex: bumpZ(),
     minimized: false,
     preview,
-    maximized,
+    maximized: rect.maximized,
     payload,
   }
-  if (maximized) {
+  if (rect.maximized) {
     win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
   }
   windows.value.push(win)
@@ -251,13 +309,16 @@ export const openSettingsWindow = () => {
     title: 'Settings',
     x: rect.x,
     y: rect.y,
-    width: Math.max(rect.width, 640),
-    height: Math.max(rect.height, 440),
+    width: rect.fromMemory ? rect.width : Math.max(rect.width, 640),
+    height: rect.fromMemory ? rect.height : Math.max(rect.height, 440),
     zIndex: bumpZ(),
     minimized: false,
     preview: false,
-    maximized: false,
+    maximized: rect.maximized,
     payload: {},
+  }
+  if (rect.maximized) {
+    win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
   }
   windows.value.push(win)
   activeWindowId.value = id
@@ -301,14 +362,17 @@ export const openRenderStatsWindow = (payload: RenderStatsWindowPayload) => {
     title: renderStatsWindowTitle(payload),
     x: rect.x,
     y: rect.y,
-    width: Math.max(rect.width, 320),
-    height: Math.max(rect.height, 180),
+    width: rect.fromMemory ? rect.width : Math.max(rect.width, 320),
+    height: rect.fromMemory ? rect.height : Math.max(rect.height, 180),
     zIndex: bumpZ(),
     minimized: false,
     preview: false,
-    maximized: false,
-    autoSizePending: true,
+    maximized: rect.maximized,
+    autoSizePending: !rect.fromMemory,
     payload: { ...payload },
+  }
+  if (rect.maximized) {
+    win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
   }
   windows.value.push(win)
   activeWindowId.value = id
@@ -332,13 +396,16 @@ export const openSimSkeletonWindow = (payload?: Partial<SimSkeletonWindowPayload
     title: 'Sim Skeleton',
     x: rect.x,
     y: rect.y,
-    width: Math.max(rect.width, 480),
-    height: Math.max(rect.height, 400),
+    width: rect.fromMemory ? rect.width : Math.max(rect.width, 480),
+    height: rect.fromMemory ? rect.height : Math.max(rect.height, 400),
     zIndex: bumpZ(),
     minimized: false,
     preview: false,
-    maximized: false,
+    maximized: rect.maximized,
     payload: { diagramId },
+  }
+  if (rect.maximized) {
+    win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
   }
   windows.value.push(win)
   activeWindowId.value = id
@@ -391,13 +458,16 @@ export const openSimStatusWindow = (_payload?: Partial<SimStatusWindowPayload>) 
     title: 'Sim Status',
     x: rect.x,
     y: rect.y,
-    width: Math.max(rect.width, 320),
-    height: Math.max(rect.height, 240),
+    width: rect.fromMemory ? rect.width : Math.max(rect.width, 320),
+    height: rect.fromMemory ? rect.height : Math.max(rect.height, 240),
     zIndex: bumpZ(),
     minimized: false,
     preview: false,
-    maximized: false,
+    maximized: rect.maximized,
     payload: {},
+  }
+  if (rect.maximized) {
+    win.restoreRect = { x: win.x, y: win.y, width: win.width, height: win.height }
   }
   windows.value.push(win)
   activeWindowId.value = id
@@ -405,6 +475,8 @@ export const openSimStatusWindow = (_payload?: Partial<SimStatusWindowPayload>) 
 }
 
 export const closeWindow = (id: string) => {
+  const closing = windows.value.find((w) => w.id === id)
+  if (closing) persistWindowLayout(closing, true)
   windows.value = windows.value.filter((w) => w.id !== id)
   clearWindowStack(id)
   if (activeWindowId.value === id) {
@@ -439,14 +511,15 @@ export const minimizeAllWindows = () => {
   activeWindowId.value = null
 }
 
+/** Taskbar click: active → minimize; otherwise restore + activate. */
 export const toggleMinimize = (id: string) => {
   const win = windows.value.find((w) => w.id === id)
   if (!win) return
-  if (win.minimized) {
-    focusWindow(id)
-  } else {
+  if (activeWindowId.value === id && !win.minimized) {
     minimizeWindow(id)
+    return
   }
+  focusWindow(id)
 }
 
 export const updateWindowRect = (id: string, rect: AppWindowRect) => {
@@ -457,6 +530,7 @@ export const updateWindowRect = (id: string, rect: AppWindowRect) => {
   if (rect.y !== undefined) win.y = rect.y
   if (rect.width !== undefined) win.width = rect.width
   if (rect.height !== undefined) win.height = rect.height
+  persistWindowLayout(win)
 }
 
 /** Grow/shrink height to measured content, capped by the breadcrumb band. */
@@ -489,6 +563,7 @@ export const toggleMaximizeWindow = (id: string) => {
     win.maximized = true
   }
   activateWindow(win)
+  persistWindowLayout(win, true)
 }
 
 export const closeQuickLensWindows = () => {
@@ -512,24 +587,15 @@ export const pinWindow = (id: string) => {
 
 export const clearWindows = () => {
   // Keep Settings / Render Stats / Sim Skeleton across graph reloads.
-  const kept = windows.value.filter(
-    (w) =>
-      w.type === 'settings' ||
-      w.type === 'render-stats' ||
-      w.type === 'sim-skeleton' ||
-      w.type === 'sim-status'
-  )
+  const keepType = (t: AppWindowType) =>
+    t === 'settings' || t === 'render-stats' || t === 'sim-skeleton' || t === 'sim-status'
   for (const w of windows.value) {
-    if (
-      w.type !== 'settings' &&
-      w.type !== 'render-stats' &&
-      w.type !== 'sim-skeleton' &&
-      w.type !== 'sim-status'
-    ) {
+    if (!keepType(w.type)) {
+      persistWindowLayout(w, true)
       clearWindowStack(w.id)
     }
   }
-  windows.value = kept
+  windows.value = windows.value.filter((w) => keepType(w.type))
   if (!windows.value.some((w) => w.id === activeWindowId.value)) {
     activeWindowId.value = windows.value[0]?.id ?? null
   }
