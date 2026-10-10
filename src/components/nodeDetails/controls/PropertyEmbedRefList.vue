@@ -7,12 +7,20 @@ import {
 } from '../../../composables/useNodeDetailsContext'
 import { structWrefNodeTarget } from '../../../utils/animFieldSchema'
 import { resolveHandleId } from '../../../utils/graph/diagramMaterialize'
+import {
+  ensureArrayAtDataPath,
+  getAtDataPath,
+  resolveDataPath,
+  snapshotRootKey,
+} from '../handleDataPath'
 import PropertyEmbedRef from './PropertyEmbedRef.vue'
 
 const props = defineProps<{
   dataKey: string
   label: string
   baseType: string
+  /** Nested path from handle Data root (defaults to `[dataKey]`). */
+  dataPath?: string[]
   /** Pin-input array: remove must disconnect / reindex wires. */
   pinBound?: boolean
 }>()
@@ -33,6 +41,14 @@ const data = computed(() => {
   return selectedHandleData.value
 })
 
+function path(): string[] {
+  return resolveDataPath(props.dataKey, props.dataPath)
+}
+
+function rootKey(): string {
+  return snapshotRootKey(props.dataKey, props.dataPath)
+}
+
 /**
  * Pin arrays (link or ref): compact slot list only — no nested node Data in details.
  * Edit connected nodes via their diagram boxes.
@@ -44,14 +60,14 @@ const isLinkElement = computed(() => structWrefNodeTarget(props.baseType) != nul
 
 const rows = computed(() => {
   void handleDataRevision.value
-  const raw = data.value?.[props.dataKey]
+  const raw = getAtDataPath(data.value, path())
   const n = Array.isArray(raw) ? raw.length : 0
   return Array.from({ length: n }, (_, i) => i)
 })
 
 function slotHandleId(index: number): string {
   void handleDataRevision.value
-  const raw = data.value?.[props.dataKey]
+  const raw = getAtDataPath(data.value, path())
   const slot = Array.isArray(raw) ? raw[index] : undefined
   const reg = handlesRegistry.value
   return (reg ? resolveHandleId(slot, reg) : null) ?? '—'
@@ -63,22 +79,14 @@ const indexBadgeCh = computed(() => {
   return String(max).length
 })
 
-function ensureArray(d: Record<string, unknown>): unknown[] {
-  let arr = d[props.dataKey]
-  if (!Array.isArray(arr)) {
-    arr = []
-    d[props.dataKey] = arr
-  }
-  return arr as unknown[]
-}
-
 function mutate(fn: (arr: unknown[]) => void) {
   const d = data.value
   if (!d) return
-  const before = snapshotHandleField(props.dataKey)
-  fn(ensureArray(d))
+  const key = rootKey()
+  const before = snapshotHandleField(key)
+  fn(ensureArrayAtDataPath(d, path()))
   notifySelectedHandleDataChanged()
-  recordHandleFieldEdit(props.dataKey, before, { immediate: true })
+  recordHandleFieldEdit(key, before, { immediate: true })
 }
 
 function addRow() {
@@ -93,7 +101,8 @@ function addRow() {
 
 function removeRow(index: number) {
   if (props.pinBound) {
-    removePinArraySlot(props.dataKey, index)
+    // Pin reindex only supports top-level array keys today.
+    removePinArraySlot(rootKey(), index)
     return
   }
   mutate((arr) => {
@@ -105,7 +114,7 @@ function moveRow(index: number, delta: -1 | 1) {
   const other = index + delta
   if (other < 0 || other >= rows.value.length) return
   if (props.pinBound) {
-    reorderPinArraySlot(props.dataKey, index, delta)
+    reorderPinArraySlot(rootKey(), index, delta)
     return
   }
   mutate((arr) => {
@@ -218,6 +227,7 @@ function moveRow(index: number, delta: -1 | 1) {
         </div>
         <PropertyEmbedRef
           :data-key="dataKey"
+          :data-path="path()"
           :label="`[${index}]`"
           :base-type="baseType"
           :index="index"

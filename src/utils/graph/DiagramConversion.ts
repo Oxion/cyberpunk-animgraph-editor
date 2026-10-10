@@ -527,6 +527,8 @@ function formatTypedDataFieldValue(value: unknown): string {
         })
         .join(', ')
     }
+    // Containers (AdditionalTransform / AdditionalFloatTrack): show entry count.
+    if (Array.isArray(obj.entries)) return String(obj.entries.length)
     const nestedName = readCNameLike(obj.name)
     if (nestedName != null) return nestedName
     return formatPresence(value)

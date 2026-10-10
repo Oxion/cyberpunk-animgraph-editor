@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed, defineAsyncComponent, inject } from 'vue'
 import {
   fieldTypeName,
   getAnimEnumValues,
@@ -28,6 +28,7 @@ import {
   writeResourcePath,
   writeStringOrCName,
 } from '../handleDataFields'
+import { resolveDataPath, snapshotRootKey } from '../handleDataPath'
 import PropertyBoolToggle from './PropertyBoolToggle.vue'
 import PropertyEnumSelect from './PropertyEnumSelect.vue'
 import PropertyNumberSlider from './PropertyNumberSlider.vue'
@@ -36,6 +37,10 @@ import PropertyReadonlyRow from './PropertyReadonlyRow.vue'
 import PropertyStructArray from './PropertyStructArray.vue'
 import PropertyTextField from './PropertyTextField.vue'
 import PropertyVecBlock from './PropertyVecBlock.vue'
+
+// Async to avoid circular import with PropertyEmbedRef → PropertyStructElement.
+const PropertyEmbedRef = defineAsyncComponent(() => import('./PropertyEmbedRef.vue'))
+const PropertyEmbedRefList = defineAsyncComponent(() => import('./PropertyEmbedRefList.vue'))
 
 defineOptions({ name: 'PropertyStructElement' })
 
@@ -57,6 +62,13 @@ const props = withDefaults(
     field?: AnimFieldDef
     /** Parent struct/class type name (enables TYPE_FIELD_EDITOR_OVERLAYS lookup). */
     ownerType?: string
+    /**
+     * Top-level handle Data key for undo (required for nested embed controls).
+     * With `dataPath`, nested ref/array-ref fields reuse PropertyEmbedRef*.
+     */
+    dataKey?: string
+    /** Path from handle Data root to this value (e.g. `['additionalTransforms','entries']`). */
+    dataPath?: string[]
   }>(),
   { grouped: true }
 )
@@ -76,14 +88,33 @@ function typeName(): string {
   return fieldTypeName(props.type)
 }
 
+const boundPath = computed(() => {
+  if (!props.dataKey) return null
+  return resolveDataPath(props.dataKey, props.dataPath)
+})
+
+const embedRootKey = computed(() => {
+  if (!props.dataKey) return ''
+  return snapshotRootKey(props.dataKey, props.dataPath)
+})
+
+function childPath(fieldKey: string): string[] | undefined {
+  const base = boundPath.value
+  if (!base) return undefined
+  return [...base, fieldKey]
+}
+
 function resolvedKind(): string {
   if (isArrayFieldType(props.type)) {
     if (isRefFieldType(props.type.array) || isWrefFieldType(props.type.array)) {
+      // Nested array<{ref}> with Data path → same control as top-level embedList.
+      if (boundPath.value) return 'embedList'
       return 'presence'
     }
     return 'array'
   }
   if (isRefFieldType(props.type) || isWrefFieldType(props.type)) {
+    if (boundPath.value) return 'embed'
     return 'presence'
   }
   const name = typeName()
@@ -227,6 +258,11 @@ function presenceText(): string {
   if (Array.isArray(props.value)) return String(props.value.length)
   return 'set'
 }
+
+function embedTargetType(): string {
+  if (isArrayFieldType(props.type)) return fieldTypeName(props.type.array)
+  return typeName()
+}
 </script>
 
 <template>
@@ -305,6 +341,20 @@ function presenceText(): string {
       :revision="handleDataRevision"
       @change="onVec"
     />
+    <PropertyEmbedRefList
+      v-else-if="kind === 'embedList' && dataKey && boundPath"
+      :data-key="embedRootKey"
+      :data-path="boundPath"
+      :label="label"
+      :base-type="embedTargetType()"
+    />
+    <PropertyEmbedRef
+      v-else-if="kind === 'embed' && dataKey && boundPath"
+      :data-key="embedRootKey"
+      :data-path="boundPath"
+      :label="label"
+      :base-type="embedTargetType()"
+    />
     <PropertyStructArray
       v-else-if="kind === 'array'"
       :label="label"
@@ -333,6 +383,8 @@ function presenceText(): string {
             :owner-type="typeName()"
             :value="fieldValue(field.key)"
             :revision="handleDataRevision"
+            :data-key="dataKey"
+            :data-path="childPath(field.key)"
             @change="onChildField(field.key, $event)"
           />
         </div>
@@ -347,6 +399,8 @@ function presenceText(): string {
           :owner-type="typeName()"
           :value="fieldValue(field.key)"
           :revision="handleDataRevision"
+          :data-key="dataKey"
+          :data-path="childPath(field.key)"
           @change="onChildField(field.key, $event)"
         />
       </template>

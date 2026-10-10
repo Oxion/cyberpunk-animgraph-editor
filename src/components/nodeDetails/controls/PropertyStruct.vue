@@ -68,6 +68,8 @@ function onChange(patch: StructValuePatch) {
         :value="obj()"
         :revision="handleDataRevision"
         :grouped="false"
+        :data-key="dataKey"
+        :data-path="[dataKey]"
         @change="onChange"
       />
     </div>
