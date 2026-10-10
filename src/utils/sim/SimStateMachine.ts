@@ -412,6 +412,63 @@ export function findStateOutput(
   return fallback
 }
 
+/**
+ * Engine AnimGraph TEMP_Bind: BlendFromPose inside a state → that SM's frozen pose.
+ * Returns blendNodeHandleId → smHandleId.
+ */
+export function bindBlendFromPoseToStateMachines(
+  handles: Map<string, AnimgraphNode>
+): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const sm of findStateMachineHandles(handles)) {
+    const states = Array.isArray(sm.Data?.states) ? sm.Data.states : []
+    for (const ref of states) {
+      const state = resolveHandle(handles, ref)
+      if (!state) continue
+      const nodes = Array.isArray(state.Data?.nodes) ? state.Data.nodes : []
+      for (const nref of nodes) {
+        const n = resolveHandle(handles, nref)
+        if (n && handleType(n) === 'animAnimNode_BlendFromPose') {
+          out.set(n.HandleId, sm.HandleId)
+        }
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * AnimNode_StateMachine::ShouldUseFrozenPose — keep last Sample in frozen buffer
+ * when any enabled out-transition has supportBlendFromPose (or timed global).
+ */
+export function smShouldUseFrozenPose(
+  sm: AnimgraphNode,
+  activeStateIndex: number,
+  handles: Map<string, AnimgraphNode>
+): boolean {
+  const data = sm.Data ?? {}
+  const transitions = listHandles(handles, data.transitions)
+  const globals = listHandles(handles, data.globalTransitions)
+  for (const g of globals) {
+    const d = g.Data ?? {}
+    const enabled = d.isEnabled === undefined ? true : readBool(d.isEnabled)
+    if (!enabled) continue
+    const duration = readNumber(d.duration, 0)
+    // Engine also skips when GetCanRequestInertialization — offline: duration > 0.
+    if (duration > 0) return true
+  }
+  const states = listHandles(handles, data.states)
+  const current = states[activeStateIndex]
+  if (!current) return false
+  const indices: number[] = current.Data?.outTransitionIndices ?? []
+  for (const index of indices) {
+    const desc = transitions[index]
+    if (!desc) continue
+    if (readBool(desc.Data?.supportBlendFromPose)) return true
+  }
+  return false
+}
+
 export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   features: Array<{ feature: string; property: string }>
   /** Vector4 AnimFeatures (VectorInput) — one entry per group.name */

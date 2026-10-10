@@ -12,6 +12,7 @@
  * Offline sim implements Update (+ numeric weights) and Sample (glb pose).
  * Ik2 / Ik2Constraint / AddIkRequest / ReadIkRequest are supported.
  * ValueBySpeed: OnUpdate integrates speed×dt with ClampType (None/Clamp/WrappedClamp).
+ * BlendFromPose: SM frozen pose + additive fade (animNode_BlendFromPose).
  * HumanIk / FloorIk / LookAt / motion extraction / sync TimeWarper remain out of scope.
  */
 

@@ -19,6 +19,7 @@ import {
   clearStack,
   clearTrackStack,
   convertAbsoluteToAdditiveFromRig,
+  convertToAdditiveFrameLocal,
   copyPose,
   createPose,
   DEFAULT_STACK_CAPACITY,
@@ -46,7 +47,7 @@ import {
   type SimVec4,
   ZERO_VEC4,
 } from './evalAnimMathExpressionVector'
-import { evalCurveFloatData } from './floatDyn'
+import { evalCurveFloatData, mapProgressByBlendTypeLBC } from './floatDyn'
 import { applyIk2 } from './ik2Solver'
 import {
   applyAimConstraint,
@@ -87,6 +88,7 @@ import { getRigPartMask, type RigEntry } from './rigResource'
 import type { SimInputBoard } from './SimInputBoard'
 import {
   evaluateSmTransitionBlendAlpha,
+  smShouldUseFrozenPose,
   type SimStateMachineRuntime,
 } from './SimStateMachine'
 import { handleType, readBool, readCName, readNumber, resolveHandle } from './simDataUtils'
@@ -96,6 +98,20 @@ import {
 } from './simSampleLog'
 import type { SimNodeState, SimSampleWarning } from './simTypes'
 import { SIM_SAMPLE_WARNINGS_MAX } from './simSnapshot'
+
+/** AnimNode_BlendFromPose instance buffer. */
+export type BlendFromPoseDynState = {
+  timer: number
+  poseSet: boolean
+  isBlendRequested: boolean
+  cached: Pose | null
+}
+
+/** SM frozen pose slot (AnimNode_StateFrozen i_cachedPose). */
+export type SmFrozenPoseSlot = {
+  pose: Pose
+  valid: boolean
+}
 
 /**
  * Sample support: follows Update `updateSucc` only (no Data pose rediscovery).
@@ -182,6 +198,12 @@ export type SampleCtx = {
    * Cleared at sampleGraphPose begin. Blend cross-merge deferred.
    */
   ikTargets?: Map<string, IkTargetSnap>
+  /** BlendFromPose dyn state from Update. */
+  blendFromPoseDyn?: Map<string, BlendFromPoseDynState>
+  /** BlendFromPose → owning SM handleId. */
+  blendFromPoseSmBind?: Map<string, string>
+  /** Per-SM frozen pose (filled after SM Sample when ShouldUseFrozenPose). */
+  smFrozenPoses?: Map<string, SmFrozenPoseSlot>
 }
 
 /** Offline IK request snap (AddIkRequest → ReadIkRequest). */
@@ -516,6 +538,9 @@ function sampleNodeDispatch(
     case 'animAnimNode_RuntimeSwitch':
       return sampleBoolSwitch(node, ctx, out, visited, false)
 
+    case 'animAnimNode_BlendFromPose':
+      return sampleBlendFromPose(node, ctx, out, visited)
+
     case 'animAnimNode_BlendAdditive':
       return sampleBlendAdditive(node, ctx, out, visited)
 
@@ -633,8 +658,10 @@ function sampleStateMachine(
   visited: Set<string>
 ): boolean {
   const kids = updateKids(ctx, node.HandleId)
-  if (kids.length === 1) return sampleByHandleId(kids[0], ctx, out, visited)
-  if (kids.length >= 2) {
+  let ok = false
+  if (kids.length === 1) {
+    ok = sampleByHandleId(kids[0], ctx, out, visited)
+  } else if (kids.length >= 2) {
     // Transition: Update recorded active then target; blend via transition interpolator.
     const rt = ctx.runtimes?.get(node.HandleId)
     const linear = rt?.transitionProgress ?? 0
@@ -656,11 +683,94 @@ function sampleStateMachine(
       releasePose(ctx)
       releasePose(ctx)
     }
-    return true
+    ok = true
+  } else {
+    logMissingUpdateSucc(ctx, node, 'StateMachine expected ≥1 child')
+    writeRefPose(ctx, out)
+    return false
   }
-  logMissingUpdateSucc(ctx, node, 'StateMachine expected ≥1 child')
-  writeRefPose(ctx, out)
-  return false
+
+  // Engine: after SM Sample, UsePose into frozen when ShouldUseFrozenPose.
+  const rt = ctx.runtimes?.get(node.HandleId)
+  const activeIdx = rt?.activeStateIndex ?? 0
+  if (
+    ctx.smFrozenPoses &&
+    smShouldUseFrozenPose(node, activeIdx, ctx.handles)
+  ) {
+    let slot = ctx.smFrozenPoses.get(node.HandleId)
+    if (!slot || slot.pose.boneCount !== out.boneCount) {
+      slot = {
+        pose: createPose(
+          out.boneCount,
+          out.trackCount,
+          out.stackCapacity,
+          out.trackStackCapacity
+        ),
+        valid: false,
+      }
+      ctx.smFrozenPoses.set(node.HandleId, slot)
+    }
+    copyPose(slot.pose, out)
+    slot.valid = true
+  }
+  return ok
+}
+
+/**
+ * AnimNode_BlendFromPose::OnSample — capture additive vs SM frozen, fade out.
+ */
+function sampleBlendFromPose(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const kids = updateKids(ctx, node.HandleId)
+  if (!kids.length) {
+    logMissingUpdateSucc(ctx, node, 'BlendFromPose expected input child')
+    writeRefPose(ctx, out)
+    return false
+  }
+  sampleByHandleId(kids[0], ctx, out, visited)
+
+  const dyn = ctx.blendFromPoseDyn?.get(node.HandleId)
+  if (!dyn) return true
+
+  const d = node.Data ?? {}
+  const blendTime = readNumber(d.blendTime, 0.2)
+
+  if (dyn.isBlendRequested) {
+    const smId = ctx.blendFromPoseSmBind?.get(node.HandleId)
+    const frozen = smId ? ctx.smFrozenPoses?.get(smId) : undefined
+    if (frozen?.valid && blendTime > 0) {
+      if (!dyn.cached || dyn.cached.boneCount !== out.boneCount) {
+        dyn.cached = createPose(
+          out.boneCount,
+          out.trackCount,
+          out.stackCapacity,
+          out.trackStackCapacity
+        )
+      }
+      convertToAdditiveFrameLocal(out, frozen.pose, dyn.cached)
+      dyn.poseSet = true
+    } else {
+      dyn.timer = blendTime
+      dyn.poseSet = false
+      dyn.cached = null
+    }
+    dyn.isBlendRequested = false
+  }
+
+  if (dyn.poseSet && dyn.cached && blendTime > 0) {
+    const progress = Math.min(1, Math.max(0, dyn.timer / blendTime))
+    const weight = mapProgressByBlendTypeLBC(
+      progress,
+      d.blendType,
+      d.customBlendCurve
+    )
+    blendAdditiveLocal(out, out, dyn.cached, 1 - weight)
+  }
+  return true
 }
 
 function sampleGraphSlot(

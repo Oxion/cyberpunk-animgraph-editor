@@ -118,7 +118,9 @@ import {
   allocSampleScratch,
   sampleGraphPose,
   samplePoseFromNode,
+  type BlendFromPoseDynState,
   type PoseScratchPool,
+  type SmFrozenPoseSlot,
 } from './sampleWalk'
 import {
   createSimSampleLog,
@@ -128,6 +130,7 @@ import {
 import { buildStackPairing } from './stackPairing'
 import type { SimInputBoard } from './SimInputBoard'
 import {
+  bindBlendFromPoseToStateMachines,
   evaluateSmTransitionBlendAlpha,
   findStateMachineHandles,
   findStateOutput,
@@ -571,6 +574,10 @@ type WalkCtx = FloatEvalCtx & {
   animDbLibrary: AnimDatabaseLibrary | null
   /** Cached StaticSwitch Init results (handleId → useTrue). */
   staticSwitchResults: Map<string, boolean>
+  /** BlendFromPose instance buffers (timer / request / cached additive). */
+  blendFromPoseDyn: Map<string, BlendFromPoseDynState>
+  /** BlendFromPose handleId → owning SM handleId (TEMP_Bind). */
+  blendFromPoseSmBind: Map<string, string>
   /** Frame meta for nested GraphSlot runners. */
   time: number
   playing: boolean
@@ -2729,6 +2736,54 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
+  if (t === 'animAnimNode_BlendFromPose') {
+    followUpdate(node, resolveHandle(handles, d.inputLink ?? d.inputNode ?? d.input), ctx)
+    const blendTime = readNumber(d.blendTime, 0.2)
+    const mode = typeof d.mode === 'string' ? d.mode : 'BFPM_AlwaysOnActivation'
+    const tag = readCName(d.requestedByTag)
+    let state = ctx.blendFromPoseDyn.get(node.HandleId)
+    if (!state) {
+      state = { timer: 0, poseSet: false, isBlendRequested: false, cached: null }
+      ctx.blendFromPoseDyn.set(node.HandleId, state)
+    }
+    // OnActivated
+    if (!wasBoneOpActive(ctx, node.HandleId)) {
+      state.timer = 0
+      if (mode === 'BFPM_AlwaysOnActivation' || mode.endsWith('AlwaysOnActivation')) {
+        state.isBlendRequested = true
+      } else if (
+        (mode === 'BFPM_RequestedByTag' || mode.endsWith('RequestedByTag')) &&
+        tag &&
+        tag !== 'None' &&
+        board.getTagValue(tag) !== undefined
+      ) {
+        state.isBlendRequested = true
+      }
+    }
+    // Late tag request before pose capture (engine OnUpdate)
+    if (
+      (mode === 'BFPM_RequestedByTag' || mode.endsWith('RequestedByTag')) &&
+      tag &&
+      tag !== 'None' &&
+      !state.poseSet &&
+      !state.isBlendRequested &&
+      board.getTagValue(tag) !== undefined
+    ) {
+      state.isBlendRequested = true
+    }
+    if (state.timer < blendTime && blendTime > 0) {
+      state.timer += ctx.dt
+      if (state.timer >= blendTime) {
+        state.poseSet = false
+        state.cached = null
+        state.timer = blendTime
+      }
+    }
+    const progress = blendTime > 0 ? Math.min(1, state.timer / blendTime) : 1
+    markActive(nodes, node.HandleId, { weight: progress, alpha: progress })
+    return
+  }
+
   if (t === 'animAnimNode_BlendAdditive') {
     const weightNode = resolveHandle(handles, d.weightNode)
     let weight = 1
@@ -3238,6 +3293,12 @@ export class SimGraphRunner {
   private boneTranslateDyn = new Map<string, BoneOpTranslateState>()
   private boneOpCache = createBoneOpFrameCache()
   private mathExprPoseCache = createMathExprPoseFrameCache()
+  /** BlendFromPose dyn (timer / request / additive cache). */
+  private blendFromPoseDyn = new Map<string, BlendFromPoseDynState>()
+  /** BlendFromPose → owning SM (graph TEMP_Bind). */
+  private blendFromPoseSmBind = new Map<string, string>()
+  /** Per-SM frozen pose buffer (StateFrozen i_cachedPose). */
+  private smFrozenPoses = new Map<string, SmFrozenPoseSlot>()
   /** Optional parent-transform MS map for ParentTransform Sample. */
   parentTransforms = new Map<string, Qs>()
   /** Join pose cache (engine diamond re-sample); poses reused, sampled cleared per Sample. */
@@ -3335,6 +3396,12 @@ export class SimGraphRunner {
     const buf = allocSampleScratch(rig, this.stackCapacity, this.trackStackCapacity)
     this.sampleOut = buf.out
     this.poseScratch = buf.poseScratch
+    // Rebuild SM frozen + BlendFromPose additive caches for new pose layout.
+    this.smFrozenPoses.clear()
+    for (const state of this.blendFromPoseDyn.values()) {
+      state.cached = null
+      state.poseSet = false
+    }
   }
 
   /** Whether this graph owns a handle (for capture / debug scoping). */
@@ -3431,6 +3498,9 @@ export class SimGraphRunner {
     this.boneRotateDyn.clear()
     this.boneQuatDyn.clear()
     this.boneTranslateDyn.clear()
+    this.blendFromPoseDyn.clear()
+    this.blendFromPoseSmBind = bindBlendFromPoseToStateMachines(this.handles)
+    this.smFrozenPoses.clear()
     clearBoneOpFrameCache(this.boneOpCache)
     clearMathExprPoseFrameCache(this.mathExprPoseCache)
     this.parentTransforms.clear()
@@ -3468,6 +3538,8 @@ export class SimGraphRunner {
     this.boneRotateDyn.clear()
     this.boneQuatDyn.clear()
     this.boneTranslateDyn.clear()
+    this.blendFromPoseDyn.clear()
+    for (const slot of this.smFrozenPoses.values()) slot.valid = false
     clearBoneOpFrameCache(this.boneOpCache)
     clearMathExprPoseFrameCache(this.mathExprPoseCache)
     this.parentTransforms.clear()
@@ -3616,6 +3688,8 @@ export class SimGraphRunner {
       clipClocks: this.clipClocks,
       animDbLibrary: this.animDbLibrary,
       staticSwitchResults: this.staticSwitchResults,
+      blendFromPoseDyn: this.blendFromPoseDyn,
+      blendFromPoseSmBind: this.blendFromPoseSmBind,
       time,
       playing,
       speed,
@@ -3684,6 +3758,10 @@ export class SimGraphRunner {
     // Reset AdditionalFloatTrack i_time when node leaves active Update path (OnActivated).
     for (const id of [...this.additionalFloatTrackTimes.keys()]) {
       if (!nodes[id]?.active) this.additionalFloatTrackTimes.delete(id)
+    }
+    // BlendFromPose OnDeactivated — drop cached additive when node leaves active path.
+    for (const id of [...this.blendFromPoseDyn.keys()]) {
+      if (!nodes[id]?.active) this.blendFromPoseDyn.delete(id)
     }
     // Deactivate clip clocks that were not stepped (left the active pose path)
     for (const [, clock] of this.clipClocks) {
@@ -3764,6 +3842,9 @@ export class SimGraphRunner {
           mathExprPoseCache: this.mathExprPoseCache,
           parentTransforms: this.parentTransforms,
           joinPoseCache: this.joinPoseCache,
+          blendFromPoseDyn: this.blendFromPoseDyn,
+          blendFromPoseSmBind: this.blendFromPoseSmBind,
+          smFrozenPoses: this.smFrozenPoses,
         },
         this.sampleOut
       )

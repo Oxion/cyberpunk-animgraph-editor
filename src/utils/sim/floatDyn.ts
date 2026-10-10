@@ -126,6 +126,23 @@ export function clampValueBySpeed(
   return Math.min(rangeMax, Math.max(rangeMin, value))
 }
 
+/** anim::MapProgressByType — Linear / Smoothstep / CustomCurve (BlendFromPose). */
+export function mapProgressByBlendTypeLBC(
+  progress: number,
+  blendType: unknown,
+  customBlendCurve?: unknown
+): number {
+  const t = Math.min(1, Math.max(0, progress))
+  const raw = typeof blendType === 'string' ? blendType : 'Linear'
+  if (raw === 'Smoothstep' || raw.endsWith('Smoothstep')) {
+    return t * t * (3 - 2 * t)
+  }
+  if (raw === 'CustomCurve' || raw.endsWith('CustomCurve')) {
+    return evalCurveFloatData(customBlendCurve, t)
+  }
+  return t
+}
+
 export function shortestSignedDistance(
   start: number,
   end: number,

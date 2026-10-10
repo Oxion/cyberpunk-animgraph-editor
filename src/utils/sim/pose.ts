@@ -279,6 +279,71 @@ export function blendAdditiveLocal(
 }
 
 /**
+ * Anim poseUtil::ConvertToAdditiveFrame_Local approx for blendAdditiveLocal:
+ * out = inv(first) * curr → t' = curr.t - first.t, q' = inv(first.q)*curr.q, s' = curr.s/first.s.
+ * Used by BlendFromPose (first = new input, curr = frozen).
+ */
+export function convertToAdditiveFrameLocal(first: Pose, curr: Pose, out: Pose): void {
+  const n = Math.min(out.boneCount, first.boneCount, curr.boneCount)
+  const inv = scratchQuat
+  const tmp = scratchQuatB
+  for (let i = 0; i < n; i++) {
+    const ti = i * 3
+    const ri = i * 4
+    out.translation[ti] = curr.translation[ti]! - first.translation[ti]!
+    out.translation[ti + 1] = curr.translation[ti + 1]! - first.translation[ti + 1]!
+    out.translation[ti + 2] = curr.translation[ti + 2]! - first.translation[ti + 2]!
+    inv[0] = -first.rotation[ri]!
+    inv[1] = -first.rotation[ri + 1]!
+    inv[2] = -first.rotation[ri + 2]!
+    inv[3] = first.rotation[ri + 3]!
+    mulQuat(tmp, 0, inv, 0, curr.rotation, ri)
+    out.rotation[ri] = tmp[0]!
+    out.rotation[ri + 1] = tmp[1]!
+    out.rotation[ri + 2] = tmp[2]!
+    out.rotation[ri + 3] = tmp[3]!
+    const fsx = first.scale[ti]!
+    const fsy = first.scale[ti + 1]!
+    const fsz = first.scale[ti + 2]!
+    out.scale[ti] = fsx !== 0 ? curr.scale[ti]! / fsx : curr.scale[ti]!
+    out.scale[ti + 1] = fsy !== 0 ? curr.scale[ti + 1]! / fsy : curr.scale[ti + 1]!
+    out.scale[ti + 2] = fsz !== 0 ? curr.scale[ti + 2]! / fsz : curr.scale[ti + 2]!
+  }
+  const sn = Math.min(out.stackCapacity, first.stackCount, curr.stackCount)
+  out.stackCount = sn
+  for (let i = 0; i < sn; i++) {
+    out.stackNames[i] = curr.stackNames[i] ?? ''
+    out.stackParents[i] = curr.stackParents[i] ?? -1
+    const ti = i * 3
+    const ri = i * 4
+    out.stackTranslation[ti] = curr.stackTranslation[ti]! - first.stackTranslation[ti]!
+    out.stackTranslation[ti + 1] =
+      curr.stackTranslation[ti + 1]! - first.stackTranslation[ti + 1]!
+    out.stackTranslation[ti + 2] =
+      curr.stackTranslation[ti + 2]! - first.stackTranslation[ti + 2]!
+    inv[0] = -first.stackRotation[ri]!
+    inv[1] = -first.stackRotation[ri + 1]!
+    inv[2] = -first.stackRotation[ri + 2]!
+    inv[3] = first.stackRotation[ri + 3]!
+    mulQuat(tmp, 0, inv, 0, curr.stackRotation, ri)
+    out.stackRotation[ri] = tmp[0]!
+    out.stackRotation[ri + 1] = tmp[1]!
+    out.stackRotation[ri + 2] = tmp[2]!
+    out.stackRotation[ri + 3] = tmp[3]!
+    const fsx = first.stackScale[ti]!
+    const fsy = first.stackScale[ti + 1]!
+    const fsz = first.stackScale[ti + 2]!
+    out.stackScale[ti] =
+      fsx !== 0 ? curr.stackScale[ti]! / fsx : curr.stackScale[ti]!
+    out.stackScale[ti + 1] =
+      fsy !== 0 ? curr.stackScale[ti + 1]! / fsy : curr.stackScale[ti + 1]!
+    out.stackScale[ti + 2] =
+      fsz !== 0 ? curr.stackScale[ti + 2]! / fsz : curr.stackScale[ti + 2]!
+  }
+  // Tracks unused by BlendAdditive_Local_PoseOnly — keep base tracks from first via caller.
+}
+
+/**
  * Absolute local pose → additive delta vs reference (rig A-pose / bind).
  * t' = t - ref.t, q' = inv(ref.q) * q, s' = s / ref.s
  * Required before blendAdditiveLocal when the added input is a normal SkAnim pose
