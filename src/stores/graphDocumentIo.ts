@@ -11,7 +11,10 @@ import {
 import type { DirectChildrenLayoutMode } from '../utils/graph/DirectChildrenLayout'
 import type { AnimClipSetupJson } from '../utils/sim/clipLibrary'
 import type { AnimDatabaseLibraryJson } from '../utils/sim/animDatabase'
-import type { ClipPoseLibraryJson } from '../utils/sim/clipPoseLibrary'
+import {
+  isClipPoseLibraryJson,
+  type ClipPoseLibraryJson,
+} from '../utils/sim/clipPoseLibrary'
 import { AnimgraphParser } from '../utils/AnimgraphParser'
 import {
   collectFloatingHandleIdsForSave,
@@ -330,15 +333,11 @@ export const beginLoadFromPath = async (
       if (project.clipPoseLibrary == null) {
         try {
           const poses = await fsLoadJson(clipPoseSidecarPath(filePath))
-          if (
-            poses &&
-            typeof poses === 'object' &&
-            Array.isArray((poses as ClipPoseLibraryJson).sets)
-          ) {
-            project.clipPoseLibrary = poses as ClipPoseLibraryJson
+          if (isClipPoseLibraryJson(poses)) {
+            project.clipPoseLibrary = poses
           }
-        } catch {
-          // no sidecar
+        } catch(error) {
+          console.error('Error loading clip pose library from sidecar:', error)
         }
       }
       await loadProjectFile(project)

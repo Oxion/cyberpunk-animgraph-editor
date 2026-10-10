@@ -43,10 +43,24 @@ export type ClipPoseSetView = {
   jointCount: number
 }
 
+/** Current sidecar / embed schema. */
+export const CLIP_POSE_LIBRARY_VERSION = 1
+
 /** Project-persisted pose curves (post GLB parse: additive strip + RED Z-up). */
 export type ClipPoseLibraryJson = {
   $type: 'animClipPoseLibrary'
+  version: number
   sets: ClipPoseSetJson[]
+}
+
+export function isClipPoseLibraryJson(data: unknown): data is ClipPoseLibraryJson {
+  if (!data || typeof data !== 'object') return false
+  const o = data as Record<string, unknown>
+  if (!Array.isArray(o.sets)) return false
+  if (!Number.isFinite(o.version) || (o.version as number) < 1) {
+    return false
+  }
+  return true
 }
 
 export type ClipPoseSetJson = {
@@ -234,6 +248,7 @@ export class ClipPoseLibrary {
   toJson(): ClipPoseLibraryJson {
     return {
       $type: 'animClipPoseLibrary',
+      version: CLIP_POSE_LIBRARY_VERSION,
       sets: this.sets.map((s) => ({
         id: s.id,
         sourceLabel: s.sourceLabel,
@@ -256,7 +271,13 @@ export class ClipPoseLibrary {
 
   loadFromJson(data: ClipPoseLibraryJson): void {
     this.clear()
-    if (!data || !Array.isArray(data.sets)) return
+    const version = data.version ?? 1
+    if (version > CLIP_POSE_LIBRARY_VERSION) {
+      console.warn(
+        `clipPoseLibrary version ${version} newer than supported ${CLIP_POSE_LIBRARY_VERSION}; skipping`
+      )
+      return
+    }
     let maxNum = 0
     for (const raw of data.sets) {
       if (!raw || !Array.isArray(raw.animations)) continue
