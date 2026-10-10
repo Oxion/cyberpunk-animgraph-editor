@@ -4,6 +4,7 @@ import type { RenderNode } from './diagramTypes'
 export const TYPED_DATA_BODY_DIAGRAM_NODE_TYPES_SET = new Set([
   'animAnimStateTransitionCondition_BoolFeature',
   'animAnimStateTransitionCondition_IntFeature',
+  'animAnimStateTransitionCondition_FloatFeature',
   'animAnimStateTransitionCondition_CompositeSimultaneous',
   'animAnimStateTransitionCondition_ExternalEvent',
   'animAnimStateTransitionCondition_AnimEnd',
