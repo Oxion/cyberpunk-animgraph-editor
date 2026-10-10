@@ -1,15 +1,14 @@
 import { isArrayFieldType } from '../animFieldSchema'
-import type { AnimgraphNode } from './animgraphTypes'
-import type { DiagramConnection, RenderData, RenderNode } from './diagramTypes'
 import { NodeDefinitionRegistry, resolveAnimFields } from '../NodeDefinition'
-import { getProjectionDef } from '../projection'
 import type { NestedPinSpec } from '../projection'
+import { getProjectionDef } from '../projection'
+import type { AnimgraphNode } from './animgraphTypes'
 import { ANIM_NODE_STATE_TYPE_SET } from './animNodeStateTypes'
 import {
   ANIM_NODE_TYPE_STATE
 } from './animNodeTypes'
 import { isStateMachineNodeType } from './animNodeTypeUtils'
-import { getCrossViewConnsForHost, makeCrossViewConnectionPortalPinId, makeCrossViewPinId } from './crossViewPinIds'
+import { getCrossViewConnsForHost, makeCrossViewConnectionPortalPinId } from './crossViewPinIds'
 import { DIAGRAM_CONNECTION_TYPE_INPUT } from './diagramConnectionTypes'
 import { DiagramNodeDefinitionRegistry } from './DiagramNodeDefinition'
 import {
@@ -17,6 +16,7 @@ import {
   DIAGRAM_NODE_TYPE_PORTAL,
   DIAGRAM_TRANSITION_WRAPPER_TYPE,
 } from './diagramNodeTypes'
+import type { DiagramConnection, RenderData, RenderNode } from './diagramTypes'
 import { linkedDataTypeName, resolveLinkedAnimgraphData } from './linkedAnimgraphData'
 import {
   appendChild,
@@ -32,11 +32,10 @@ import { layoutPortalStateBlocks } from './PortalStateLayout'
 import {
   bridgePortalHostId,
   findBridgePortalForWire,
-  findCrossViewConnForPinPortal,
   findDeepPortalForWire,
   invalidateCrossViewPortalPinIndex,
   isDeepPortalNode,
-  isPortalHopConnection,
+  isPortalHopConnection
 } from './portalTopology'
 import { syncStatesGroupChildOrder } from './smStateSlot'
 import {
