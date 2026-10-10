@@ -1759,6 +1759,22 @@ function readTransformSource(
   return { ...fallback }
 }
 
+/** True when latch should (re)sample — first create or OnActivated edge. */
+function latchShouldSample(fctx: FloatEvalCtx, id: string, hasState: boolean): boolean {
+  if (!hasState) return true
+  // WalkCtx carries prevNodes; re-sample on activation even if clock-tick latched early.
+  const prev = (fctx as WalkCtx).prevNodes
+  if (prev) return !prev[id]?.active
+  return false
+}
+
+function resolveLatchFloatInput(
+  handles: Map<string, AnimgraphNode>,
+  d: Record<string, unknown>
+): AnimgraphNode | null {
+  return resolveHandle(handles, d.input ?? d.inputNode ?? d.inputLink)
+}
+
 /** BoolLatch / IntLatch — sample input once on activate (like FloatLatch). */
 function evalScalarLatchNode(
   source: AnimgraphNode,
@@ -1766,18 +1782,19 @@ function evalScalarLatchNode(
   depth: number
 ): number {
   const id = source.HandleId
-  if (fctx.floatUpdated.has(id)) {
-    return fctx.floatDyn.get(id)?.value ?? 0
-  }
   let state = fctx.floatDyn.get(id)
-  if (!state) {
-    const input = resolveHandle(fctx.handles, source.Data?.input)
+  const sample = latchShouldSample(fctx, id, !!state)
+  if (fctx.floatUpdated.has(id) && !sample) {
+    return state?.value ?? 0
+  }
+  if (sample) {
+    const input = resolveLatchFloatInput(fctx.handles, source.Data ?? {})
     const v = input ? readFloatSource(input, fctx, 0, depth + 1) : 0
     state = { value: v, velocity: 0 }
     fctx.floatDyn.set(id, state)
   }
   fctx.floatUpdated.add(id)
-  return state.value
+  return state!.value
 }
 
 /**
@@ -1790,23 +1807,28 @@ function evalStatefulVectorNode(
   depth: number
 ): SimVec4 {
   const id = source.HandleId
-  if (fctx.floatUpdated.has(id)) {
-    return fctx.vectorDyn.get(id) ? { ...fctx.vectorDyn.get(id)! } : { ...ZERO_VEC4 }
-  }
   const d = source.Data ?? {}
   const { handles, dt } = fctx
 
   if (t === 'animAnimNode_VectorLatch') {
     let state = fctx.vectorDyn.get(id)
-    if (!state) {
-      const input = resolveHandle(handles, d.input)
+    const sample = latchShouldSample(fctx, id, !!state)
+    if (fctx.floatUpdated.has(id) && !sample) {
+      return { ...(state ?? ZERO_VEC4) }
+    }
+    if (sample) {
+      const input = resolveHandle(handles, d.input ?? d.inputNode ?? d.inputLink)
       state = input
         ? { ...readVectorSource(input, fctx, ZERO_VEC4, depth + 1) }
         : { ...ZERO_VEC4 }
       fctx.vectorDyn.set(id, state)
     }
     fctx.floatUpdated.add(id)
-    return { ...state }
+    return { ...(state ?? ZERO_VEC4) }
+  }
+
+  if (fctx.floatUpdated.has(id)) {
+    return fctx.vectorDyn.get(id) ? { ...fctx.vectorDyn.get(id)! } : { ...ZERO_VEC4 }
   }
 
   // DampVector
@@ -2175,23 +2197,30 @@ function evalStatefulFloatNode(
   depth: number
 ): number {
   const id = source.HandleId
-  if (fctx.floatUpdated.has(id)) {
-    return fctx.floatDyn.get(id)?.value ?? 0
-  }
-
   const d = source.Data ?? {}
   const { handles, dt } = fctx
   let state = fctx.floatDyn.get(id)
 
   if (t === 'animAnimNode_FloatLatch') {
-    if (!state) {
-      const input = resolveHandle(handles, d.input)
+    // Engine: sample only OnActivated (after LinkSafeActivate input).
+    // Re-sample on activation edge so a premature clock-tick latch (value 0)
+    // is overwritten once Update walks inputs first.
+    const sample = latchShouldSample(fctx, id, !!state)
+    if (fctx.floatUpdated.has(id) && !sample) {
+      return state?.value ?? 0
+    }
+    if (sample) {
+      const input = resolveLatchFloatInput(handles, d)
       const v = input ? readFloatSource(input, fctx, 0, depth + 1) : 0
       state = { value: v, velocity: 0 }
       fctx.floatDyn.set(id, state)
     }
     fctx.floatUpdated.add(id)
-    return state.value
+    return state!.value
+  }
+
+  if (fctx.floatUpdated.has(id)) {
+    return fctx.floatDyn.get(id)?.value ?? 0
   }
 
   if (t === 'animAnimNode_DampFloat') {

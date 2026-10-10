@@ -10,11 +10,11 @@ export function extractReferencedNodesFromFloatJoin(data: any): AnimgraphNode[] 
 }
 
 /**
- * Extracts referenced nodes from FloatLatch node data
- * Based on flatten_animAnimNode_FloatLatch.ts
+ * Extracts referenced nodes from FloatLatch node data.
+ * Engine RTTI: m_input → cooked field `input` (not inputNode).
  */
 export function extractReferencedNodesFromFloatLatch(data: any): AnimgraphNode[] {
-  return extractReferencedNodesFromField(data.inputNode)
+  return extractReferencedNodesFromField(data.input ?? data.inputNode)
 }
 
 /**
