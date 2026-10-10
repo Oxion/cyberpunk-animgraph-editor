@@ -489,6 +489,8 @@ function sampleNodeDispatch(
     case 'animAnimNode_Output':
     case 'animAnimNode_State':
     case 'animAnimNode_StateFrozen':
+    case 'animAnimNode_Stage':
+    case 'animAnimNode_StagePoseEntry':
       return sampleRequiredSucc(node, ctx, out, visited)
 
     case 'animAnimNode_StateMachine':

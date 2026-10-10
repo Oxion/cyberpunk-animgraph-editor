@@ -827,8 +827,21 @@ function tickClipClocksAlongPose(
     return
   }
 
-  if (t === 'animAnimNode_State' || t === 'animAnimNode_StateFrozen') {
+  if (
+    t === 'animAnimNode_State' ||
+    t === 'animAnimNode_StateFrozen' ||
+    t === 'animAnimNode_Stage'
+  ) {
     tickClipClocksAlongPose(findStateOutput(node, handles), ctx, clockVisited)
+    return
+  }
+
+  if (t === 'animAnimNode_StagePoseEntry') {
+    tickClipClocksAlongPose(
+      resolveHandle(handles, d.parentInput ?? d.inputLink ?? d.input),
+      ctx,
+      clockVisited
+    )
     return
   }
 
@@ -1436,6 +1449,7 @@ function isFloatValueNodeType(t: string): boolean {
     t === 'animAnimNode_FloatMathOp' ||
     t === 'animAnimNode_FloatClamp' ||
     t === 'animAnimNode_FloatJoin' ||
+    t === 'animAnimNode_StageFloatEntry' ||
     t === 'animAnimNode_FloatLatch' ||
     t === 'animAnimNode_BoolJoin' ||
     t === 'animAnimNode_BoolLatch' ||
@@ -1928,9 +1942,13 @@ function readFloatSource(
   if (
     t === 'animAnimNode_FloatJoin' ||
     t === 'animAnimNode_IntJoin' ||
-    t === 'animAnimNode_BoolJoin'
+    t === 'animAnimNode_BoolJoin' ||
+    t === 'animAnimNode_StageFloatEntry'
   ) {
-    const input = resolveHandle(handles, d.input)
+    const input = resolveHandle(
+      handles,
+      d.parentInput ?? d.input ?? d.inputLink ?? d.inputNode
+    )
     if (input) return readFloatSource(input, fctx, fallback, depth + 1)
     return fallback
   }
@@ -2647,6 +2665,21 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   if (t === 'animAnimNode_State' || t === 'animAnimNode_StateFrozen') {
     const out = findStateOutput(node, handles)
     followUpdate(node, out, ctx)
+    return
+  }
+
+  // AnimNode_Stage — container forwards to Output (nodes[0]); entries pull inputPoses.
+  if (t === 'animAnimNode_Stage') {
+    followUpdate(node, findStateOutput(node, handles), ctx)
+    return
+  }
+
+  if (t === 'animAnimNode_StagePoseEntry') {
+    followUpdate(
+      node,
+      resolveHandle(handles, d.parentInput ?? d.inputLink ?? d.input),
+      ctx
+    )
     return
   }
 
