@@ -177,22 +177,47 @@
 
       <TabsContent value="events" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
         <div class="flex shrink-0 flex-wrap items-center gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            :variant="eventValueEnabled ? 'default' : 'secondary'"
+            class="h-7 w-7 shrink-0 rounded-sm px-0"
+            title="Toggle anim event value"
+            aria-label="Toggle anim event value"
+            :aria-pressed="eventValueEnabled"
+            @click="eventValueEnabled = !eventValueEnabled"
+          >
+            <SlidersHorizontal class="size-3.5" :size="14" />
+          </Button>
           <Input
             class="h-7 min-w-[80px] flex-1 rounded-sm text-xs"
             placeholder="event name"
             :model-value="eventDraft"
             @update:model-value="(v) => emit('update:eventDraft', String(v ?? ''))"
           />
-          <Button type="button" size="sm" variant="secondary" class="h-7 rounded-sm px-2 text-xs" @click="emit('fireExternal')">
-            Ext
-          </Button>
-          <Button type="button" size="sm" variant="secondary" class="h-7 rounded-sm px-2 text-xs" @click="emit('fireAnimEvent')">
-            Anim
-          </Button>
-          <Button type="button" size="sm" variant="secondary" class="h-7 rounded-sm px-2 text-xs" @click="emit('fireAnimEnd')">
-            AnimEnd
-          </Button>
+          <ButtonGroup class="shrink-0">
+            <Button type="button" size="sm" variant="secondary" class="h-7 rounded-sm px-2 text-xs" @click="emit('fireExternal')">
+              Ext
+            </Button>
+            <Button type="button" size="sm" variant="secondary" class="h-7 rounded-sm px-2 text-xs" @click="onFireAnimEvent">
+              Anim
+            </Button>
+            <Button type="button" size="sm" variant="secondary" class="h-7 rounded-sm px-2 text-xs" @click="emit('fireAnimEnd')">
+              AnimEnd
+            </Button>
+          </ButtonGroup>
         </div>
+        <PropertyNumberSlider
+          v-if="eventValueEnabled"
+          class="w-full shrink-0"
+          label="Anim value"
+          :model-value="eventValueDraft"
+          :slider-min="0"
+          :slider-max="1"
+          :step="0.01"
+          :decimals="3"
+          @update:model-value="(v) => emit('update:eventValueDraft', v)"
+        />
         <Input
           v-if="discovered.events.length"
           class="h-7 shrink-0 rounded-sm text-xs"
@@ -1061,6 +1086,7 @@ const props = defineProps<{
     entityTags?: string[]
   }
   eventDraft: string
+  eventValueDraft: number
   featureDrafts: Record<string, number>
   vectorFeatureDrafts?: Record<string, { x: number; y: number; z: number; w: number }>
   quatFeatureDrafts?: Record<string, { x: number; y: number; z: number; w: number }>
@@ -1155,19 +1181,29 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:eventDraft': [string]
+  'update:eventValueDraft': [number]
   toggle: []
   'toggle-active': []
   step: []
   reset: []
   setSpeed: [number]
   fireExternal: [string?]
-  fireAnimEvent: [string?]
+  fireAnimEvent: [name?: string, value?: number]
   fireAnimEnd: []
 }>()
 
 const activeTab = ref<'events' | 'values' | 'resources'>('events')
 const valuesSubTab = ref<'features' | 'vars' | 'wrappers' | 'tags'>('features')
 const resourcesSubTab = ref<'sets' | 'db' | 'rig' | 'entity'>('sets')
+const eventValueEnabled = ref(false)
+
+function onFireAnimEvent() {
+  const value =
+    eventValueEnabled.value && Number.isFinite(props.eventValueDraft)
+      ? props.eventValueDraft
+      : undefined
+  emit('fireAnimEvent', undefined, value)
+}
 
 /** Below this tabs-row width, show icons only. */
 const TABS_ICON_ONLY_MAX_WIDTH = 360

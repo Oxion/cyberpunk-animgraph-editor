@@ -221,6 +221,7 @@
                 :active="simActive"
                 :discovered="simDiscovered"
                 :event-draft="simEventDraft"
+                :event-value-draft="simEventValueDraft"
                 :feature-drafts="simFeatureDrafts"
                 :vector-feature-drafts="simVectorFeatureDrafts"
                 :quat-feature-drafts="simQuatFeatureDrafts"
@@ -282,6 +283,7 @@
                 :resolve-vector-feature-value="simDraftVectorFeatureValue"
                 :resolve-quat-feature-value="simDraftQuatFeatureValue"
                 @update:event-draft="simEventDraft = $event"
+                @update:event-value-draft="simEventValueDraft = $event"
                 @toggle="simToggle"
                 @toggle-active="simToggleActive"
                 @step="simStep"
@@ -656,6 +658,7 @@ import {
   simDraftVectorVarValue,
   simEntityTagDrafts,
   simEventDraft,
+  simEventValueDraft,
   simFeatureDrafts,
   simFireAnimEnd,
   simFireAnimEvent,

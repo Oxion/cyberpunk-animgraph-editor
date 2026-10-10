@@ -16,6 +16,7 @@ export const {
   getSkeletonViewPose: simGetSkeletonViewPose,
   discovered: simDiscovered,
   eventDraft: simEventDraft,
+  eventValueDraft: simEventValueDraft,
   featureDrafts: simFeatureDrafts,
   vectorFeatureDrafts: simVectorFeatureDrafts,
   quatFeatureDrafts: simQuatFeatureDrafts,

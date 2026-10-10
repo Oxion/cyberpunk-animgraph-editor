@@ -112,6 +112,8 @@ export function useAnimgraphSim() {
   const enabled = ref(false)
   const active = ref(false)
   const eventDraft = ref('')
+  /** Valued timeline event payload for AnimNode_EventValue inject */
+  const eventValueDraft = ref(0)
   const featureDrafts = ref<Record<string, number>>({})
   /** Vector4 AnimFeature drafts: feature\\0property → {x,y,z,w} */
   const vectorFeatureDrafts = ref<Record<string, SimVec4>>({})
@@ -740,10 +742,13 @@ export function useAnimgraphSim() {
     publish(0)
   }
 
-  const fireAnimEvent = (name?: string) => {
+  const fireAnimEvent = (name?: string, value?: number) => {
     const n = (name ?? eventDraft.value).trim()
     if (!n) return
-    board.value.injectAnimEventNow(n)
+    board.value.injectAnimEventNow(
+      n,
+      value !== undefined && Number.isFinite(value) ? value : undefined
+    )
     publish(0)
   }
 
@@ -1533,6 +1538,7 @@ export function useAnimgraphSim() {
     getSkeletonViewPose,
     discovered,
     eventDraft,
+    eventValueDraft,
     featureDrafts,
     vectorFeatureDrafts,
     quatFeatureDrafts,
