@@ -56,7 +56,7 @@ export type BoneOpFrameCache = {
   limitWeight: Map<string, number>
   /** ParentConstraint */
   parentConstraint: Map<string, ParentConstraintSnap>
-  /** FloatTrackDirectConnConstraint / TransformToTrack weight+mul */
+  /** FloatTrackDirectConn / TransformToTrack / FloatTrackModifier / TrackSetter weight(+mul) */
   floatTrackConn: Map<string, { weight: number; mulFactor: number }>
   /** Ik2 / Ik2Constraint */
   ik2: Map<string, Ik2FrameSnap>

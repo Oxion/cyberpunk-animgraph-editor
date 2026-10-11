@@ -581,6 +581,8 @@ function sampleNodeDispatch(
     case 'animAnimNode_FloatTrackModifier':
     case 'animAnimNode_FloatTrackModifierMarkUnstable':
       return sampleFloatTrackModifier(node, ctx, out, visited)
+    case 'animAnimNode_TrackSetter':
+      return sampleTrackSetter(node, ctx, out, visited)
     case 'animAnimNode_RotationLimit':
       return sampleRotationLimit(node, ctx, out, visited)
     case 'animAnimNode_TranslationLimit':
@@ -1619,6 +1621,28 @@ function sampleFloatTrackModifier(
   // else Override
 
   writeTrackValue(out, trackIdx, result)
+  return ok
+}
+
+/**
+ * Engine AnimNode_TrackSetter::OnSample —
+ * OnePoseInput child, then tracks[i] = value when track in range && FloatLink connected.
+ * Legacy equiv of FloatTrackModifier Override (engine TODO: replace with modifier).
+ */
+function sampleTrackSetter(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'TrackSetter')
+  const trackName = readNamedTrackFieldName(node.Data?.track)
+  const trackIdx = resolveTrackUnified(out, ctx.rig, trackName)
+  if (trackIdx < 0) return ok
+  // Engine: write only if m_value link is connected (Update caches only then).
+  const snap = ctx.boneOpCache?.floatTrackConn.get(node.HandleId)
+  if (!snap) return ok
+  writeTrackValue(out, trackIdx, snap.weight)
   return ok
 }
 

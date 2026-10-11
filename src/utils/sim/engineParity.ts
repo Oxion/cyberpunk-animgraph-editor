@@ -14,6 +14,7 @@
  * ValueBySpeed: OnUpdate integrates speed×dt with ClampType (None/Clamp/WrappedClamp).
  * BlendFromPose: SM frozen pose + additive fade (animNode_BlendFromPose).
  * Stage / StagePoseEntry / StageFloatEntry: container + parentInput passthrough.
+ * TrackSetter: OnePoseInput + FloatLink → override named float track (legacy FloatTrackModifier Override).
  * HumanIk / FloorIk / LookAt / motion extraction / sync TimeWarper remain out of scope.
  */
 

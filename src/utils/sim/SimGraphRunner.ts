@@ -3106,6 +3106,23 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
+  // TrackSetter — OnePoseInput + value FloatLink; Sample overrides named track (Override-only).
+  if (t === 'animAnimNode_TrackSetter') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const vIn = resolveHandle(handles, d.value)
+    if (vIn) {
+      updateFromNode(vIn, ctx)
+      const floatVal = readFloatSource(vIn, ctx, 0)
+      // Presence of snap = m_value linked (engine skips write when unlinked).
+      ctx.boneOpCache.floatTrackConn.set(node.HandleId, { weight: floatVal, mulFactor: 1 })
+      markActive(nodes, node.HandleId, { weight: floatVal, alpha: 1 })
+    } else {
+      ctx.boneOpCache.floatTrackConn.delete(node.HandleId)
+      markActive(nodes, node.HandleId, { alpha: 1 })
+    }
+    return
+  }
+
   // AdditionalFloatTrack — PoseLink + local i_time for curve Sample.
   if (t === 'animAnimNode_AdditionalFloatTrack') {
     const poseIn = resolveHandle(handles, d.poseInputNode) ?? resolvePoseInputLink(handles, d)
