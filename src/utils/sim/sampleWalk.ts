@@ -52,6 +52,10 @@ import {
 } from './evalAnimMathExpressionVector'
 import { evalCurveFloatData, mapProgressByBlendTypeLBC } from './floatDyn'
 import { applyIk2 } from './ik2Solver'
+import {
+  applySnapToTerrainIkFlat,
+  SNAP_TO_TERRAIN_PARTIAL_MSG,
+} from './snapToTerrainIk'
 import type { FppCameraDyn } from './fppCameraDyn'
 import { sampleFppCamera } from './fppCameraSample'
 import {
@@ -647,6 +651,8 @@ function sampleNodeDispatch(
       return sampleAddIkRequest(node, ctx, out, visited)
     case 'animAnimNode_ReadIkRequest':
       return sampleReadIkRequest(node, ctx, out, visited)
+    case 'animAnimNode_AddSnapToTerrainIkRequest':
+      return sampleAddSnapToTerrainIkRequest(node, ctx, out, visited)
 
     case 'animAnimNode_Join':
       return sampleJoin(node, ctx, out, visited)
@@ -3115,6 +3121,24 @@ function sampleAddIkRequest(
     weightRotation: readNumber(d.weightRotation, 1),
     priority,
   })
+  return ok
+}
+
+/** Flat-ground subset + always warn incomplete parity. */
+function sampleAddSnapToTerrainIkRequest(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'AddSnapToTerrainIkRequest')
+  pushSampleWarning(ctx, {
+    code: 'snap-to-terrain-partial',
+    handleId: node.HandleId,
+    message: `${SNAP_TO_TERRAIN_PARTIAL_MSG} (#${node.HandleId})`,
+  })
+  if (!ctx.rig) return ok
+  applySnapToTerrainIkFlat(out, ctx.rig, node.Data ?? {}, ctx.ikTargets)
   return ok
 }
 

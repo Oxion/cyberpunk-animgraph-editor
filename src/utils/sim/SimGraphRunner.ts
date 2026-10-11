@@ -128,6 +128,7 @@ import {
   type PoseScratchPool,
   type SmFrozenPoseSlot,
 } from './sampleWalk'
+import { SNAP_TO_TERRAIN_PARTIAL_MSG } from './snapToTerrainIk'
 import {
   createSimSampleLog,
   flushSimSampleLog,
@@ -3105,6 +3106,20 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   if (t === 'animAnimNode_AddIkRequest' || t === 'animAnimNode_ReadIkRequest') {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
     markActive(nodes, node.HandleId, 1, 1)
+    return
+  }
+
+  // Flat-ground subset only — Sample applies plant/hip/Ik2; warn incomplete parity.
+  if (t === 'animAnimNode_AddSnapToTerrainIkRequest') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const deltaZ = resolveHandle(handles, d.animDeltaZ)
+    if (deltaZ) updateFromNode(deltaZ, ctx)
+    markActive(nodes, node.HandleId, 1, 1)
+    pushUpdateWarning(ctx, {
+      code: 'snap-to-terrain-partial',
+      handleId: node.HandleId,
+      message: `${SNAP_TO_TERRAIN_PARTIAL_MSG} (#${node.HandleId})`,
+    })
     return
   }
 

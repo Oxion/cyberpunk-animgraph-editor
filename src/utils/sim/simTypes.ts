@@ -66,6 +66,7 @@ export type SimSampleWarning = {
     | 'additional-transform-entry'
     | 'additional-float-track-entry'
     | 'math-expr-pose'
+    | 'snap-to-terrain-partial'
   handleId: string
   message: string
   weight?: number
@@ -77,7 +78,7 @@ export type SimSampleWarning = {
 
 /** Update-path diagnostic (clip clocks / speed / AnimEnd). */
 export type SimUpdateWarning = {
-  code: 'clip-zero-speed'
+  code: 'clip-zero-speed' | 'snap-to-terrain-partial'
   handleId: string
   message: string
   /** Effective playback speed when code is clip-zero-speed */

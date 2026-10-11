@@ -11,6 +11,9 @@
  *
  * Offline sim implements Update (+ numeric weights) and Sample (glb pose).
  * Ik2 / Ik2Constraint / AddIkRequest / ReadIkRequest are supported.
+ * AddSnapToTerrainIkRequest: flat-ground subset only (plant Z + hip Z + ikTargets + Ik2
+ * stand-in); emits snap-to-terrain-partial Update/Sample warnings — not full PhysicsTracer /
+ * foot-lock / HumanIk parity.
  * ValueBySpeed: OnUpdate integrates speed×dt with ClampType (None/Clamp/WrappedClamp).
  * BlendFromPose: SM frozen pose + additive fade (animNode_BlendFromPose).
  * Stage / StagePoseEntry / StageFloatEntry: container + parentInput passthrough.
