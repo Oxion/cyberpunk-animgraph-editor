@@ -462,6 +462,20 @@ export function setBoneTranslationMs(
   }
 }
 
+/** Set full bone transform in model space (engine SetBoneTransformMS). */
+export function setBoneTransformMs(pose: Pose, rig: RigEntry, unified: number, ms: Qs): void {
+  if (unified < 0) return
+  const parentIdx = parentOf(pose, rig, unified)
+  if (parentIdx >= 0) {
+    if (!getTransformMs(pose, rig, parentIdx, scratchParent)) return
+    const local = { ...IDENTITY_QS }
+    mulInverseMul(scratchParent, ms, local)
+    writeLs(pose, unified, local)
+  } else {
+    writeLs(pose, unified, ms)
+  }
+}
+
 /** Set bone rotation in model space; keep LS translation/scale. */
 export function setBoneRotationMs(
   pose: Pose,

@@ -129,6 +129,10 @@ import {
 } from './simSampleLog'
 import { buildStackPairing } from './stackPairing'
 import type { SimInputBoard } from './SimInputBoard'
+import { TypedStore } from '../TypedStore'
+import { createFppCameraDyn, type FppCameraDyn } from './fppCameraDyn'
+import { FPP_CAMERA_PITCH } from './fppCameraKeys'
+import { activateFppCamera, updateFppCamera } from './fppCameraUpdate'
 import {
   bindBlendFromPoseToStateMachines,
   evaluateSmTransitionBlendAlpha,
@@ -537,10 +541,17 @@ function runAnimDatabaseClipClock(node: AnimgraphNode, ctx: WalkCtx) {
 function markActive(
   nodes: Record<string, SimNodeState>,
   id: string,
-  patch: Partial<SimNodeState> = {}
+  weight?: number,
+  alpha?: number
 ): void {
-  const prev = nodes[id] ?? { active: false }
-  nodes[id] = { ...prev, active: true, ...patch }
+  const s = nodes[id]
+  if (!s) {
+    nodes[id] = { active: true, weight, alpha }
+    return
+  }
+  s.active = true
+  s.weight = weight
+  s.alpha = alpha
 }
 
 /** Shared float-eval context (board + stateful damp/spring/latch/signal). */
@@ -561,6 +572,8 @@ type FloatEvalCtx = {
   clipLibrary: ClipLibrary | null
   /** Per-runner math expression compile cache (idents + scalar/mixed). */
   mathExprCache: MathExprCompileCache
+  /** Instance shared vars (fppCamera.sharedVar, …). */
+  sharedVars: TypedStore
 }
 
 type WalkCtx = FloatEvalCtx & {
@@ -609,6 +622,8 @@ type WalkCtx = FloatEvalCtx & {
   boneQuatDyn: Map<string, BoneOpQuatState>
   boneTranslateDyn: Map<string, BoneOpTranslateState>
   mathExprPoseCache: MathExprPoseFrameCache
+  /** FPPCamera per-node dyn. */
+  fppCameraDyn: Map<string, FppCameraDyn>
   /** When true, Update appends diagnostics into updateWarnings. */
   updateWarningsEnabled?: boolean
   updateWarnings?: SimUpdateWarning[]
@@ -1889,6 +1904,10 @@ function readFloatSource(
     return readNumber(d.value ?? d.floatValue, fallback)
   }
 
+  if (t === 'animAnimNode_FPPCameraSharedVar') {
+    return fctx.sharedVars.get(FPP_CAMERA_PITCH) ?? fallback
+  }
+
   if (t === 'animAnimNode_IntVariable') {
     const name = readCName(d.variableName)
     if (name && board.intVars.has(name)) return board.intVars.get(name)!
@@ -2478,7 +2497,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
         : null
 
     if (nested) {
-      markActive(nodes, node.HandleId, { alpha: 1 })
+      markActive(nodes, node.HandleId, undefined, 1)
       // Engine: when dontDeactivateInput, also Update inputLink from the slot itself.
       if (dontDeactivate) followUpdate(node, inputLink, ctx)
       return
@@ -2494,7 +2513,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   if (isFloatValueNodeType(t)) {
     walkFloatValueInputs(node, ctx)
     const v = readFloatSource(node, ctx, 0)
-    markActive(nodes, node.HandleId, { weight: v, alpha: 1 })
+    markActive(nodes, node.HandleId, v, 1)
     return
   }
 
@@ -2502,7 +2521,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   if (isVectorValueNodeType(t)) {
     walkFloatValueInputs(node, ctx)
     const v = readVectorSource(node, ctx, ZERO_VEC4)
-    markActive(nodes, node.HandleId, { weight: vec4Mag3(v), alpha: 1 })
+    markActive(nodes, node.HandleId, vec4Mag3(v), 1)
     return
   }
 
@@ -2510,16 +2529,13 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   if (isTransformValueNodeType(t)) {
     walkFloatValueInputs(node, ctx)
     const qs = readTransformSource(node, ctx, IDENTITY_QS)
-    markActive(nodes, node.HandleId, {
-      weight: Math.hypot(qs.tx, qs.ty, qs.tz),
-      alpha: 1,
-    })
+    markActive(nodes, node.HandleId, Math.hypot(qs.tx, qs.ty, qs.tz), 1)
     return
   }
 
   if (isQuaternionValueNodeType(t)) {
     walkFloatValueInputs(node, ctx)
-    markActive(nodes, node.HandleId, { alpha: 1 })
+    markActive(nodes, node.HandleId, undefined, 1)
     return
   }
 
@@ -2563,10 +2579,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
         handles,
         rt.transitionProgress
       )
-      markActive(nodes, rt.firingTransitionHandleId, {
-        weight: blendAlpha,
-        alpha: blendAlpha,
-      })
+      markActive(nodes, rt.firingTransitionHandleId, blendAlpha, blendAlpha)
     }
     for (const id of rt.eligibleTransitionIds) {
       markActive(nodes, id)
@@ -2597,7 +2610,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
         weight = Math.max(0, Math.min(1, weight))
       }
     }
-    markActive(nodes, node.HandleId, { weight, alpha: 1 })
+    markActive(nodes, node.HandleId, weight, 1)
     return
   }
 
@@ -2608,31 +2621,31 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       d.Input ?? d.inputLink ?? d.input ?? d.InputLink
     )
     if (input) followUpdate(node, input, ctx)
-    markActive(nodes, node.HandleId, { weight: shotW, alpha: 1 })
+    markActive(nodes, node.HandleId, shotW, 1)
     return
   }
 
   if (isSkPhaseWithDurationType(t)) {
     const progress = runSkPhaseAnimClipClock(node, ctx, 'duration')
-    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    markActive(nodes, node.HandleId, progress, 1)
     return
   }
 
   if (isSkPhaseWithSpeedType(t)) {
     const progress = runSkPhaseAnimClipClock(node, ctx, 'speed')
-    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    markActive(nodes, node.HandleId, progress, 1)
     return
   }
 
   if (isSkPhaseAnimType(t)) {
     const progress = runSkPhaseAnimClipClock(node, ctx, 'phase')
-    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    markActive(nodes, node.HandleId, progress, 1)
     return
   }
 
   if (isSkSpeedAnimType(t)) {
     const progress = runSkSpeedAnimClipClock(node, ctx)
-    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    markActive(nodes, node.HandleId, progress, 1)
     return
   }
 
@@ -2667,13 +2680,13 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       clock.animName = fields.animation || 'None'
       clock.wasActive = true
     }
-    markActive(nodes, node.HandleId, { weight, alpha: 1 })
+    markActive(nodes, node.HandleId, weight, 1)
     return
   }
 
   if (isSkDurationAnimType(t)) {
     const progress = runSkDurationAnimClipClock(node, ctx)
-    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    markActive(nodes, node.HandleId, progress, 1)
     return
   }
 
@@ -2681,13 +2694,13 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   if (t === 'animAnimNode_SkFrameAnimByTrack') {
     followUpdate(node, resolveHandle(handles, d.inputWithTracks), ctx)
     const progress = runSkFrameAnimClipClock(node, ctx)
-    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    markActive(nodes, node.HandleId, progress, 1)
     return
   }
 
   if (t === 'animAnimNode_SkFrameAnim') {
     const progress = runSkFrameAnimClipClock(node, ctx)
-    markActive(nodes, node.HandleId, { weight: progress, alpha: 1 })
+    markActive(nodes, node.HandleId, progress, 1)
     return
   }
 
@@ -2726,7 +2739,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
         readNumber(d.maxInputValue, 1)
       )
     }
-    markActive(nodes, node.HandleId, { weight, alpha: weight })
+    markActive(nodes, node.HandleId, weight, weight)
     const first = resolveHandle(handles, d.firstInputNode)
     const second = resolveHandle(handles, d.secondInputNode)
     if (first && weight < 1) followUpdate(node, first, ctx)
@@ -2741,7 +2754,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       d as Record<string, unknown>,
       ctx
     )
-    markActive(nodes, node.HandleId, { weight: inputWeight, alpha: select.alpha })
+    markActive(nodes, node.HandleId, inputWeight, select.alpha)
     slots.refs.forEach((ref, i) => {
       const h = resolveHandle(handles, ref)
       if (!h) return
@@ -2765,7 +2778,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const numInputs = readNumber(d.numInputs, inputs.length)
     const index = switchIndexFromWeight(weight, Math.max(numInputs, inputs.length))
     // Badge = selected input index (0-based), matching engine SelectInputs
-    markActive(nodes, node.HandleId, { weight: index, alpha: 1 })
+    markActive(nodes, node.HandleId, index, 1)
     inputs.forEach((ref, i) => {
       if (i !== index) return
       const h = resolveHandle(handles, ref)
@@ -2791,7 +2804,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
         isWrapperActive: (n) => board.isWrapperActive(n),
       })
     }
-    markActive(nodes, node.HandleId, { weight: useTrue ? 1 : 0, alpha: 1 })
+    markActive(nodes, node.HandleId, useTrue ? 1 : 0, 1)
     const trueIn = resolveHandle(handles, d.True ?? d.true)
     const falseIn = resolveHandle(handles, d.False ?? d.false)
     followUpdate(node, useTrue ? trueIn : falseIn, ctx)
@@ -2842,7 +2855,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       }
     }
     const progress = blendTime > 0 ? Math.min(1, state.timer / blendTime) : 1
-    markActive(nodes, node.HandleId, { weight: progress, alpha: progress })
+    markActive(nodes, node.HandleId, progress, progress)
     return
   }
 
@@ -2857,7 +2870,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const bias = readNumber(d.biasValue, 0)
     const scale = readNumber(d.scaleValue, 1)
     const alpha = (weight - bias) * scale
-    markActive(nodes, node.HandleId, { weight: alpha, alpha: 1 })
+    markActive(nodes, node.HandleId, alpha, 1)
     const base = resolveHandle(handles, d.inputNode)
     const additive = resolveHandle(handles, d.addedInputNode ?? d.additiveInputNode)
     // Base pose always updates (engine always LinkSafeUpdate inputNode)
@@ -2872,7 +2885,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     if (weightNode) updateFromNode(weightNode, ctx)
     const raw = weightNode ? readFloatSource(weightNode, ctx, 0) : 0
     const weight = Math.min(1, Math.max(0, Number.isFinite(raw) ? raw : 0))
-    markActive(nodes, node.HandleId, { weight, alpha: weight })
+    markActive(nodes, node.HandleId, weight, weight)
     const base = resolveHandle(handles, d.inputNode)
     const overrideIn = resolveHandle(handles, d.overrideInputNode)
     followUpdate(node, base, ctx)
@@ -2896,7 +2909,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const masksCount = Array.isArray(d.masks) ? d.masks.length : 0
     const blendActive = blendByMaskDynamicBlendActive(weight, maskIndex, masksCount)
 
-    markActive(nodes, node.HandleId, { weight, alpha: maskIndex })
+    markActive(nodes, node.HandleId, weight, maskIndex)
     const base = resolveHandle(handles, d.base)
     const blend = resolveHandle(handles, d.blend)
     followUpdate(node, base, ctx)
@@ -2943,7 +2956,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       snap.offsetE = { x: v.x, y: v.y, z: v.z }
     }
     ctx.boneOpCache.parentConstraint.set(node.HandleId, snap)
-    markActive(nodes, node.HandleId, { weight, alpha: 1 })
+    markActive(nodes, node.HandleId, weight, 1)
     return
   }
 
@@ -2965,7 +2978,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const weight = wNode ? readFloatSource(wNode, ctx, staticW) : staticW
     const mulFactor = mNode ? readFloatSource(mNode, ctx, staticM) : staticM
     ctx.boneOpCache.floatTrackConn.set(node.HandleId, { weight, mulFactor })
-    markActive(nodes, node.HandleId, { weight, alpha: 1 })
+    markActive(nodes, node.HandleId, weight, 1)
     return
   }
 
@@ -2978,7 +2991,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     t === 'animAnimNode_AimConstraint_ObjectRotationUp'
   ) {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
-    markActive(nodes, node.HandleId, { weight: readNumber(d.weight, 1), alpha: 1 })
+    markActive(nodes, node.HandleId, readNumber(d.weight, 1), 1)
     return
   }
 
@@ -3010,7 +3023,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       snap.endOriMs = { ...q }
     }
     ctx.boneOpCache.ik2.set(node.HandleId, snap)
-    markActive(nodes, node.HandleId, { weight, alpha: 1 })
+    markActive(nodes, node.HandleId, weight, 1)
     return
   }
 
@@ -3033,13 +3046,13 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       endOriMs: { ...IDENTITY_QUAT_STATE },
       twist,
     })
-    markActive(nodes, node.HandleId, { weight, alpha: 1 })
+    markActive(nodes, node.HandleId, weight, 1)
     return
   }
 
   if (t === 'animAnimNode_AddIkRequest' || t === 'animAnimNode_ReadIkRequest') {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
-    markActive(nodes, node.HandleId, { weight: 1, alpha: 1 })
+    markActive(nodes, node.HandleId, 1, 1)
     return
   }
 
@@ -3090,7 +3103,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
 
     state.angleDeg = newAngle
     ctx.boneOpCache.rotateAngleDeg.set(node.HandleId, newAngle)
-    markActive(nodes, node.HandleId, { weight: newAngle, alpha: 1 })
+    markActive(nodes, node.HandleId, newAngle, 1)
     return
   }
 
@@ -3106,7 +3119,35 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     // Reuse floatTrackConn.weight as Sample secondArgument when inputFloatTrack missing.
     const floatVal = fIn ? readFloatSource(fIn, ctx, 0) : 0
     ctx.boneOpCache.floatTrackConn.set(node.HandleId, { weight: floatVal, mulFactor: 1 })
-    markActive(nodes, node.HandleId, { weight: floatVal, alpha: 1 })
+    markActive(nodes, node.HandleId, floatVal, 1)
+    return
+  }
+
+  // FPPCamera — UpdateInputs → shared pitch; Sample rewrites camera bones.
+  if (t === 'animAnimNode_FPPCamera') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    if (!wasBoneOpActive(ctx, node.HandleId)) {
+      let data = ctx.fppCameraDyn.get(node.HandleId)
+      if (!data) {
+        data = createFppCameraDyn()
+        ctx.fppCameraDyn.set(node.HandleId, data)
+      }
+      activateFppCamera(data)
+    }
+    const data = updateFppCamera(node.HandleId, {
+      board: ctx.board,
+      dt: ctx.dt,
+      sharedVars: ctx.sharedVars,
+      fppCameraDyn: ctx.fppCameraDyn,
+      lastFrameAnimEventValues: ctx.board.lastFrameAnimEventValues,
+      externalEvents: ctx.board.externalEvents,
+    })
+    markActive(nodes, node.HandleId, data.pitchFinal, 1)
+    return
+  }
+
+  if (t === 'animAnimNode_FPPCameraSharedVar') {
+    markActive(nodes, node.HandleId, ctx.sharedVars.get(FPP_CAMERA_PITCH) ?? 0, 1)
     return
   }
 
@@ -3119,10 +3160,10 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       const floatVal = readFloatSource(vIn, ctx, 0)
       // Presence of snap = m_value linked (engine skips write when unlinked).
       ctx.boneOpCache.floatTrackConn.set(node.HandleId, { weight: floatVal, mulFactor: 1 })
-      markActive(nodes, node.HandleId, { weight: floatVal, alpha: 1 })
+      markActive(nodes, node.HandleId, floatVal, 1)
     } else {
       ctx.boneOpCache.floatTrackConn.delete(node.HandleId)
-      markActive(nodes, node.HandleId, { alpha: 1 })
+      markActive(nodes, node.HandleId, undefined, 1)
     }
     return
   }
@@ -3133,7 +3174,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     followUpdate(node, poseIn, ctx)
     const prev = ctx.additionalFloatTrackTimes.get(node.HandleId) ?? 0
     ctx.additionalFloatTrackTimes.set(node.HandleId, prev + ctx.dt)
-    markActive(nodes, node.HandleId, { alpha: 1 })
+    markActive(nodes, node.HandleId, undefined, 1)
     return
   }
 
@@ -3180,7 +3221,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     }
 
     ctx.boneOpCache.rotateAngleDeg.set(node.HandleId, state.angleDeg)
-    markActive(nodes, node.HandleId, { weight: state.angleDeg })
+    markActive(nodes, node.HandleId, state.angleDeg)
     return
   }
 
@@ -3280,7 +3321,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       }
     }
     ctx.boneOpCache.limitWeight.set(node.HandleId, weight)
-    markActive(nodes, node.HandleId, { weight })
+    markActive(nodes, node.HandleId, weight)
     return
   }
 
@@ -3376,6 +3417,10 @@ export class SimGraphRunner {
   private boneTranslateDyn = new Map<string, BoneOpTranslateState>()
   private boneOpCache = createBoneOpFrameCache()
   private mathExprPoseCache = createMathExprPoseFrameCache()
+  /** Per-runner shared vars (TAnimInstanceSharedVar). */
+  private sharedVars = new TypedStore()
+  /** FPPCamera instance data by handle. */
+  private fppCameraDyn = new Map<string, FppCameraDyn>()
   /** BlendFromPose dyn (timer / request / additive cache). */
   private blendFromPoseDyn = new Map<string, BlendFromPoseDynState>()
   /** BlendFromPose → owning SM (graph TEMP_Bind). */
@@ -3582,6 +3627,8 @@ export class SimGraphRunner {
     this.boneQuatDyn.clear()
     this.boneTranslateDyn.clear()
     this.blendFromPoseDyn.clear()
+    this.fppCameraDyn.clear()
+    this.sharedVars.clear()
     this.blendFromPoseSmBind = bindBlendFromPoseToStateMachines(this.handles)
     this.smFrozenPoses.clear()
     clearBoneOpFrameCache(this.boneOpCache)
@@ -3622,6 +3669,8 @@ export class SimGraphRunner {
     this.boneQuatDyn.clear()
     this.boneTranslateDyn.clear()
     this.blendFromPoseDyn.clear()
+    this.fppCameraDyn.clear()
+    this.sharedVars.clear()
     for (const slot of this.smFrozenPoses.values()) slot.valid = false
     clearBoneOpFrameCache(this.boneOpCache)
     clearMathExprPoseFrameCache(this.mathExprPoseCache)
@@ -3748,6 +3797,7 @@ export class SimGraphRunner {
           mathExprPoseCache: this.mathExprPoseCache,
           parentTransforms: this.parentTransforms,
           joinPoseCache: this.joinPoseCache,
+          fppCameraDyn: this.fppCameraDyn,
         },
         out
       )
@@ -3789,6 +3839,8 @@ export class SimGraphRunner {
       boneQuatDyn: this.boneQuatDyn,
       boneTranslateDyn: this.boneTranslateDyn,
       mathExprPoseCache: this.mathExprPoseCache,
+      sharedVars: this.sharedVars,
+      fppCameraDyn: this.fppCameraDyn,
       updateWarningsEnabled: this.updateWarningsEnabled,
       updateWarnings,
     }
@@ -3841,6 +3893,9 @@ export class SimGraphRunner {
     // Reset AdditionalFloatTrack i_time when node leaves active Update path (OnActivated).
     for (const id of [...this.additionalFloatTrackTimes.keys()]) {
       if (!nodes[id]?.active) this.additionalFloatTrackTimes.delete(id)
+    }
+    for (const id of [...this.fppCameraDyn.keys()]) {
+      if (!nodes[id]?.active) this.fppCameraDyn.delete(id)
     }
     // BlendFromPose OnDeactivated — drop cached additive when node leaves active path.
     for (const id of [...this.blendFromPoseDyn.keys()]) {
@@ -3928,6 +3983,7 @@ export class SimGraphRunner {
           blendFromPoseDyn: this.blendFromPoseDyn,
           blendFromPoseSmBind: this.blendFromPoseSmBind,
           smFrozenPoses: this.smFrozenPoses,
+          fppCameraDyn: this.fppCameraDyn,
         },
         this.sampleOut
       )

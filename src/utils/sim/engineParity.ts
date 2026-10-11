@@ -16,6 +16,7 @@
  * Stage / StagePoseEntry / StageFloatEntry: container + parentInput passthrough.
  * TrackSetter: OnePoseInput + FloatLink → override named float track (legacy FloatTrackModifier Override).
  * DirectConnConstraint: source bone LS → target bone LS with axis masks + weight.
+ * FPPCamera / FPPCameraSharedVar: camera.* board features → pitch/yaw + bone Sample; shared TypedStore pitch.
  * HumanIk / FloorIk / LookAt / motion extraction / sync TimeWarper remain out of scope.
  */
 

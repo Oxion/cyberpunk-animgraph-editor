@@ -49,6 +49,8 @@ import {
 } from './evalAnimMathExpressionVector'
 import { evalCurveFloatData, mapProgressByBlendTypeLBC } from './floatDyn'
 import { applyIk2 } from './ik2Solver'
+import type { FppCameraDyn } from './fppCameraDyn'
+import { sampleFppCamera } from './fppCameraSample'
 import {
   applyAimConstraint,
   applyDirectConnConstraint,
@@ -175,6 +177,8 @@ export type SampleCtx = {
   lastWrittenNull: boolean
   /** Update→Sample values for procedural bone ops (Rotate/Translate/SetPosition/…). */
   boneOpCache?: BoneOpFrameCache
+  /** FPPCamera dyn from Update (shared with Sample). */
+  fppCameraDyn?: Map<string, FppCameraDyn>
   /**
    * AdditionalFloatTrack local time (engine i_time), advanced on Update.
    * Cleared when the node leaves the active Update path.
@@ -602,6 +606,8 @@ function sampleNodeDispatch(
       return sampleFloatTrackDirectConn(node, ctx, out, visited)
     case 'animAnimNode_DirectConnConstraint':
       return sampleDirectConnConstraint(node, ctx, out, visited)
+    case 'animAnimNode_FPPCamera':
+      return sampleFppCameraNode(node, ctx, out, visited)
     case 'animAnimNode_TransformToTrack':
       return sampleTransformToTrack(node, ctx, out, visited)
     case 'animAnimNode_OrientConstraint':
@@ -2272,6 +2278,23 @@ function sampleDirectConnConstraint(
     scaleY: readBool(d.scaleY),
     scaleZ: readBool(d.scaleZ),
   })
+  return ok
+}
+
+/**
+ * Engine AnimNode_FPPCamera::OnSample —
+ * child pose then procedural camera bones / tracks (dyn from Update).
+ */
+function sampleFppCameraNode(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'FPPCamera')
+  const data = ctx.fppCameraDyn?.get(node.HandleId)
+  if (!data) return ok
+  sampleFppCamera(data, out, ctx.rig)
   return ok
 }
 
