@@ -977,6 +977,111 @@ export function applyFloatTrackDirectConn(
   writeLs(pose, unified, scratchLocal)
 }
 
+/** Per-axis mask for AnimNode_DirectConnConstraint. */
+export type DirectConnAxisMask = {
+  posX: boolean
+  posY: boolean
+  posZ: boolean
+  rotX: boolean
+  rotY: boolean
+  rotZ: boolean
+  scaleX: boolean
+  scaleY: boolean
+  scaleZ: boolean
+}
+
+/**
+ * Engine AnimNode_DirectConnConstraint::OnSample —
+ * copy source LS → target LS with per-axis masks + weight.
+ * Full Qs / full group → Slerp/Lerp; partial axes → weight×source into that component.
+ * RotX/Y/Z → Pitch/Roll/Yaw (same Euler mapping as FloatTrackDirectConn).
+ */
+export function applyDirectConnConstraint(
+  pose: Pose,
+  targetUnified: number,
+  sourceUnified: number,
+  weight: number,
+  mask: DirectConnAxisMask
+): void {
+  if (targetUnified < 0 || sourceUnified < 0 || !(weight > 0)) return
+  if (!readLs(pose, targetUnified, scratchLocal)) return
+  const source: Qs = { ...IDENTITY_QS }
+  if (!readLs(pose, sourceUnified, source)) return
+
+  const allPos = mask.posX && mask.posY && mask.posZ
+  const allRot = mask.rotX && mask.rotY && mask.rotZ
+  const allScale = mask.scaleX && mask.scaleY && mask.scaleZ
+
+  if (allPos && allRot && allScale) {
+    writeLs(
+      pose,
+      targetUnified,
+      weight >= 1 - 1e-6 ? source : slerpQs(scratchLocal, source, weight)
+    )
+    return
+  }
+
+  if (allPos) {
+    if (weight >= 1 - 1e-6) {
+      scratchLocal.tx = source.tx
+      scratchLocal.ty = source.ty
+      scratchLocal.tz = source.tz
+    } else {
+      scratchLocal.tx += (source.tx - scratchLocal.tx) * weight
+      scratchLocal.ty += (source.ty - scratchLocal.ty) * weight
+      scratchLocal.tz += (source.tz - scratchLocal.tz) * weight
+    }
+  } else if (mask.posX || mask.posY || mask.posZ) {
+    if (mask.posX) scratchLocal.tx = weight * source.tx
+    if (mask.posY) scratchLocal.ty = weight * source.ty
+    if (mask.posZ) scratchLocal.tz = weight * source.tz
+  }
+
+  if (allRot) {
+    if (weight >= 1 - 1e-6) {
+      scratchLocal.qx = source.qx
+      scratchLocal.qy = source.qy
+      scratchLocal.qz = source.qz
+      scratchLocal.qw = source.qw
+    } else {
+      const r = slerpQs(scratchLocal, source, weight)
+      scratchLocal.qx = r.qx
+      scratchLocal.qy = r.qy
+      scratchLocal.qz = r.qz
+      scratchLocal.qw = r.qw
+    }
+  } else if (mask.rotX || mask.rotY || mask.rotZ) {
+    const a = quatToEulerDeg(scratchLocal.qx, scratchLocal.qy, scratchLocal.qz, scratchLocal.qw)
+    const b = quatToEulerDeg(source.qx, source.qy, source.qz, source.qw)
+    if (mask.rotX) a.pitch = weight * b.pitch
+    if (mask.rotY) a.roll = weight * b.roll
+    if (mask.rotZ) a.yaw = weight * b.yaw
+    const q = eulerDegToQuat(a.pitch, a.roll, a.yaw)
+    scratchLocal.qx = q.qx
+    scratchLocal.qy = q.qy
+    scratchLocal.qz = q.qz
+    scratchLocal.qw = q.qw
+  }
+
+  if (allScale) {
+    if (weight >= 1 - 1e-6) {
+      scratchLocal.sx = source.sx
+      scratchLocal.sy = source.sy
+      scratchLocal.sz = source.sz
+    } else {
+      scratchLocal.sx += (source.sx - scratchLocal.sx) * weight
+      scratchLocal.sy += (source.sy - scratchLocal.sy) * weight
+      scratchLocal.sz += (source.sz - scratchLocal.sz) * weight
+    }
+  } else if (mask.scaleX || mask.scaleY || mask.scaleZ) {
+    if (mask.scaleX) scratchLocal.sx = weight * source.sx
+    if (mask.scaleY) scratchLocal.sy = weight * source.sy
+    if (mask.scaleZ) scratchLocal.sz = weight * source.sz
+  }
+
+  writeLs(pose, targetUnified, scratchLocal)
+}
+
 /**
  * Reference pose MS for a rig bone (bind LS chain).
  * Matches engine GetReferencePoseMS for ParentConstraint offset.

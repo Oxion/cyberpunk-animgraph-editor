@@ -15,6 +15,7 @@
  * BlendFromPose: SM frozen pose + additive fade (animNode_BlendFromPose).
  * Stage / StagePoseEntry / StageFloatEntry: container + parentInput passthrough.
  * TrackSetter: OnePoseInput + FloatLink → override named float track (legacy FloatTrackModifier Override).
+ * DirectConnConstraint: source bone LS → target bone LS with axis masks + weight.
  * HumanIk / FloorIk / LookAt / motion extraction / sync TimeWarper remain out of scope.
  */
 

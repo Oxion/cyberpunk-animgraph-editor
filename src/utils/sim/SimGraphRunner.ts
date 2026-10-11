@@ -2949,11 +2949,15 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
 
   if (
     t === 'animAnimNode_FloatTrackDirectConnConstraint' ||
-    t === 'animAnimNode_TransformToTrack'
+    t === 'animAnimNode_TransformToTrack' ||
+    t === 'animAnimNode_DirectConnConstraint'
   ) {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
     const wNode = resolveHandle(handles, d.weightNode)
-    const mNode = resolveHandle(handles, d.mulFactorNode)
+    const mNode =
+      t === 'animAnimNode_DirectConnConstraint'
+        ? null
+        : resolveHandle(handles, d.mulFactorNode)
     if (wNode) updateFromNode(wNode, ctx)
     if (mNode) updateFromNode(mNode, ctx)
     const staticW = readNumber(d.weight, 1)

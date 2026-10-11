@@ -51,6 +51,7 @@ import { evalCurveFloatData, mapProgressByBlendTypeLBC } from './floatDyn'
 import { applyIk2 } from './ik2Solver'
 import {
   applyAimConstraint,
+  applyDirectConnConstraint,
   applyFloatTrackDirectConn,
   applyMultipleParentConstraint,
   applyOrientConstraint,
@@ -599,6 +600,8 @@ function sampleNodeDispatch(
       return sampleParentConstraint(node, ctx, out, visited)
     case 'animAnimNode_FloatTrackDirectConnConstraint':
       return sampleFloatTrackDirectConn(node, ctx, out, visited)
+    case 'animAnimNode_DirectConnConstraint':
+      return sampleDirectConnConstraint(node, ctx, out, visited)
     case 'animAnimNode_TransformToTrack':
       return sampleTransformToTrack(node, ctx, out, visited)
     case 'animAnimNode_OrientConstraint':
@@ -2221,6 +2224,54 @@ function sampleFloatTrackDirectConn(
     floatTrack,
     weight
   )
+  return ok
+}
+
+/**
+ * Engine AnimNode_DirectConnConstraint::OnSample —
+ * source bone LS → target bone LS with axis masks + weight.
+ */
+function sampleDirectConnConstraint(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'DirectConnConstraint')
+  const d = node.Data ?? {}
+  let sourceName = readTransformIndexFromRaw(d.sourceTransformIndex)
+  if (!sourceName || sourceName === 'None') {
+    const ch = resolveEmbeddedData(d.sourceTransform, ctx.handles)
+    if (ch) sourceName = readTransformIndexFromRaw(ch.transformIndex)
+  }
+  const targetName = readTransformIndexFromRaw(d.transformIndex)
+  const sourceIdx = resolveUnifiedName(out, ctx.rig, sourceName)
+  const targetIdx = resolveUnifiedName(out, ctx.rig, targetName)
+
+  if (targetIdx < 0) {
+    if (targetName) warnBoneMissing(ctx, node.HandleId, targetName)
+    return ok
+  }
+  if (sourceIdx < 0) {
+    if (sourceName) warnBoneMissing(ctx, node.HandleId, sourceName)
+    return ok
+  }
+
+  const snap = ctx.boneOpCache?.floatTrackConn.get(node.HandleId)
+  const weight = snap?.weight ?? readNumber(d.weight, 1)
+  if (!(weight > 0)) return ok
+
+  applyDirectConnConstraint(out, targetIdx, sourceIdx, weight, {
+    posX: readBool(d.posX),
+    posY: readBool(d.posY),
+    posZ: readBool(d.posZ),
+    rotX: readBool(d.rotX),
+    rotY: readBool(d.rotY),
+    rotZ: readBool(d.rotZ),
+    scaleX: readBool(d.scaleX),
+    scaleY: readBool(d.scaleY),
+    scaleZ: readBool(d.scaleZ),
+  })
   return ok
 }
 
