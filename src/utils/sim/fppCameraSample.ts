@@ -5,11 +5,7 @@
 import type { FppCameraDyn } from './fppCameraDyn'
 import { FPP_BONE } from './fppCameraDyn'
 import type { Pose } from './pose'
-import {
-  resolveTrackUnified,
-  writeTrackValue,
-  pushTrackSlot,
-} from './pose'
+import { writeExtraTrack } from './pose'
 import {
   IDENTITY_QS,
   eulerDegToQuat,
@@ -148,10 +144,9 @@ function eulerToQs(roll: number, pitch: number, yaw: number): Qs {
   return { ...IDENTITY_QS, qx: q.qx, qy: q.qy, qz: q.qz, qw: q.qw }
 }
 
-function writeTrack(pose: Pose, rig: RigEntry, name: string, value: number): void {
-  let idx = resolveTrackUnified(pose, rig, name)
-  if (idx < 0) idx = pushTrackSlot(pose, name, value)
-  if (idx >= 0) writeTrackValue(pose, idx, value)
+/** Engine SetAdditionalFloatTrack — MarkExtraFloatTrack slots only. */
+function writeTrack(pose: Pose, _rig: RigEntry, name: string, value: number): void {
+  writeExtraTrack(pose, name, value)
 }
 
 function cachePose(data: FppCameraDyn, pose: Pose, bones: BoneIds): void {

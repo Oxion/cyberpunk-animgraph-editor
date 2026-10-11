@@ -72,16 +72,22 @@ export function buildStackBonesStats(pose: Pose): PoseStackBonesStats | undefine
   return { bones }
 }
 
+/** Procedural tracks: extras (MarkExtra) then stack (Extender). */
 export function buildTrackStackStats(pose: Pose): PoseTrackStackStats | undefined {
-  if (pose.trackStackCount <= 0) return undefined
   const names: string[] = []
   const values: Record<string, number> = {}
+  for (let i = 0; i < pose.extraTrackCount; i++) {
+    const n = pose.extraTrackNames[i] || `extra_${i}`
+    names.push(n)
+    values[n] = pose.extraTrackValues[i] ?? 0
+  }
   for (let i = 0; i < pose.trackStackCount; i++) {
     const n = pose.trackStackNames[i] || `track_stack_${i}`
     names.push(n)
     values[n] = pose.trackStackValues[i] ?? 0
   }
-  return { count: pose.trackStackCount, names, values }
+  if (!names.length) return undefined
+  return { count: names.length, names, values }
 }
 
 /** Map every rig bone TRS from the given pose (no capture/sample dual). */

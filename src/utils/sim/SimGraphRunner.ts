@@ -113,7 +113,13 @@ import {
   qsFromPosRotScale,
   slerpQs,
 } from './poseFk'
-import { copyPose, createPose, DEFAULT_STACK_CAPACITY, type Pose } from './pose'
+import {
+  applyExtraTrackLayout,
+  copyPose,
+  createPose,
+  DEFAULT_STACK_CAPACITY,
+  type Pose,
+} from './pose'
 import {
   allocSampleScratch,
   sampleGraphPose,
@@ -128,6 +134,7 @@ import {
   simSampleLogLine,
 } from './simSampleLog'
 import { buildStackPairing } from './stackPairing'
+import { ExtraFloatTrackCollector } from './extraTrackCollector'
 import type { SimInputBoard } from './SimInputBoard'
 import { TypedStore } from '../TypedStore'
 import { createFppCameraDyn, type FppCameraDyn } from './fppCameraDyn'
@@ -624,6 +631,8 @@ type WalkCtx = FloatEvalCtx & {
   mathExprPoseCache: MathExprPoseFrameCache
   /** FPPCamera per-node dyn. */
   fppCameraDyn: Map<string, FppCameraDyn>
+  /** Engine ExtraDataCollector — MarkExtraFloatTrack during Update. */
+  extraTracks: ExtraFloatTrackCollector
   /** When true, Update appends diagnostics into updateWarnings. */
   updateWarningsEnabled?: boolean
   updateWarnings?: SimUpdateWarning[]
@@ -635,6 +644,49 @@ function pushUpdateWarning(ctx: WalkCtx, w: SimUpdateWarning): void {
   if (!ctx.updateWarningsEnabled || !ctx.updateWarnings) return
   if (ctx.updateWarnings.length >= SIM_UPDATE_WARNINGS_MAX) return
   ctx.updateWarnings.push(w)
+}
+
+/** Engine AdditionalFloatTrackContainer::CollectExtraTracks. */
+function markAdditionalFloatTrackExtras(
+  handles: Map<string, AnimgraphNode>,
+  additionalTracks: unknown,
+  collector: ExtraFloatTrackCollector
+): void {
+  if (!additionalTracks || typeof additionalTracks !== 'object') return
+  let cont: { entries?: unknown; Data?: { entries?: unknown } } | null =
+    additionalTracks as { entries?: unknown; Data?: { entries?: unknown } }
+  const r = additionalTracks as { HandleId?: string; HandleRefId?: string }
+  const hid = r.HandleId ?? r.HandleRefId
+  if (hid && handles.has(hid)) {
+    const data = handles.get(hid)?.Data
+    cont = (data as { entries?: unknown; Data?: { entries?: unknown } } | undefined) ?? null
+  }
+  if (!cont) return
+  const entries = cont.Data?.entries ?? cont.entries
+  if (!Array.isArray(entries)) return
+  for (const raw of entries) {
+    let e: Record<string, unknown> | null = null
+    if (raw && typeof raw === 'object') {
+      const stub = raw as { HandleId?: string; HandleRefId?: string; Data?: unknown }
+      const eid = stub.HandleId ?? stub.HandleRefId
+      if (eid && handles.has(eid)) {
+        const resolved = handles.get(eid)
+        e = (resolved?.Data as Record<string, unknown> | undefined) ?? null
+      } else if (stub.Data && typeof stub.Data === 'object') {
+        e = stub.Data as Record<string, unknown>
+      } else {
+        e = raw as Record<string, unknown>
+      }
+    }
+    if (!e) continue
+    const info =
+      e.trackInfo && typeof e.trackInfo === 'object'
+        ? ((e.trackInfo as { Data?: unknown }).Data as Record<string, unknown> | undefined) ??
+          (e.trackInfo as Record<string, unknown>)
+        : e
+    const name = readCName(info?.name) || readCName(e.name)
+    if (name && name !== 'None') collector.mark(name)
+  }
 }
 
 /** Speed≈0 freezes clip time — AnimEnd / loop events never fire. */
@@ -3134,14 +3186,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       }
       activateFppCamera(data)
     }
-    const data = updateFppCamera(node.HandleId, {
-      board: ctx.board,
-      dt: ctx.dt,
-      sharedVars: ctx.sharedVars,
-      fppCameraDyn: ctx.fppCameraDyn,
-      lastFrameAnimEventValues: ctx.board.lastFrameAnimEventValues,
-      externalEvents: ctx.board.externalEvents,
-    })
+    const data = updateFppCamera(node.HandleId, ctx)
     markActive(nodes, node.HandleId, data.pitchFinal, 1)
     return
   }
@@ -3174,6 +3219,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     followUpdate(node, poseIn, ctx)
     const prev = ctx.additionalFloatTrackTimes.get(node.HandleId) ?? 0
     ctx.additionalFloatTrackTimes.set(node.HandleId, prev + ctx.dt)
+    markAdditionalFloatTrackExtras(handles, d.additionalTracks, ctx.extraTracks)
     markActive(nodes, node.HandleId, undefined, 1)
     return
   }
@@ -3462,6 +3508,10 @@ export class SimGraphRunner {
   private stackCapacity = DEFAULT_STACK_CAPACITY
   /** Track stack capacity from StackTracksExtender scan at bind. */
   private trackStackCapacity = DEFAULT_STACK_CAPACITY
+  /** Extra float track capacity (grows from Update MarkExtra). */
+  private extraTrackCapacity = 0
+  /** Per-frame MarkExtraFloatTrack collector. */
+  private extraTracks = new ExtraFloatTrackCollector()
   /** Transform Shrinker handleId → remove count (tag pairing). */
   private shrinkRemoveCountByHandleId = new Map<string, number>()
   /** Track Shrinker handleId → remove count. */
@@ -3510,7 +3560,8 @@ export class SimGraphRunner {
       this.poseScratch &&
       this.sampleOut.boneCount === rig.boneNames.length &&
       this.sampleOut.stackCapacity === this.stackCapacity &&
-      this.sampleOut.trackStackCapacity === this.trackStackCapacity
+      this.sampleOut.trackStackCapacity === this.trackStackCapacity &&
+      this.sampleOut.extraTrackCapacity === this.extraTrackCapacity
     ) {
       return
     }
@@ -3521,7 +3572,12 @@ export class SimGraphRunner {
   private reallocSampleBuffers(): void {
     const rig = this.activeRig
     if (!rig) return
-    const buf = allocSampleScratch(rig, this.stackCapacity, this.trackStackCapacity)
+    const buf = allocSampleScratch(
+      rig,
+      this.stackCapacity,
+      this.trackStackCapacity,
+      this.extraTrackCapacity
+    )
     this.sampleOut = buf.out
     this.poseScratch = buf.poseScratch
     // Rebuild SM frozen + BlendFromPose additive caches for new pose layout.
@@ -3580,13 +3636,16 @@ export class SimGraphRunner {
     if (
       !pose ||
       pose.boneCount !== rig.boneNames.length ||
-      pose.stackCapacity !== this.stackCapacity
+      pose.stackCapacity !== this.stackCapacity ||
+      pose.trackStackCapacity !== this.trackStackCapacity ||
+      pose.extraTrackCapacity !== this.extraTrackCapacity
     ) {
       pose = createPose(
         rig.boneNames.length,
         rig.trackNames.length,
         this.stackCapacity,
-        this.trackStackCapacity
+        this.trackStackCapacity,
+        this.extraTrackCapacity
       )
       this.capturedPoses.set(handleId, pose)
     }
@@ -3841,9 +3900,12 @@ export class SimGraphRunner {
       mathExprPoseCache: this.mathExprPoseCache,
       sharedVars: this.sharedVars,
       fppCameraDyn: this.fppCameraDyn,
+      extraTracks: this.extraTracks,
       updateWarningsEnabled: this.updateWarningsEnabled,
       updateWarnings,
     }
+
+    this.extraTracks.clear()
 
     const root = findRootHandle(this.handles, this.originalAnimgraph)
     if (root) {
@@ -3938,6 +4000,13 @@ export class SimGraphRunner {
     let poseStats: SimSnapshot['poseStats'] = null
     const rig = this.activeRig
     if (rig && this.clipPoseLibrary && this.sampleOut && this.poseScratch) {
+      const extraNames = this.extraTracks.getNames()
+      if (extraNames.length > this.extraTrackCapacity) {
+        this.extraTrackCapacity = extraNames.length
+        this.reallocSampleBuffers()
+      }
+      if (this.sampleOut) applyExtraTrackLayout(this.sampleOut, extraNames)
+
       simSampleLogLine(sampleLog, '--- root Sample ---')
       if (sampleLog) {
         let edges = 0

@@ -374,6 +374,10 @@ export class ClipPoseLibrary {
     clearStack(out)
     clearTrackStack(out)
     out.tracks.fill(0)
+    for (let i = 0; i < out.extraTrackCount; i++) {
+      out.extraTrackValues[i] = 0
+      out.extraTrackWritten[i] = 0
+    }
     const dur = anim.duration > 0 ? anim.duration : 0
     let t = time
     if (dur > 0) {

@@ -3,20 +3,20 @@
  */
 
 import type { TypedStore } from '../TypedStore'
+import type { ExtraFloatTrackCollector } from './extraTrackCollector'
 import type { FppCameraDyn } from './fppCameraDyn'
 import { createFppCameraDyn } from './fppCameraDyn'
-import { FPP_CAMERA_PITCH } from './fppCameraKeys'
+import { FPP_CAMERA_EXTRA_TRACKS, FPP_CAMERA_PITCH } from './fppCameraKeys'
 import type { SimInputBoard } from './SimInputBoard'
 import { IDENTITY_QS, type Qs } from './poseFk'
 
+/** Structural subset of WalkCtx — pass the walk context directly. */
 export type FppCameraUpdateCtx = {
   board: SimInputBoard
   dt: number
   sharedVars: TypedStore
   fppCameraDyn: Map<string, FppCameraDyn>
-  /** Previous-frame valued anim events (pitch_yaw_order_event). */
-  lastFrameAnimEventValues: Map<string, number>
-  externalEvents: Set<string>
+  extraTracks: ExtraFloatTrackCollector
 }
 
 type CameraInput = {
@@ -217,7 +217,7 @@ function calcPitch(input: CameraInput, data: FppCameraDyn, ctx: FppCameraUpdateC
   if (input.t4CopyPitchAndYaw) {
     data.pitchBase = input.t4Pitch
   } else {
-    if (ctx.externalEvents.has('input_reset_pitch')) data.pitchBase = 0
+    if (ctx.board.externalEvents.has('input_reset_pitch')) data.pitchBase = 0
     else {
       const r = resetValue(data.pitchBase, input.resetPitchSpeed, ctx.dt)
       if (!r.reset) {
@@ -238,7 +238,7 @@ function calcYaw(input: CameraInput, data: FppCameraDyn, ctx: FppCameraUpdateCtx
   if (input.t4CopyPitchAndYaw) {
     data.yawBase = input.t4Yaw
   } else {
-    if (ctx.externalEvents.has('input_reset_yaw')) data.yawBase = 0
+    if (ctx.board.externalEvents.has('input_reset_yaw')) data.yawBase = 0
     else {
       const r = resetValue(data.yawBase, input.resetYawSpeed, ctx.dt)
       if (!r.reset) {
@@ -277,7 +277,7 @@ function calcOther(input: CameraInput, data: FppCameraDyn, ctx: FppCameraUpdateC
   } else {
     data.cameraSceneWeight = Math.max(data.cameraSceneWeight - ctx.dt, 0)
   }
-  const order = ctx.lastFrameAnimEventValues.get('pitch_yaw_order_event')
+  const order = ctx.board.lastFrameAnimEventValues.get('pitch_yaw_order_event')
   if (order !== undefined) data.pitchYawOrderFlip = order > 0.001
 }
 
@@ -414,6 +414,8 @@ export function updateFppCamera(handleId: string, ctx: FppCameraUpdateCtx): FppC
     data = createFppCameraDyn()
     ctx.fppCameraDyn.set(handleId, data)
   }
+
+  for (const n of FPP_CAMERA_EXTRA_TRACKS) ctx.extraTracks.mark(n)
 
   const board = ctx.board
   const input = readInput(board)

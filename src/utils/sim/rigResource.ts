@@ -25,6 +25,8 @@ export type RigEntry = {
   parts: RigPartMask[]
   /** boneName lower → index */
   boneIndexByName: Map<string, number>
+  /** trackName lower → index */
+  trackIndexByName: Map<string, number>
 }
 
 export type RigEntryView = {
@@ -102,12 +104,16 @@ function readQsScale(qs: unknown, out: Float32Array, i: number): void {
   out[i * 3 + 2] = readNumber(s?.Z ?? s?.z, 1)
 }
 
-function buildBoneIndexMap(names: string[]): Map<string, number> {
+function buildNameIndexMap(names: string[]): Map<string, number> {
   const m = new Map<string, number>()
   for (let i = 0; i < names.length; i++) {
     m.set(names[i]!.toLowerCase(), i)
   }
   return m
+}
+
+function buildBoneIndexMap(names: string[]): Map<string, number> {
+  return buildNameIndexMap(names)
 }
 
 /** WolvenKit CName: bare string or `{ $type:'CName', $value }`. */
@@ -319,6 +325,7 @@ export function parseRigJson(
   }
   const trackNames = readCNameArray(root.trackNames)
   const boneIndexByName = buildBoneIndexMap(boneNames)
+  const trackIndexByNameMap = buildNameIndexMap(trackNames)
   const parts: RigPartMask[] = []
   if (Array.isArray(root.parts)) {
     for (const pr of root.parts) {
@@ -337,6 +344,7 @@ export function parseRigJson(
     trackNames,
     parts,
     boneIndexByName,
+    trackIndexByName: trackIndexByNameMap,
   }
 }
 
@@ -352,11 +360,7 @@ export function getRigPartMask(rig: RigEntry, partName: string): Uint8Array | nu
 /** Resolve named float track index on rig (−1 if missing). */
 export function trackIndexByName(rig: RigEntry, name: string): number {
   if (!name || name === 'None') return -1
-  const key = name.toLowerCase()
-  for (let i = 0; i < rig.trackNames.length; i++) {
-    if (rig.trackNames[i]!.toLowerCase() === key) return i
-  }
-  return -1
+  return rig.trackIndexByName.get(name.toLowerCase()) ?? -1
 }
 
 let nextRigSeq = 1
@@ -496,6 +500,9 @@ export class RigLibrary {
             }))
           : [],
         boneIndexByName,
+        trackIndexByName: buildNameIndexMap(
+          Array.isArray(raw.trackNames) ? raw.trackNames : []
+        ),
       }
       this.addEntry(entry, false)
     }

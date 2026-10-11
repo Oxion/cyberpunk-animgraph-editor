@@ -16,6 +16,7 @@ import {
   blendAdditiveLocal,
   blendByMask,
   blendOverrideBoneBranch,
+  applyExtraTrackLayout,
   clearStack,
   clearTrackStack,
   convertAbsoluteToAdditiveFromRig,
@@ -23,6 +24,7 @@ import {
   copyPose,
   createPose,
   DEFAULT_STACK_CAPACITY,
+  findExtraTrackIndex,
   identityPose,
   interpolatePose,
   pushStackSlot,
@@ -31,6 +33,7 @@ import {
   resolveTrackUnified,
   shrinkStack,
   shrinkTrackStack,
+  writeExtraTrack,
   writeTrackValue,
   type OverrideBoneWeight,
   type Pose,
@@ -267,6 +270,7 @@ export type PoseScratchPool = {
   trackCount: number
   stackCapacity: number
   trackStackCapacity: number
+  extraTrackCapacity: number
 }
 
 export function createPoseScratchPool(
@@ -274,20 +278,23 @@ export function createPoseScratchPool(
   trackCount: number,
   stackCapacity = DEFAULT_STACK_CAPACITY,
   trackStackCapacity = DEFAULT_STACK_CAPACITY,
+  extraTrackCapacity = 0,
   initialSlots = DEFAULT_POSE_SCRATCH_SLOTS
 ): PoseScratchPool {
   const n = Math.max(0, boneCount | 0)
   const t = Math.max(0, trackCount | 0)
   const sc = Math.max(0, stackCapacity | 0)
   const tsc = Math.max(0, trackStackCapacity | 0)
+  const etc = Math.max(0, extraTrackCapacity | 0)
   const slots = Math.max(1, initialSlots | 0)
   return {
-    stack: Array.from({ length: slots }, () => createPose(n, t, sc, tsc)),
+    stack: Array.from({ length: slots }, () => createPose(n, t, sc, tsc, etc)),
     depth: 0,
     boneCount: n,
     trackCount: t,
     stackCapacity: sc,
     trackStackCapacity: tsc,
+    extraTrackCapacity: etc,
   }
 }
 
@@ -296,7 +303,13 @@ export function acquirePose(ctx: SampleCtx): Pose {
   const pool = ctx.poseScratch
   if (pool.depth >= pool.stack.length) {
     pool.stack.push(
-      createPose(pool.boneCount, pool.trackCount, pool.stackCapacity, pool.trackStackCapacity)
+      createPose(
+        pool.boneCount,
+        pool.trackCount,
+        pool.stackCapacity,
+        pool.trackStackCapacity,
+        pool.extraTrackCapacity
+      )
     )
   }
   return pool.stack[pool.depth++]!
@@ -383,6 +396,9 @@ export function sampleGraphPose(
       warnings: ctx.warnings?.length ? ctx.warnings : undefined,
     }
   }
+  // Pose buffers are reused across frames — reset procedural stacks before walk.
+  clearStack(out)
+  clearTrackStack(out)
   try {
     const visited = new Set<string>()
     const ok = sampleNode(root, ctx, out, visited)
@@ -436,15 +452,17 @@ export function samplePoseFromNode(
 export function allocSampleScratch(
   rig: RigEntry,
   stackCapacity = DEFAULT_STACK_CAPACITY,
-  trackStackCapacity = DEFAULT_STACK_CAPACITY
+  trackStackCapacity = DEFAULT_STACK_CAPACITY,
+  extraTrackCapacity = 0
 ): { out: Pose; poseScratch: PoseScratchPool } {
   const n = rig.boneNames.length
   const t = rig.trackNames.length
   const sc = Math.max(0, stackCapacity | 0)
   const tsc = Math.max(0, trackStackCapacity | 0)
+  const etc = Math.max(0, extraTrackCapacity | 0)
   return {
-    out: createPose(n, t, sc, tsc),
-    poseScratch: createPoseScratchPool(n, t, sc, tsc),
+    out: createPose(n, t, sc, tsc, etc),
+    poseScratch: createPoseScratchPool(n, t, sc, tsc, etc),
   }
 }
 
@@ -711,13 +729,18 @@ function sampleStateMachine(
     smShouldUseFrozenPose(node, activeIdx, ctx.handles)
   ) {
     let slot = ctx.smFrozenPoses.get(node.HandleId)
-    if (!slot || slot.pose.boneCount !== out.boneCount) {
+    if (
+      !slot ||
+      slot.pose.boneCount !== out.boneCount ||
+      slot.pose.extraTrackCapacity !== out.extraTrackCapacity
+    ) {
       slot = {
         pose: createPose(
           out.boneCount,
           out.trackCount,
           out.stackCapacity,
-          out.trackStackCapacity
+          out.trackStackCapacity,
+          out.extraTrackCapacity
         ),
         valid: false,
       }
@@ -756,12 +779,17 @@ function sampleBlendFromPose(
     const smId = ctx.blendFromPoseSmBind?.get(node.HandleId)
     const frozen = smId ? ctx.smFrozenPoses?.get(smId) : undefined
     if (frozen?.valid && blendTime > 0) {
-      if (!dyn.cached || dyn.cached.boneCount !== out.boneCount) {
+      if (
+        !dyn.cached ||
+        dyn.cached.boneCount !== out.boneCount ||
+        dyn.cached.extraTrackCapacity !== out.extraTrackCapacity
+      ) {
         dyn.cached = createPose(
           out.boneCount,
           out.trackCount,
           out.stackCapacity,
-          out.trackStackCapacity
+          out.trackStackCapacity,
+          out.extraTrackCapacity
         )
       }
       convertToAdditiveFrameLocal(out, frozen.pose, dyn.cached)
@@ -799,7 +827,12 @@ function sampleGraphSlot(
   if (slotName && ctx.sampleNested) {
     const nested = ctx.sampleNested(slotName)
     if (nested && nested.boneCount > 0 && out.boneCount > 0) {
+      const extraNames = out.extraTrackNames.slice(0, out.extraTrackCount)
       copyPose(out, nested)
+      // Nested stack/extras are budgeted in the child graph only.
+      clearStack(out)
+      clearTrackStack(out)
+      applyExtraTrackLayout(out, extraNames)
       noteWrittenNull(ctx, false)
       simSampleLogLine(
         ctx.sampleLog,
@@ -1343,6 +1376,11 @@ function identityFromRig(out: Pose, rig: RigEntry): void {
   out.tracks.fill(0)
   clearStack(out)
   clearTrackStack(out)
+  // Keep Update extra layout; zero values (leaf / ref pose).
+  for (let i = 0; i < out.extraTrackCount; i++) {
+    out.extraTrackValues[i] = 0
+    out.extraTrackWritten[i] = 0
+  }
 }
 
 function unwrapData(raw: unknown): Record<string, unknown> | null {
@@ -1438,13 +1476,15 @@ function sampleJoin(
       buf.boneCount !== out.boneCount ||
       buf.trackCount !== out.trackCount ||
       buf.stackCapacity !== out.stackCapacity ||
-      buf.trackStackCapacity !== out.trackStackCapacity
+      buf.trackStackCapacity !== out.trackStackCapacity ||
+      buf.extraTrackCapacity !== out.extraTrackCapacity
     ) {
       buf = createPose(
         out.boneCount,
         out.trackCount,
         out.stackCapacity,
-        out.trackStackCapacity
+        out.trackStackCapacity,
+        out.extraTrackCapacity
       )
       cache.poses.set(id, buf)
     }
@@ -2054,7 +2094,7 @@ function sampleAdditionalTransform(
 
 /**
  * Engine AnimNode_AdditionalFloatTrack::OnSample —
- * curve(i_time) → extra/rig float track; missing tracks pushed onto track stack.
+ * curve(i_time) → MarkExtraFloatTrack slot (not stack / not base-only).
  */
 function sampleAdditionalFloatTrack(
   node: AnimgraphNode,
@@ -2101,22 +2141,17 @@ function sampleAdditionalFloatTrack(
     const info = unwrapData(e.trackInfo) ?? e
     const name = readCName(info.name) || readCName(e.name)
     if (!name || name === 'None') continue
-    const ref = readNumber(info.referenceValue, 0)
-    let idx = resolveTrackUnified(out, ctx.rig, name)
-    if (idx < 0) {
-      const slot = pushTrackSlot(out, name, ref)
-      if (slot < 0) {
-        pushSampleWarning(ctx, {
-          code: 'additional-float-track-entry',
-          handleId: node.HandleId,
-          message: `AdditionalFloatTrack #${node.HandleId} track stack full, cannot add "${name}"`,
-        })
-        continue
-      }
-      idx = out.trackCount + slot
-    } else if (!overwrite) {
+    const ei = findExtraTrackIndex(out, name)
+    if (ei < 0) {
+      pushSampleWarning(ctx, {
+        code: 'additional-float-track-entry',
+        handleId: node.HandleId,
+        message: `AdditionalFloatTrack #${node.HandleId} no extra track "${name}" (not marked on Update)`,
+      })
       continue
     }
+    if (!overwrite && out.extraTrackWritten[ei]) continue
+    const ref = readNumber(info.referenceValue, 0)
     const values = e.values
     let value = ref
     if (values && typeof values === 'object') {
@@ -2125,7 +2160,7 @@ function sampleAdditionalFloatTrack(
         value = evalCurveFloatData(values, time)
       }
     }
-    writeTrackValue(out, idx, value)
+    writeExtraTrack(out, name, value)
   }
   return ok
 }

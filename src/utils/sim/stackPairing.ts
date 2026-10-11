@@ -1,5 +1,6 @@
 /**
  * Pair StackTransforms / StackTracks Extender ↔ Shrinker by tag (compiler TryMatching*).
+ * Track stack capacity = Extenders only (extras are a separate pose region).
  */
 
 import type { AnimgraphNode } from '../graph/animgraphTypes'
@@ -28,15 +29,6 @@ function transformInfosCount(node: AnimgraphNode): number {
 function newTracksCount(node: AnimgraphNode): number {
   const tracks = node.Data?.newTracks
   return Array.isArray(tracks) ? tracks.length : 0
-}
-
-/** AdditionalFloatTrack entries that may push track-stack slots. */
-function additionalFloatTrackEntriesCount(node: AnimgraphNode): number {
-  const cont = node.Data?.additionalTracks
-  if (!cont || typeof cont !== 'object') return 0
-  const c = cont as { Data?: { entries?: unknown }; entries?: unknown }
-  const entries = c.Data?.entries ?? c.entries
-  return Array.isArray(entries) ? entries.length : 0
 }
 
 /**
@@ -78,11 +70,6 @@ export function buildStackPairing(handles: Map<string, AnimgraphNode>): StackPai
     const tag = readCName(h.Data?.tag)
     const key = tag && tag !== 'None' ? tag.toLowerCase() : `__id:${h.HandleId}`
     if (!trackTagToCount.has(key)) trackTagToCount.set(key, n)
-  }
-
-  for (const h of handles.values()) {
-    if (handleType(h) !== 'animAnimNode_AdditionalFloatTrack') continue
-    trackSum += additionalFloatTrackEntriesCount(h)
   }
 
   const trackShrinkRemoveCountByHandleId = new Map<string, number>()
