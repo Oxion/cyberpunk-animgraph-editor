@@ -17,6 +17,11 @@ export type ClipClockState = {
   /** Prevent double-advance if walked twice in one step */
   stepped: boolean
   /**
+   * Winning AnimSetup entry id last frame (wrapper / priority resolve).
+   * Used for applyInertializationOnAnimSetSwap dirty detect.
+   */
+  setupEntryId: string
+  /**
    * Optional HUD resolve override (e.g. AnimDatabase without loaded CSV → no-db).
    * Cleared each beginClipClockStep.
    */
@@ -43,6 +48,7 @@ export function createClipClockState(): ClipClockState {
     animName: '',
     wasActive: false,
     stepped: false,
+    setupEntryId: '',
   }
 }
 
@@ -133,6 +139,11 @@ export type AdvanceClipClockResult = {
   animName: string
   currTime: number
   duration: number
+  /**
+   * Same anim name re-acquired from a different setup entry while already
+   * active (engine AnimWrapper::IsDirty / RefreshWhenDirty).
+   */
+  animSetSwapped: boolean
 }
 
 /**
@@ -190,6 +201,7 @@ export function advanceClipClock(
       animName: state.animName,
       currTime: state.currTime,
       duration: 0,
+      animSetSwapped: false,
     }
   }
   state.stepped = true
@@ -200,6 +212,7 @@ export function advanceClipClock(
   if (!animName || animName === 'None') {
     board.fireAnimEnd()
     state.wasActive = true
+    state.setupEntryId = ''
     return {
       progress: 0,
       ended: true,
@@ -207,13 +220,24 @@ export function advanceClipClock(
       animName,
       currTime: 0,
       duration: 0,
+      animSetSwapped: false,
     }
   }
 
-  const clip =
+  const resolved =
     library && library.entryCount > 0
-      ? library.resolveClip(animName, isWrapperActive)
+      ? library.resolveClipEntry(animName, isWrapperActive)
       : undefined
+  const clip = resolved?.clip
+  const entryId = resolved?.entryId ?? ''
+
+  // Engine RefreshWhenDirty: dirty swap while already playing (not activation frame).
+  const animSetSwapped =
+    state.wasActive &&
+    !!state.setupEntryId &&
+    !!entryId &&
+    state.setupEntryId !== entryId
+  state.setupEntryId = entryId
 
   if (!clip) {
     // Engine: missing anim still PushAnimEndEvent
@@ -230,6 +254,7 @@ export function advanceClipClock(
       animName,
       currTime: 0,
       duration: 0,
+      animSetSwapped: false,
     }
   }
 
@@ -319,6 +344,7 @@ export function advanceClipClock(
     animName,
     currTime: state.currTime,
     duration: clip.duration,
+    animSetSwapped,
   }
 }
 
@@ -333,6 +359,7 @@ export function beginClipClockStep(clocks: Map<string, ClipClockState>): void {
 export function deactivateClipClock(state: ClipClockState): void {
   state.wasActive = false
   state.stepped = false
+  state.setupEntryId = ''
   state.oneShotRunning = undefined
 }
 

@@ -1,7 +1,9 @@
 import type { AnimgraphNode } from '../graph/animgraphTypes'
 import {
   MAX_INSTANT_TRANSITION_SEQUENCE_LENGTH,
+  requestInertialization,
   transitionHasHigherPriority,
+  type InertializationRequestSink,
 } from './engineParity'
 import { checkCondition, collectTimedConditions, type CheckConditionCtx } from './checkCondition'
 import {
@@ -150,18 +152,27 @@ type TransitionCandidate = {
   isForcedToTrue: boolean
   isGlobal: boolean
   targetStateIndex: number
+  /** SM blend duration (0 when canRequestInertialization). */
   duration: number
+  /** Original transition duration used for inertialization request. */
+  inertializationDuration: number
+  canRequestInertialization: boolean
 }
 
 function readTransitionMeta(
   desc: AnimgraphNode
 ): Omit<TransitionCandidate, 'desc' | 'index' | 'isGlobal'> {
   const d = desc.Data ?? {}
+  // Offline: static bool only (engine may override via animFeature / action DB).
+  const canRequestInertialization = readBool(d.canRequestInertialization)
+  const rawDuration = readNumber(d.duration, 0)
   return {
     priority: readNumber(d.priority, 0),
     isForcedToTrue: readBool(d.isForcedToTrue),
     targetStateIndex: readNumber(d.targetStateIndex, -1),
-    duration: readNumber(d.duration, 0),
+    duration: canRequestInertialization ? 0 : rawDuration,
+    inertializationDuration: rawDuration,
+    canRequestInertialization,
   }
 }
 
@@ -197,7 +208,8 @@ export function updateStateMachine(
   board: SimInputBoard,
   handles: Map<string, AnimgraphNode>,
   nodeTruth: Record<string, SimNodeState>,
-  condCtx: CheckConditionCtx = {}
+  condCtx: CheckConditionCtx = {},
+  inertialization?: InertializationRequestSink
 ): void {
   const data = sm.Data ?? {}
   const transitions = listHandles(handles, data.transitions)
@@ -219,6 +231,8 @@ export function updateStateMachine(
         isForcedToTrue: readBool(d.isForcedToTrue),
         targetStateIndex: readNumber(d.targetStateIndex, -1),
         duration: 0,
+        inertializationDuration: 0,
+        canRequestInertialization: false,
       }
       const cond = resolveHandle(handles, d.condition)
       const pass = recordConditionOverlay(
@@ -369,6 +383,11 @@ export function updateStateMachine(
     runtime.isInTransition = true
     runtime.instantChainLength = chain + 1
 
+    // Engine GoToState: canRequest → duration=0 on SM blend; Inertialization owns smoothout.
+    if (best.canRequestInertialization && inertialization) {
+      requestInertialization(inertialization, best.inertializationDuration)
+    }
+
     if (best.duration <= 0) {
       runtime.activeStateIndex = best.targetStateIndex
       runtime.isInTransition = false
@@ -453,8 +472,9 @@ export function smShouldUseFrozenPose(
     const d = g.Data ?? {}
     const enabled = d.isEnabled === undefined ? true : readBool(d.isEnabled)
     if (!enabled) continue
+    // Engine: enabled && !GetCanRequestInertialization && duration > 0.
+    if (readBool(d.canRequestInertialization)) continue
     const duration = readNumber(d.duration, 0)
-    // Engine also skips when GetCanRequestInertialization — offline: duration > 0.
     if (duration > 0) return true
   }
   const states = listHandles(handles, data.states)
@@ -512,11 +532,13 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   const addFeature = (feature: string, property: string, preferDisplay = false) => {
     if (!feature || !property || feature === 'None' || property === 'None') return
     const key = `${feature}.${property}`.toLowerCase()
-    const existing = features.findIndex(
-      (f) => `${f.feature}.${f.property}`.toLowerCase() === key
-    )
-    if (existing >= 0) {
-      if (preferDisplay) features[existing] = { feature, property }
+    if (featureKeys.has(key)) {
+      if (preferDisplay) {
+        const i = features.findIndex(
+          (f) => `${f.feature}.${f.property}`.toLowerCase() === key
+        )
+        if (i >= 0) features[i] = { feature, property }
+      }
       return
     }
     featureKeys.add(key)
@@ -526,11 +548,13 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   const addVectorFeature = (feature: string, property: string, preferDisplay = false) => {
     if (!feature || !property || feature === 'None' || property === 'None') return
     const key = `${feature}.${property}`.toLowerCase()
-    const existing = vectorFeatures.findIndex(
-      (f) => `${f.feature}.${f.property}`.toLowerCase() === key
-    )
-    if (existing >= 0) {
-      if (preferDisplay) vectorFeatures[existing] = { feature, property }
+    if (vectorKeys.has(key)) {
+      if (preferDisplay) {
+        const i = vectorFeatures.findIndex(
+          (f) => `${f.feature}.${f.property}`.toLowerCase() === key
+        )
+        if (i >= 0) vectorFeatures[i] = { feature, property }
+      }
       return
     }
     vectorKeys.add(key)
@@ -540,11 +564,13 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   const addQuatFeature = (feature: string, property: string, preferDisplay = false) => {
     if (!feature || !property || feature === 'None' || property === 'None') return
     const key = `${feature}.${property}`.toLowerCase()
-    const existing = quatFeatures.findIndex(
-      (f) => `${f.feature}.${f.property}`.toLowerCase() === key
-    )
-    if (existing >= 0) {
-      if (preferDisplay) quatFeatures[existing] = { feature, property }
+    if (quatKeys.has(key)) {
+      if (preferDisplay) {
+        const i = quatFeatures.findIndex(
+          (f) => `${f.feature}.${f.property}`.toLowerCase() === key
+        )
+        if (i >= 0) quatFeatures[i] = { feature, property }
+      }
       return
     }
     quatKeys.add(key)
@@ -554,11 +580,13 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   const addBoolFeature = (feature: string, property: string, preferDisplay = false) => {
     if (!feature || !property || feature === 'None' || property === 'None') return
     const key = `${feature}.${property}`.toLowerCase()
-    const existing = boolFeatures.findIndex(
-      (f) => `${f.feature}.${f.property}`.toLowerCase() === key
-    )
-    if (existing >= 0) {
-      if (preferDisplay) boolFeatures[existing] = { feature, property }
+    if (boolKeys.has(key)) {
+      if (preferDisplay) {
+        const i = boolFeatures.findIndex(
+          (f) => `${f.feature}.${f.property}`.toLowerCase() === key
+        )
+        if (i >= 0) boolFeatures[i] = { feature, property }
+      }
       return
     }
     boolKeys.add(key)
@@ -572,6 +600,15 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   for (const h of handles.values()) {
     const t = handleType(h)
     const d = h.Data ?? {}
+    if (
+      t === 'animAnimNode_GraphSlot' ||
+      t === 'animAnimNode_GraphSlot_Test' ||
+      t === 'animAnimNode_GraphSlotConditions'
+    ) {
+      // GraphSlot C++ TAnimInstanceInput binds (not serialized on the node).
+      addFeature('WorkspotInertialization', 'duration', true)
+      addFeature('hit', 'hitType', true)
+    }
     if (
       t === 'animAnimStateTransitionCondition_FloatFeature' ||
       t === 'animAnimStateTransitionCondition_IntFeature' ||
@@ -681,6 +718,9 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
     }
   }
 
+  features.sort((a, b) =>
+    `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
+  )
   vectorFeatures.sort((a, b) =>
     `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
   )

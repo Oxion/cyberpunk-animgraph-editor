@@ -39,7 +39,48 @@
  * ServiceEvent: bind compileSimGraph (flat handles) + addEventListener; DispatchEvent before Update.
  * LookAt (bone aim): OnePoseInput + target/weight → rotate bone forwardAxis toward target MS
  *   (+ optional cone limit). Motion extraction / sync TimeWarper remain out of scope.
+ * Inertialization: SM / Switch / Static|RuntimeSwitch set context request + max(duration) and
+ *   zero own blend when canRequestInertialization; nested GraphSlot merges upward.
+ *   SkAnim applyInertializationOnAnimSetSwap: setup-entry swap while playing → 0.5s request.
+ *   Node: ExtractTrajectory → 2-frame cache + quintic error decay → ApplyTrajectory;
+ *   SnapToTerrain tracks excluded; optional rotationLimits. No LOD/ragdoll (sim TODO).
+ *   GraphSlot: WorkspotInertialization.duration + hit.hitType==0 → request, clear duration.
+ *   MixerSlot requester deferred (MixerSlot not implemented).
  */
+
+/** Frame-scoped inertialization request (engine AnimNodeUpdateContext fields). */
+export type InertializationRequestSink = {
+  isInertializationRequested: boolean
+  inertializationDuration: number
+}
+
+export function createInertializationRequestSink(): InertializationRequestSink {
+  return { isInertializationRequested: false, inertializationDuration: 0 }
+}
+
+export function clearInertializationRequest(sink: InertializationRequestSink): void {
+  sink.isInertializationRequested = false
+  sink.inertializationDuration = 0
+}
+
+/** Engine: requested |= true; duration = Max(duration, request). */
+export function requestInertialization(
+  sink: InertializationRequestSink,
+  duration: number
+): void {
+  const d = Number.isFinite(duration) ? Math.max(0, duration) : 0
+  sink.isInertializationRequested = true
+  sink.inertializationDuration = Math.max(sink.inertializationDuration, d)
+}
+
+/** Merge nested-graph request into parent (graphWrapper up-copy). */
+export function mergeInertializationRequest(
+  parent: InertializationRequestSink,
+  child: InertializationRequestSink
+): void {
+  if (!child.isInertializationRequested) return
+  requestInertialization(parent, child.inertializationDuration)
+}
 
 /** animNode_StateMachine — instant transition chain cap */
 export const MAX_INSTANT_TRANSITION_SEQUENCE_LENGTH = 16

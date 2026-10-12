@@ -16,7 +16,12 @@ import {
   blendMultipleSecondInputActive,
   blendOverrideInputActive,
   buildBlendMultipleSlots,
+  clearInertializationRequest,
+  createInertializationRequestSink,
+  mergeInertializationRequest,
+  requestInertialization,
   selectBlendMultipleInputs,
+  type InertializationRequestSink,
 } from './engineParity'
 import {
   evalAnimMathExpression,
@@ -162,6 +167,9 @@ import {
   evalLookAtPose360Direction,
   updateLookAtPose360,
 } from './lookAtPose360Sim'
+import { SwitchInertializationDynDef } from './switchInertializationDyn'
+import { InertializationDynDef } from './inertializationDyn'
+import { updateInertialization } from './inertializationSim'
 import type { SimPreSampleHook, SimServiceEvent } from './simServiceEvents'
 import {
   bindBlendFromPoseToStateMachines,
@@ -198,6 +206,23 @@ function classifyClipResolve(
   return 'missing'
 }
 
+/** Engine SkAnim::RefreshWhenDirty + applyInertializationOnAnimSetSwap (0.5s). */
+const ANIM_SET_SWAP_INERTIALIZATION_DURATION = 0.5
+
+function noteAnimSetSwapInertialization(
+  node: AnimgraphNode,
+  ctx: WalkCtx,
+  animSetSwapped: boolean
+): void {
+  if (!animSetSwapped) return
+  const d = node.Data ?? {}
+  if (!readBool(d.applyInertializationOnAnimSetSwap)) return
+  requestInertialization(
+    ctx.inertialization,
+    ANIM_SET_SWAP_INERTIALIZATION_DURATION
+  )
+}
+
 /**
  * Mark SkAnim clock for HUD; advance only when a ClipLibrary is loaded
  * (avoids AnimEnd spam with empty library).
@@ -215,6 +240,7 @@ function runSkAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
       ctx.board,
       (n) => ctx.board.isWrapperActive(n)
     )
+    noteAnimSetSwapInertialization(node, ctx, result.animSetSwapped)
     return result.progress
   }
   // No library: still expose active clip name in status (no time / no AnimEnd)
@@ -245,6 +271,7 @@ function runSkSpeedAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
       (n) => ctx.board.isWrapperActive(n),
       { speedScale: Number.isFinite(speed) ? speed : 1 }
     )
+    noteAnimSetSwapInertialization(node, ctx, result.animSetSwapped)
     return result.progress
   }
   if (clock.stepped) return 0
@@ -303,6 +330,7 @@ function runSkPhaseAnimClipClock(
       isWrap,
       { targetPlaybackDuration, speedScale }
     )
+    noteAnimSetSwapInertialization(node, ctx, result.animSetSwapped)
     return result.progress
   }
   if (clock.stepped) return 0
@@ -335,6 +363,7 @@ function runSkOneShotAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
         ctx.board,
         (n) => ctx.board.isWrapperActive(n)
       )
+      noteAnimSetSwapInertialization(node, ctx, result.animSetSwapped)
       shotWeight = oneShotBlendWeight(
         result.currTime,
         result.duration,
@@ -381,7 +410,7 @@ function runSkDurationAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
     const rawDur = readFloatSource(durationH, ctx, 0)
     const targetDuration = Number.isFinite(rawDur) ? Math.max(0, rawDur) : 0
     if (ctx.clipLibrary && ctx.clipLibrary.entryCount > 0) {
-      advanceClipClock(
+      const result = advanceClipClock(
         clock,
         fields,
         ctx.dt,
@@ -390,6 +419,7 @@ function runSkDurationAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
         isWrap,
         targetDuration
       )
+      noteAnimSetSwapInertialization(node, ctx, result.animSetSwapped)
     } else {
       clock.stepped = true
       clock.animName = fields.animation || 'None'
@@ -550,7 +580,7 @@ function runAnimDatabaseClipClock(node: AnimgraphNode, ctx: WalkCtx) {
     clock.wasActive = false
   }
   if (ctx.clipLibrary && ctx.clipLibrary.entryCount > 0) {
-    advanceClipClock(
+    const result = advanceClipClock(
       clock,
       fields,
       ctx.dt,
@@ -558,6 +588,7 @@ function runAnimDatabaseClipClock(node: AnimgraphNode, ctx: WalkCtx) {
       ctx.board,
       isWrap
     )
+    noteAnimSetSwapInertialization(node, ctx, result.animSetSwapped)
     if (animName === 'None') clock.resolveHint = 'missing'
     return
   }
@@ -633,6 +664,11 @@ type WalkCtx = FloatEvalCtx & {
   blendFromPoseDyn: Map<string, BlendFromPoseDynState>
   /** BlendFromPose handleId → owning SM handleId (TEMP_Bind). */
   blendFromPoseSmBind: Map<string, string>
+  /**
+   * Engine UpdateContext inertialization request (SM / Switch / nested merge).
+   * Cleared each frame; Inertialization node Sample (TBD) consumes it.
+   */
+  inertialization: InertializationRequestSink
   /** Frame meta for nested GraphSlot runners. */
   time: number
   playing: boolean
@@ -753,7 +789,12 @@ export type SimGraphSlotHost = {
     slotName: string,
     parentPoseUpdate?: () => void,
     parentPoseSample?: (out: Pose) => boolean
-  ): { diagramId: string; snap: SimSnapshot } | null
+  ): {
+    diagramId: string
+    snap: SimSnapshot
+    /** Nested UpdateContext inertialization request (graphWrapper up-copy). */
+    inertialization: InertializationRequestSink
+  } | null
   /** Latest nested Sample pose for slot (after stepNested this frame). */
   getNestedPose(slotName: string): Pose | null
 }
@@ -779,6 +820,18 @@ function isGraphSlotType(t: string | null | undefined): boolean {
     t === 'animAnimNode_GraphSlot_Test' ||
     t === 'animAnimNode_GraphSlotConditions'
   )
+}
+
+/**
+ * GraphSlot OnUpdate: WorkspotInertialization.duration + hit.hitType.
+ * Engine: request when duration > 0 && hitType == 0, then clear duration.
+ */
+function noteGraphSlotWorkspotInertialization(ctx: WalkCtx): void {
+  const duration = ctx.board.getFeature('WorkspotInertialization', 'duration') ?? 0
+  const hitType = ctx.board.getFeature('hit', 'hitType') ?? 0
+  if (!(duration > 0) || hitType !== 0) return
+  requestInertialization(ctx.inertialization, duration)
+  ctx.board.setFeature('WorkspotInertialization', 'duration', 0)
 }
 
 /** Record Update walk edge (deduped). Not for weight/value links. */
@@ -2601,15 +2654,19 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
         : null
 
     if (nested) {
+      mergeInertializationRequest(ctx.inertialization, nested.inertialization)
       markActive(nodes, node.HandleId, undefined, 1)
       // Engine: when dontDeactivateInput, also Update inputLink from the slot itself.
       if (dontDeactivate) followUpdate(node, inputLink, ctx)
+      // Engine: after nested/input Update — WorkspotInertialization + hit gate.
+      noteGraphSlotWorkspotInertialization(ctx)
       return
     }
 
     // No attached graph — passthrough inputLink (engine fallback).
     markActive(nodes, node.HandleId)
     followUpdate(node, inputLink, ctx)
+    noteGraphSlotWorkspotInertialization(ctx)
     return
   }
 
@@ -2660,7 +2717,16 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       }
     }
 
-    updateStateMachine(node, rt, ctx.dt, board, handles, nodes, ctx.condCtx)
+    updateStateMachine(
+      node,
+      rt,
+      ctx.dt,
+      board,
+      handles,
+      nodes,
+      ctx.condCtx,
+      ctx.inertialization
+    )
 
     const active = resolveHandle(handles, states[rt.activeStateIndex])
     if (active) {
@@ -2759,7 +2825,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const clock = ensureClipClock(ctx.clipClocks, node.HandleId)
     if (ctx.clipLibrary && ctx.clipLibrary.entryCount > 0) {
       if (!clock.stepped) {
-        advanceClipClock(
+        const result = advanceClipClock(
           clock,
           fields,
           ctx.dt,
@@ -2767,6 +2833,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
           board,
           (n) => board.isWrapperActive(n)
         )
+        noteAnimSetSwapInertialization(node, ctx, result.animSetSwapped)
       }
       const clip = ctx.clipLibrary.resolveClip(clock.animName, (n) =>
         board.isWrapperActive(n)
@@ -2881,6 +2948,20 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     const inputs = Array.isArray(d.inputNodes) ? d.inputNodes : []
     const numInputs = readNumber(d.numInputs, inputs.length)
     const index = switchIndexFromWeight(weight, Math.max(numInputs, inputs.length))
+    // Engine: canRequest → blendTime=0 (sim already hard-cuts); raise request on activation.
+    const swDyn = ctx.instanceStore.ensure(
+      SwitchInertializationDynDef,
+      node.HandleId,
+      undefined
+    )
+    if (
+      readBool(d.canRequestInertialization) &&
+      swDyn.selected >= 0 &&
+      swDyn.selected !== index
+    ) {
+      requestInertialization(ctx.inertialization, readNumber(d.blendTime, 0.1))
+    }
+    swDyn.selected = index
     // Badge = selected input index (0-based), matching engine SelectInputs
     markActive(nodes, node.HandleId, index, 1)
     inputs.forEach((ref, i) => {
@@ -2908,7 +2989,22 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
         isWrapperActive: (n) => board.isWrapperActive(n),
       })
     }
-    markActive(nodes, node.HandleId, useTrue ? 1 : 0, 1)
+    const sel = useTrue ? 1 : 0
+    const swDyn = ctx.instanceStore.ensure(
+      SwitchInertializationDynDef,
+      node.HandleId,
+      undefined
+    )
+    // BaseSwitch: canRequest + instant blend (sim hard-cut) → raise on flip.
+    if (
+      readBool(d.canRequestInertialization) &&
+      swDyn.selected >= 0 &&
+      swDyn.selected !== sel
+    ) {
+      requestInertialization(ctx.inertialization, readNumber(d.blendTime, 0))
+    }
+    swDyn.selected = sel
+    markActive(nodes, node.HandleId, sel, 1)
     const trueIn = resolveHandle(handles, d.True ?? d.true)
     const falseIn = resolveHandle(handles, d.False ?? d.false)
     followUpdate(node, useTrue ? trueIn : falseIn, ctx)
@@ -3171,6 +3267,26 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       handleId: node.HandleId,
       message: `${SNAP_TO_TERRAIN_PARTIAL_MSG} (#${node.HandleId})`,
     })
+    return
+  }
+
+  // Inertialization — OnePoseInput; latch UpdateContext request into instance.
+  if (t === 'animAnimNode_Inertialization') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    updateInertialization(
+      node,
+      ctx.instanceStore,
+      ctx.inertialization,
+      ctx.dt,
+      !wasBoneOpActive(ctx, node.HandleId)
+    )
+    const dyn = ctx.instanceStore.get(InertializationDynDef, node.HandleId)
+    markActive(
+      nodes,
+      node.HandleId,
+      dyn?.inProgress ? Math.min(1, dyn.elapsedTime / Math.max(1e-6, dyn.duration)) : 0,
+      1
+    )
     return
   }
 
@@ -3647,6 +3763,11 @@ export class SimGraphRunner {
   private blendFromPoseSmBind = new Map<string, string>()
   /** Per-SM frozen pose buffer (StateFrozen i_cachedPose). */
   private smFrozenPoses = new Map<string, SmFrozenPoseSlot>()
+  /**
+   * Frame UpdateContext inertialization request (cleared each step start).
+   * Nested GraphSlot merges child into parent via host return.
+   */
+  inertializationRequest = createInertializationRequestSink()
   /** Optional parent-transform MS map for ParentTransform Sample. */
   parentTransforms = new Map<string, Qs>()
   /** Join pose cache (engine diamond re-sample); poses reused, sampled cleared per Sample. */
@@ -3867,6 +3988,7 @@ export class SimGraphRunner {
     this.sharedVars.clear()
     this.blendFromPoseSmBind = bindBlendFromPoseToStateMachines(this.handles)
     this.smFrozenPoses.clear()
+    clearInertializationRequest(this.inertializationRequest)
     clearBoneOpFrameCache(this.boneOpCache)
     clearMathExprPoseFrameCache(this.mathExprPoseCache)
     this.parentTransforms.clear()
@@ -3910,9 +4032,12 @@ export class SimGraphRunner {
     this.instanceStore.clearBucket(LookAtControllerDynDef)
     this.instanceStore.clearBucket(LookAtVehicleRestrictionsDynDef)
     this.instanceStore.clearBucket(LookAtPose360DynDef)
+    this.instanceStore.clearBucket(InertializationDynDef)
+    this.instanceStore.clearBucket(SwitchInertializationDynDef)
     this.serviceEvents.length = 0
     this.sharedVars.clear()
     for (const slot of this.smFrozenPoses.values()) slot.valid = false
+    clearInertializationRequest(this.inertializationRequest)
     clearBoneOpFrameCache(this.boneOpCache)
     clearMathExprPoseFrameCache(this.mathExprPoseCache)
     this.parentTransforms.clear()
@@ -3998,6 +4123,7 @@ export class SimGraphRunner {
       ? []
       : undefined
     this.updateSucc.clear()
+    clearInertializationRequest(this.inertializationRequest)
     clearBoneOpFrameCache(this.boneOpCache)
     clearMathExprPoseFrameCache(this.mathExprPoseCache)
     if (sampleLog) {
@@ -4079,6 +4205,7 @@ export class SimGraphRunner {
       staticSwitchResults: this.staticSwitchResults,
       blendFromPoseDyn: this.blendFromPoseDyn,
       blendFromPoseSmBind: this.blendFromPoseSmBind,
+      inertialization: this.inertializationRequest,
       time,
       playing,
       speed,
@@ -4194,6 +4321,15 @@ export class SimGraphRunner {
         }
       }
     }
+    // Inertialization OnDeactivated — drop pose caches when leaving active path.
+    {
+      const bucket = this.instanceStore.bucket(InertializationDynDef)
+      if (bucket) {
+        for (const id of [...bucket.keys()]) {
+          if (!nodes[id]?.active) bucket.delete(id)
+        }
+      }
+    }
     // BlendFromPose OnDeactivated — drop cached additive when node leaves active path.
     for (const id of [...this.blendFromPoseDyn.keys()]) {
       if (!nodes[id]?.active) this.blendFromPoseDyn.delete(id)
@@ -4288,6 +4424,7 @@ export class SimGraphRunner {
           blendFromPoseDyn: this.blendFromPoseDyn,
           blendFromPoseSmBind: this.blendFromPoseSmBind,
           smFrozenPoses: this.smFrozenPoses,
+          inertialization: this.inertializationRequest,
           fppCameraDyn: this.fppCameraDyn,
           lookAtSpace: {
             entityLocalToWorld: this.entityLocalToWorld,

@@ -547,7 +547,16 @@ export function useAnimgraphSim() {
           const lower = slotName.trim().toLowerCase()
           if (lower && lower !== slotName) nestedPoseBySlot.set(lower, pose)
         }
-        return { diagramId, snap }
+        return {
+          diagramId,
+          snap,
+          inertialization: {
+            isInertializationRequested:
+              runner.inertializationRequest.isInertializationRequested,
+            inertializationDuration:
+              runner.inertializationRequest.inertializationDuration,
+          },
+        }
       } finally {
         nestStack.pop()
       }

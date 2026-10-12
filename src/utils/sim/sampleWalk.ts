@@ -66,6 +66,7 @@ import {
   applyLookAtBoneAim,
   readLookAtBoneAimStatic,
 } from './lookAtBoneAimSim'
+import { sampleInertialization } from './inertializationSim'
 import type { FppCameraDyn } from './fppCameraDyn'
 import { sampleFppCamera } from './fppCameraSample'
 import {
@@ -236,6 +237,14 @@ export type SampleCtx = {
   blendFromPoseSmBind?: Map<string, string>
   /** Per-SM frozen pose (filled after SM Sample when ShouldUseFrozenPose). */
   smFrozenPoses?: Map<string, SmFrozenPoseSlot>
+  /**
+   * UpdateContext inertialization request (latched for Sample).
+   * Inertialization node Sample TBD — plumbing only.
+   */
+  inertialization?: {
+    isInertializationRequested: boolean
+    inertializationDuration: number
+  }
   /** LookAt WS↔MS / facial Eyes coupling (engine AnimNodeSampleContext). */
   lookAtSpace?: LookAtSpaceCtx
 }
@@ -592,6 +601,9 @@ function sampleNodeDispatch(
     case 'animAnimNode_BlendFromPose':
       return sampleBlendFromPose(node, ctx, out, visited)
 
+    case 'animAnimNode_Inertialization':
+      return sampleInertializationNode(node, ctx, out, visited)
+
     case 'animAnimNode_BlendAdditive':
       return sampleBlendAdditive(node, ctx, out, visited)
 
@@ -790,6 +802,19 @@ function sampleStateMachine(
     copyPose(slot.pose, out)
     slot.valid = true
   }
+  return ok
+}
+
+/** AnimNode_Inertialization::OnSample — child pose + quintic residual decay. */
+function sampleInertializationNode(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'Inertialization')
+  if (!ctx.instanceStore) return ok
+  sampleInertialization(node, ctx.instanceStore, out, ctx.rig)
   return ok
 }
 

@@ -375,7 +375,7 @@ export function followTargetOnSphere(
 }
 
 /**
- * LookAtQuaternion(pitch,yaw).Transform(v) — engine lookAtMath.cpp.
+ * LookAtQuaternion(pitch,yaw).Transform(v) — engine lookAtMath
  * Used for soft-cone clamp from forward (EY).
  */
 export function lookAtQuatTransform(
