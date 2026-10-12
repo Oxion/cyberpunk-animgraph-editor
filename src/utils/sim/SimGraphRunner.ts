@@ -129,6 +129,7 @@ import {
   type SmFrozenPoseSlot,
 } from './sampleWalk'
 import { SNAP_TO_TERRAIN_PARTIAL_MSG } from './snapToTerrainIk'
+import { FLOOR_IK_PARTIAL_MSG } from './floorIkSim'
 import {
   createSimSampleLog,
   flushSimSampleLog,
@@ -3173,6 +3174,25 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
+  // HumanIk — OnePoseInput; Sample solves limbs from board / ikTargets.
+  if (t === 'animAnimNode_HumanIk') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    markActive(nodes, node.HandleId, 1, 1)
+    return
+  }
+
+  // FloorIk PARTIAL — flat ground only; Sample warns + plants.
+  if (t === 'animAnimNode_FloorIk' || t === 'animAnimNode_FloorIkBase') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    markActive(nodes, node.HandleId, 1, 1)
+    pushUpdateWarning(ctx, {
+      code: 'floor-ik-partial',
+      handleId: node.HandleId,
+      message: `${FLOOR_IK_PARTIAL_MSG} (#${node.HandleId})`,
+    })
+    return
+  }
+
   if (t === 'animAnimNode_SetBonePosition') {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
     const posNode = resolveHandle(handles, d.positionMs)
@@ -3305,6 +3325,25 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       readFloat
     )
     markActive(nodes, node.HandleId, angle, 1)
+    return
+  }
+
+  // LookAt (bone aim) — OnePoseInput + target/weight links → boneOpCache.
+  if (t === 'animAnimNode_LookAt') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const targetNode = resolveHandle(handles, d.targetNode)
+    const weightNode = resolveHandle(handles, d.weightNode)
+    if (targetNode) updateFromNode(targetNode, ctx)
+    if (weightNode) updateFromNode(weightNode, ctx)
+    const weight = weightNode ? readFloatSource(weightNode, ctx, 1) : 1
+    const target = targetNode
+      ? readVectorSource(targetNode, ctx, ZERO_VEC4)
+      : ZERO_VEC4
+    ctx.boneOpCache.lookAtBoneAim.set(node.HandleId, {
+      weight,
+      targetMs: { x: target.x, y: target.y, z: target.z },
+    })
+    markActive(nodes, node.HandleId, weight, 1)
     return
   }
 

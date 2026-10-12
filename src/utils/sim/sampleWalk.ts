@@ -56,6 +56,16 @@ import {
   applySnapToTerrainIkFlat,
   SNAP_TO_TERRAIN_PARTIAL_MSG,
 } from './snapToTerrainIk'
+import { applyHumanIk, publishIkTargetsToBoard } from './humanIkSim'
+import {
+  applyFloorIkPartial,
+  FLOOR_IK_PARTIAL_MSG,
+  readFloorIkStaticWeight,
+} from './floorIkSim'
+import {
+  applyLookAtBoneAim,
+  readLookAtBoneAimStatic,
+} from './lookAtBoneAimSim'
 import type { FppCameraDyn } from './fppCameraDyn'
 import { sampleFppCamera } from './fppCameraSample'
 import {
@@ -644,6 +654,8 @@ function sampleNodeDispatch(
       return sampleFppCameraNode(node, ctx, out, visited)
     case 'animAnimNode_LookAtController':
       return sampleLookAtControllerNode(node, ctx, out, visited)
+    case 'animAnimNode_LookAt':
+      return sampleLookAtBoneAim(node, ctx, out, visited)
     case 'animAnimNode_LookAtApplyVehicleRestrictions':
       return sampleLookAtVehicleRestrictionsNode(node, ctx, out, visited)
     case 'animAnimNode_LookAtPose360':
@@ -671,6 +683,11 @@ function sampleNodeDispatch(
       return sampleReadIkRequest(node, ctx, out, visited)
     case 'animAnimNode_AddSnapToTerrainIkRequest':
       return sampleAddSnapToTerrainIkRequest(node, ctx, out, visited)
+    case 'animAnimNode_HumanIk':
+      return sampleHumanIk(node, ctx, out, visited)
+    case 'animAnimNode_FloorIk':
+    case 'animAnimNode_FloorIkBase':
+      return sampleFloorIk(node, ctx, out, visited)
 
     case 'animAnimNode_Join':
       return sampleJoin(node, ctx, out, visited)
@@ -1469,6 +1486,30 @@ function sampleOnePoseChild(
     return false
   }
   return sampleByHandleId(kids[0], ctx, out, visited)
+}
+
+/** OnePoseInput → aim named bone at target MS (engine AnimNode_LookAt). */
+function sampleLookAtBoneAim(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'LookAt')
+  const d = node.Data ?? {}
+  const snap = ctx.boneOpCache?.lookAtBoneAim.get(node.HandleId)
+  const weight = snap?.weight ?? 1
+  if (!(weight > 0) || !ctx.rig) return ok
+  const transformName = readTransformIndexFromRaw(d.transform)
+  if (!transformName) return ok
+  const staticCfg = readLookAtBoneAimStatic(d as Record<string, unknown>)
+  applyLookAtBoneAim(out, ctx.rig, {
+    transformName,
+    ...staticCfg,
+    weight,
+    targetMs: snap?.targetMs ?? { x: 0, y: 0, z: 0 },
+  })
+  return ok
 }
 
 /** Child pose → refresh sphere bones → rebuild Eyes.* (engine OnSample). */
@@ -3242,6 +3283,43 @@ function sampleAddSnapToTerrainIkRequest(
   })
   if (!ctx.rig) return ok
   applySnapToTerrainIkFlat(out, ctx.rig, node.Data ?? {}, ctx.ikTargets)
+  return ok
+}
+
+/** HumanIk: board / ikTargets → 4-limb Ik2. */
+function sampleHumanIk(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'HumanIk')
+  if (!ctx.rig) return ok
+  if (ctx.ikTargets && ctx.ikTargets.size > 0) {
+    publishIkTargetsToBoard(ctx.board, ctx.ikTargets)
+  }
+  applyHumanIk(out, ctx.rig, ctx.board, ctx.ikTargets)
+  return ok
+}
+
+/**
+ * FloorIk PARTIAL: flat-ground plant + pelvis. Always warns incomplete parity.
+ */
+function sampleFloorIk(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'FloorIk')
+  pushSampleWarning(ctx, {
+    code: 'floor-ik-partial',
+    handleId: node.HandleId,
+    message: `${FLOOR_IK_PARTIAL_MSG} (#${node.HandleId})`,
+  })
+  if (!ctx.rig) return ok
+  const d = (node.Data ?? {}) as Record<string, unknown>
+  applyFloorIkPartial(out, ctx.rig, d, readFloorIkStaticWeight(d))
   return ok
 }
 

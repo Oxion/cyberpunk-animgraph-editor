@@ -40,6 +40,12 @@ export type Ik2FrameSnap = {
   twist: number
 }
 
+/** animAnimNode_LookAt Update snapshot (weight + target MS). */
+export type LookAtBoneAimSnap = {
+  weight: number
+  targetMs: BoneOpTranslateState
+}
+
 /** Per-frame values computed in Update, consumed in Sample. */
 export type BoneOpFrameCache = {
   /** RotateBone: angle degrees after scale/bias/clamp */
@@ -60,6 +66,8 @@ export type BoneOpFrameCache = {
   floatTrackConn: Map<string, { weight: number; mulFactor: number }>
   /** Ik2 / Ik2Constraint */
   ik2: Map<string, Ik2FrameSnap>
+  /** LookAt (bone aim) */
+  lookAtBoneAim: Map<string, LookAtBoneAimSnap>
 }
 
 export function createBoneOpFrameCache(): BoneOpFrameCache {
@@ -73,6 +81,7 @@ export function createBoneOpFrameCache(): BoneOpFrameCache {
     parentConstraint: new Map(),
     floatTrackConn: new Map(),
     ik2: new Map(),
+    lookAtBoneAim: new Map(),
   }
 }
 
@@ -86,6 +95,7 @@ export function clearBoneOpFrameCache(cache: BoneOpFrameCache): void {
   cache.parentConstraint.clear()
   cache.floatTrackConn.clear()
   cache.ik2.clear()
+  cache.lookAtBoneAim.clear()
 }
 
 export const IDENTITY_QUAT_STATE: BoneOpQuatState = { x: 0, y: 0, z: 0, w: 1 }

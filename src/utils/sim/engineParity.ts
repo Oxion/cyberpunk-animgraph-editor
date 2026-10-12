@@ -11,9 +11,12 @@
  *
  * Offline sim implements Update (+ numeric weights) and Sample (glb pose).
  * Ik2 / Ik2Constraint / AddIkRequest / ReadIkRequest are supported.
+ * HumanIk: 4-limb Ik2 from board (ikLeftLeg/…) + ikTargets map; no full IKTargetsStateMachine.
  * AddSnapToTerrainIkRequest: flat-ground subset only (plant Z + hip Z + ikTargets + Ik2
  * stand-in); emits snap-to-terrain-partial Update/Sample warnings — not full PhysicsTracer /
- * foot-lock / HumanIk parity.
+ * foot-lock parity.
+ * FloorIk: PARTIAL flat-ground plant + pelvis Z + Ik2 (emits floor-ik-partial); no PhysicsTracer /
+ * foot-lock / slope / STwoBonesIKSolver state.
  * ValueBySpeed: OnUpdate integrates speed×dt with ClampType (None/Clamp/WrappedClamp).
  * BlendFromPose: SM frozen pose + additive fade (animNode_BlendFromPose).
  * Stage / StagePoseEntry / StageFloatEntry: container + parentInput passthrough.
@@ -34,7 +37,8 @@
  * LookAt followers: Sample V/H default pulls + inner-square chase (speedToTarget + bone offset);
  *   outer-square step still disabled (engine TODO).
  * ServiceEvent: bind compileSimGraph (flat handles) + addEventListener; DispatchEvent before Update.
- * HumanIk / FloorIk / LookAt (bone aim) / motion extraction / sync TimeWarper remain out of scope.
+ * LookAt (bone aim): OnePoseInput + target/weight → rotate bone forwardAxis toward target MS
+ *   (+ optional cone limit). Motion extraction / sync TimeWarper remain out of scope.
  */
 
 /** animNode_StateMachine — instant transition chain cap */
