@@ -34,6 +34,7 @@ import {
   SimGraphRunner,
   type SimGraphSlotHost,
 } from '../utils/sim/SimGraphRunner'
+import { installSimLookAtConsole } from '../utils/sim/simLookAtDriver'
 import { SimInputBoard } from '../utils/sim/SimInputBoard'
 import {
   IDENTITY_QUAT_VEC4,
@@ -213,6 +214,13 @@ export function useAnimgraphSim() {
     r.updateWarningsEnabled = updateWarningsEnabled.value
     return r
   }
+
+  /** Browser console: `__simLookAt.attach()` / `.add('Eyes', {x,y,z,w})` */
+  installSimLookAtConsole(() => {
+    const id = activeDiagramId.value
+    if (!id) return null
+    return runners.get(id) ?? ensureRunner(id)
+  })
 
   /**
    * Active-diagram view into `snapshotsByDiagram` (not a separate store).
@@ -488,7 +496,8 @@ export function useAnimgraphSim() {
     stepped: Set<string>,
     dt: number,
     nestedPoseBySlot: Map<string, Pose>,
-    poseGen: number
+    poseGen: number,
+    rawDt = dt
   ): SimGraphSlotHost => ({
     stepNested(slotName, parentPoseUpdate, parentPoseSample) {
       const ids = listDiagramIds.value
@@ -497,6 +506,14 @@ export function useAnimgraphSim() {
       if (nestStack.includes(diagramId)) return null
       if (!getRenderData(diagramId)) return null
       const runner = ensureRunner(diagramId)
+      // Share LookAt sample-context fields with parent (engine one AnimNodeSampleContext).
+      const parentId = nestStack[nestStack.length - 1]
+      const parent = parentId ? runners.get(parentId) : undefined
+      if (parent) {
+        runner.eyesLookAtEnabled = parent.eyesLookAtEnabled
+        runner.entityLocalToWorld = parent.entityLocalToWorld
+        runner.parentObjectLocalToWorld = parent.parentObjectLocalToWorld
+      }
       nestStack.push(diagramId)
       try {
         const snap = runner.step(
@@ -507,12 +524,21 @@ export function useAnimgraphSim() {
           clock.value.speed,
           {
             endBoardFrame: false,
-            slotHost: makeSlotHost(snaps, stepped, dt, nestedPoseBySlot, poseGen),
+            slotHost: makeSlotHost(
+              snaps,
+              stepped,
+              dt,
+              nestedPoseBySlot,
+              poseGen,
+              rawDt
+            ),
             parentPoseUpdate,
             parentPoseSample,
             poseGen,
+            rawDt,
           }
         )
+        if (parent) parent.eyesLookAtEnabled = runner.eyesLookAtEnabled
         snaps[diagramId] = snap
         stepped.add(diagramId)
         const pose = runner.getSampledPose()
@@ -544,7 +570,8 @@ export function useAnimgraphSim() {
     dt: number,
     slotHost: SimGraphSlotHost,
     endBoardFrame: boolean,
-    poseGen: number
+    poseGen: number,
+    rawDt: number
   ): SimSnapshot => {
     const runner = ensureRunner(diagramId)
     nestStack.push(diagramId)
@@ -553,13 +580,14 @@ export function useAnimgraphSim() {
         endBoardFrame,
         slotHost,
         poseGen,
+        rawDt,
       })
     } finally {
       nestStack.pop()
     }
   }
 
-  const publish = (dt: number) => {
+  const publish = (dt: number, rawDt = dt) => {
     // Overlay applies undefined when inactive — skip step so callers (drafts, capture,
     // resource loads) do not force a full diagram walk via snapshot watch.
     if (!active.value) return
@@ -569,12 +597,19 @@ export function useAnimgraphSim() {
     const snaps: Record<string, SimSnapshot> = {}
     const stepped = new Set<string>()
     lastNestedPoseBySlot = new Map()
-    const slotHost = makeSlotHost(snaps, stepped, dt, lastNestedPoseBySlot, poseGen)
+    const slotHost = makeSlotHost(
+      snaps,
+      stepped,
+      dt,
+      lastNestedPoseBySlot,
+      poseGen,
+      rawDt
+    )
     const rootId = resolveRootDiagramId(listDiagramIds.value)
 
     // Only root Update; slotted diagrams tick solely when GraphSlot is on the active path.
     if (rootId) {
-      snaps[rootId] = stepDiagram(rootId, dt, slotHost, false, poseGen)
+      snaps[rootId] = stepDiagram(rootId, dt, slotHost, false, poseGen, rawDt)
       stepped.add(rootId)
     }
 
@@ -601,7 +636,7 @@ export function useAnimgraphSim() {
     const wall = ts - lastTs
     lastTs = ts
     const dt = clock.value.tickWall(wall)
-    if (dt > 0) publish(dt)
+    if (dt > 0) publish(dt, clock.value.lastRawDt)
   }
 
   const syncLoop = () => {
@@ -697,7 +732,7 @@ export function useAnimgraphSim() {
   }
   const step = () => {
     const dt = clock.value.step()
-    publish(dt)
+    publish(dt, clock.value.lastRawDt)
   }
   const reset = () => {
     clock.value.reset()

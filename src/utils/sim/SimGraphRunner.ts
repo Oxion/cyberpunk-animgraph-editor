@@ -138,9 +138,30 @@ import { buildStackPairing } from './stackPairing'
 import { ExtraFloatTrackCollector } from './extraTrackCollector'
 import type { SimInputBoard } from './SimInputBoard'
 import { TypedStore } from '../TypedStore'
+import { InstanceStore } from '../InstanceStore'
 import { createFppCameraDyn, type FppCameraDyn } from './fppCameraDyn'
 import { FPP_CAMERA_PITCH } from './fppCameraKeys'
 import { activateFppCamera, updateFppCamera } from './fppCameraUpdate'
+import { LookAtControllerDynDef } from './lookAtControllerDyn'
+import { updateLookAtController } from './lookAtControllerSim'
+import {
+  IDENTITY_SPHERE_XF,
+  type LookAtSphereXf,
+} from './lookAtMath'
+import { LookAtVehicleRestrictionsDynDef } from './lookAtVehicleRestrictionsDyn'
+import { updateLookAtVehicleRestrictions } from './lookAtVehicleRestrictionsSim'
+import {
+  compileSimGraph,
+  dispatchCompiledServiceEvents,
+  type SimCompiledGraph,
+} from './simCompile'
+import { compileSimNode } from './simCompileNodes'
+import { LookAtPose360DynDef } from './lookAtPose360Dyn'
+import {
+  evalLookAtPose360Direction,
+  updateLookAtPose360,
+} from './lookAtPose360Sim'
+import type { SimPreSampleHook, SimServiceEvent } from './simServiceEvents'
 import {
   bindBlendFromPoseToStateMachines,
   evaluateSmTransitionBlendAlpha,
@@ -567,6 +588,8 @@ type FloatEvalCtx = {
   board: SimInputBoard
   handles: Map<string, AnimgraphNode>
   dt: number
+  /** Undilated dt (rawTimeDelta); defaults to dt when omitted. */
+  rawDt: number
   floatDyn: Map<string, FloatDynState>
   floatUpdated: Set<string>
   /** VectorLatch / DampVector latched or damped Vector4. */
@@ -582,6 +605,16 @@ type FloatEvalCtx = {
   mathExprCache: MathExprCompileCache
   /** Instance shared vars (fppCamera.sharedVar, …). */
   sharedVars: TypedStore
+  /** Engine AnimNodeUpdateContext eyes look-at temps (LookAtController → Pose360). */
+  eyesLookAtDirection: number
+  eyesLookAtDirectionEnabled: boolean
+  /** Engine context.m_isFacial — Eyes enableFloatTrack coupling. */
+  isFacial: boolean
+  /** Engine context.m_eyesLookAtEnabled (body Eyes writes; facial Eyes reads). */
+  eyesLookAtEnabled: number
+  /** Entity / parent world xforms for LookAt WS↔MS / parent-space. */
+  entityLocalToWorld: LookAtSphereXf
+  parentObjectLocalToWorld: LookAtSphereXf
 }
 
 type WalkCtx = FloatEvalCtx & {
@@ -632,6 +665,13 @@ type WalkCtx = FloatEvalCtx & {
   mathExprPoseCache: MathExprPoseFrameCache
   /** FPPCamera per-node dyn. */
   fppCameraDyn: Map<string, FppCameraDyn>
+  /** Per-node instance store (LookAtController, …). */
+  instanceStore: InstanceStore
+  /**
+   * Custom-param / ServiceEvent list for this frame (after preSample hooks).
+   * Consumers filter by kind; fan-out — do not mutate/remove entries.
+   */
+  serviceEvents: readonly SimServiceEvent[]
   /** Engine ExtraDataCollector — MarkExtraFloatTrack during Update. */
   extraTracks: ExtraFloatTrackCollector
   /** When true, Update appends diagnostics into updateWarnings. */
@@ -725,6 +765,11 @@ export type SimStepOptions = {
   parentPoseSample?: (out: Pose) => boolean
   /** Monotonic publish generation stamped onto the returned snapshot. */
   poseGen?: number
+  /**
+   * Undilated frame dt (engine rawTimeDelta). When omitted, treated as equal to
+   * scaled `dt` (dilatation factor = 1).
+   */
+  rawDt?: number
 }
 
 function isGraphSlotType(t: string | null | undefined): boolean {
@@ -1542,6 +1587,7 @@ function isFloatValueNodeType(t: string): boolean {
     t === 'animAnimNode_FloatToIntConverter' ||
     t === 'animAnimNode_FloatToBoolConverter' ||
     t === 'animAnimNode_CoordinateFromVector' ||
+    t === 'animAnimNode_LookAtPose360Direction' ||
     /Converter$/i.test(t)
   )
 }
@@ -1959,6 +2005,10 @@ function readFloatSource(
 
   if (t === 'animAnimNode_FPPCameraSharedVar') {
     return fctx.sharedVars.get(FPP_CAMERA_PITCH) ?? fallback
+  }
+
+  if (t === 'animAnimNode_LookAtPose360Direction') {
+    return evalLookAtPose360Direction(source, fctx)
   }
 
   if (t === 'animAnimNode_IntVariable') {
@@ -3211,6 +3261,61 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
+  // LookAtController — events + board publish; Sample refreshes spheres from pose.
+  if (t === 'animAnimNode_LookAtController') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const { enabled } = updateLookAtController(
+      node,
+      ctx.instanceStore,
+      ctx.board,
+      ctx.dt,
+      ctx,
+      {
+        rawDt: ctx.rawDt,
+        isFacial: ctx.isFacial,
+        eyesLookAtEnabled: ctx.eyesLookAtEnabled,
+        entityLocalToWorld: ctx.entityLocalToWorld,
+        parentObjectLocalToWorld: ctx.parentObjectLocalToWorld,
+        setEyesLookAtEnabled: (v) => {
+          ctx.eyesLookAtEnabled = v
+        },
+      }
+    )
+    markActive(nodes, node.HandleId, enabled ? 1 : 0, 1)
+    return
+  }
+
+  // LookAtPose360 — leaf pose; damp angle from eyesLookAtDirectionTemp.
+  if (t === 'animAnimNode_LookAtPose360') {
+    const offsetH = resolveHandle(handles, d.angleOffsetNode)
+    if (offsetH) updateFromNode(offsetH, ctx)
+    const targetOffsetH = resolveHandle(handles, d.targetAngleOffsetNode)
+    if (targetOffsetH) updateFromNode(targetOffsetH, ctx)
+    const readFloat: (ref: unknown, fallback: number) => number = (ref, fallback) => {
+      const h = resolveHandle(handles, ref)
+      return h ? readFloatSource(h, ctx, fallback) : fallback
+    }
+    const angle = updateLookAtPose360(
+      node,
+      ctx.instanceStore,
+      ctx,
+      ctx.dt,
+      ctx.clipLibrary,
+      ctx.board,
+      readFloat
+    )
+    markActive(nodes, node.HandleId, angle, 1)
+    return
+  }
+
+  // LookAtApplyVehicleRestrictions — OnePoseInput; params via service event; Sample clamps target.
+  if (t === 'animAnimNode_LookAtApplyVehicleRestrictions') {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    updateLookAtVehicleRestrictions(node, ctx.instanceStore, ctx.dt)
+    markActive(nodes, node.HandleId, 1, 1)
+    return
+  }
+
   // TrackSetter — OnePoseInput + value FloatLink; Sample overrides named track (Override-only).
   if (t === 'animAnimNode_TrackSetter') {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
@@ -3482,6 +3587,21 @@ export class SimGraphRunner {
   private sharedVars = new TypedStore()
   /** FPPCamera instance data by handle. */
   private fppCameraDyn = new Map<string, FppCameraDyn>()
+  /** Typed per-node instance bags (LookAtController, …). */
+  private instanceStore = new InstanceStore()
+  /** Engine entity / parent LocalToWorld for LookAt (default identity). */
+  entityLocalToWorld: LookAtSphereXf = { ...IDENTITY_SPHERE_XF }
+  parentObjectLocalToWorld: LookAtSphereXf = { ...IDENTITY_SPHERE_XF }
+  /** Engine AnimNodeSampleContext.m_isFacial. */
+  isFacial = false
+  /** Cross-frame Eyes body→facial enable (context.m_eyesLookAtEnabled). */
+  eyesLookAtEnabled = 0
+  /** Custom-param / ServiceEvent queue (filled by hooks; cleared end of step). */
+  private serviceEvents: SimServiceEvent[] = []
+  /** Pre-Update hooks (look-at driver, vehicle restrictions, …). */
+  private preSampleHooks: SimPreSampleHook[] = []
+  /** Bind-time compile result (ServiceEvent listeners, …). */
+  private compiled: SimCompiledGraph | null = null
   /** BlendFromPose dyn (timer / request / additive cache). */
   private blendFromPoseDyn = new Map<string, BlendFromPoseDynState>()
   /** BlendFromPose → owning SM (graph TEMP_Bind). */
@@ -3690,6 +3810,7 @@ export class SimGraphRunner {
   bind(graphData: RenderData | null): void {
     this.handles = graphData?.handlesRegistry ?? new Map()
     this.originalAnimgraph = graphData?.originalAnimgraph ?? null
+    this.compiled = null
     this.runtimes.clear()
     this.floatDyn.clear()
     this.vectorDyn.clear()
@@ -3702,6 +3823,8 @@ export class SimGraphRunner {
     this.boneTranslateDyn.clear()
     this.blendFromPoseDyn.clear()
     this.fppCameraDyn.clear()
+    this.instanceStore.clear()
+    this.serviceEvents.length = 0
     this.sharedVars.clear()
     this.blendFromPoseSmBind = bindBlendFromPoseToStateMachines(this.handles)
     this.smFrozenPoses.clear()
@@ -3729,6 +3852,7 @@ export class SimGraphRunner {
       const def = readNumber(sm.Data?.defaultStateIndex, 0)
       this.runtimes.set(sm.HandleId, new SimStateMachineRuntime(sm.HandleId, def))
     }
+    this.compiled = compileSimGraph(this.handles, this.instanceStore, compileSimNode)
   }
 
   reset(): void {
@@ -3744,6 +3868,10 @@ export class SimGraphRunner {
     this.boneTranslateDyn.clear()
     this.blendFromPoseDyn.clear()
     this.fppCameraDyn.clear()
+    this.instanceStore.clearBucket(LookAtControllerDynDef)
+    this.instanceStore.clearBucket(LookAtVehicleRestrictionsDynDef)
+    this.instanceStore.clearBucket(LookAtPose360DynDef)
+    this.serviceEvents.length = 0
     this.sharedVars.clear()
     for (const slot of this.smFrozenPoses.values()) slot.valid = false
     clearBoneOpFrameCache(this.boneOpCache)
@@ -3762,6 +3890,18 @@ export class SimGraphRunner {
       const def = readNumber(sm.Data?.defaultStateIndex, 0)
       if (rt) rt.reset(def)
       else this.runtimes.set(sm.HandleId, new SimStateMachineRuntime(sm.HandleId, def))
+    }
+  }
+
+  pushServiceEvent(event: SimServiceEvent): void {
+    this.serviceEvents.push(event)
+  }
+
+  addPreSampleHook(hook: SimPreSampleHook): () => void {
+    this.preSampleHooks.push(hook)
+    return () => {
+      const i = this.preSampleHooks.indexOf(hook)
+      if (i >= 0) this.preSampleHooks.splice(i, 1)
     }
   }
 
@@ -3845,6 +3985,7 @@ export class SimGraphRunner {
         {
           handles: this.handles,
           board,
+          instanceStore: this.instanceStore,
           nodes,
           clipClocks: this.clipClocks,
           clipPoseLibrary: this.clipPoseLibrary,
@@ -3877,10 +4018,12 @@ export class SimGraphRunner {
       )
     }
 
+    const rawDt = options?.rawDt ?? dt
     const walkBase: Omit<WalkCtx, 'nodes' | 'visited'> = {
       handles: this.handles,
       board,
       dt,
+      rawDt,
       floatDyn: this.floatDyn,
       floatUpdated,
       vectorDyn: this.vectorDyn,
@@ -3909,18 +4052,40 @@ export class SimGraphRunner {
       updateSucc: this.updateSucc,
       prevNodes: this.prevNodes,
       boneOpCache: this.boneOpCache,
+      eyesLookAtDirection: 0,
+      eyesLookAtDirectionEnabled: false,
+      isFacial: this.isFacial,
+      eyesLookAtEnabled: this.eyesLookAtEnabled,
+      entityLocalToWorld: this.entityLocalToWorld,
+      parentObjectLocalToWorld: this.parentObjectLocalToWorld,
       boneRotateDyn: this.boneRotateDyn,
       boneQuatDyn: this.boneQuatDyn,
       boneTranslateDyn: this.boneTranslateDyn,
       mathExprPoseCache: this.mathExprPoseCache,
       sharedVars: this.sharedVars,
       fppCameraDyn: this.fppCameraDyn,
+      instanceStore: this.instanceStore,
+      serviceEvents: this.serviceEvents,
       extraTracks: this.extraTracks,
       updateWarningsEnabled: this.updateWarningsEnabled,
       updateWarnings,
     }
 
     this.extraTracks.clear()
+
+    // Service-event bus: hooks push custom params, then Update consumers read the list.
+    const hookCtx = {
+      dt,
+      time,
+      push: (e: SimServiceEvent) => {
+        this.serviceEvents.push(e)
+      },
+    }
+    for (const hook of this.preSampleHooks) hook(hookCtx)
+
+    // DispatchEvent fan-out before Update (opens Switch gated on Head/Eyes.isEnabled).
+    dispatchCompiledServiceEvents(this.compiled, this.serviceEvents, walkBase)
+
 
     const root = findRootHandle(this.handles, this.originalAnimgraph)
     if (root) {
@@ -3939,6 +4104,12 @@ export class SimGraphRunner {
         })
       }
     }
+
+    // Persist Eyes enable for facial graphs / next frame (engine context field).
+    this.eyesLookAtEnabled = walkBase.eyesLookAtEnabled
+
+    // Unconsumed custom params do not carry across frames.
+    this.serviceEvents.length = 0
 
     // Drop dyn state for nodes not updated this frame (deactivated → re-init on reactivate)
     for (const id of [...this.floatDyn.keys()]) {
@@ -3973,6 +4144,16 @@ export class SimGraphRunner {
     }
     for (const id of [...this.fppCameraDyn.keys()]) {
       if (!nodes[id]?.active) this.fppCameraDyn.delete(id)
+    }
+    // LookAtController / VehicleRestrictions dyn persist for compile-time listeners
+    // (engine keeps instance buffer + DispatchEvent while Update path is inactive).
+    {
+      const bucket = this.instanceStore.bucket(LookAtPose360DynDef)
+      if (bucket) {
+        for (const id of [...bucket.keys()]) {
+          if (!nodes[id]?.active) bucket.delete(id)
+        }
+      }
     }
     // BlendFromPose OnDeactivated — drop cached additive when node leaves active path.
     for (const id of [...this.blendFromPoseDyn.keys()]) {
@@ -4037,6 +4218,7 @@ export class SimGraphRunner {
         {
           handles: this.handles,
           board,
+          instanceStore: this.instanceStore,
           nodes,
           clipClocks: this.clipClocks,
           clipPoseLibrary: this.clipPoseLibrary,
@@ -4068,6 +4250,15 @@ export class SimGraphRunner {
           blendFromPoseSmBind: this.blendFromPoseSmBind,
           smFrozenPoses: this.smFrozenPoses,
           fppCameraDyn: this.fppCameraDyn,
+          lookAtSpace: {
+            entityLocalToWorld: this.entityLocalToWorld,
+            parentObjectLocalToWorld: this.parentObjectLocalToWorld,
+            isFacial: this.isFacial,
+            eyesLookAtEnabled: this.eyesLookAtEnabled,
+            setEyesLookAtEnabled: (v) => {
+              this.eyesLookAtEnabled = v
+            },
+          },
         },
         this.sampleOut
       )

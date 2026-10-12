@@ -95,7 +95,15 @@ import {
   type SnapMethod,
 } from './poseFk'
 import { getRigPartMask, type RigEntry } from './rigResource'
+import type { InstanceStore } from '../InstanceStore'
 import type { SimInputBoard } from './SimInputBoard'
+import {
+  DEFAULT_LOOKAT_SPACE_CTX,
+  sampleLookAtController,
+  type LookAtSpaceCtx,
+} from './lookAtControllerSim'
+import { sampleLookAtVehicleRestrictions } from './lookAtVehicleRestrictionsSim'
+import { sampleLookAtPose360 } from './lookAtPose360Sim'
 import {
   evaluateSmTransitionBlendAlpha,
   smShouldUseFrozenPose,
@@ -131,6 +139,8 @@ export type SmFrozenPoseSlot = {
 export type SampleCtx = {
   handles: Map<string, AnimgraphNode>
   board: SimInputBoard
+  /** Per-node instance bags (LookAtController, …). */
+  instanceStore?: InstanceStore
   nodes: Record<string, SimNodeState>
   clipClocks: Map<string, ClipClockState>
   clipPoseLibrary: ClipPoseLibrary
@@ -216,6 +226,8 @@ export type SampleCtx = {
   blendFromPoseSmBind?: Map<string, string>
   /** Per-SM frozen pose (filled after SM Sample when ShouldUseFrozenPose). */
   smFrozenPoses?: Map<string, SmFrozenPoseSlot>
+  /** LookAt WS↔MS / facial Eyes coupling (engine AnimNodeSampleContext). */
+  lookAtSpace?: LookAtSpaceCtx
 }
 
 /** Offline IK request snap (AddIkRequest → ReadIkRequest). */
@@ -630,6 +642,12 @@ function sampleNodeDispatch(
       return sampleDirectConnConstraint(node, ctx, out, visited)
     case 'animAnimNode_FPPCamera':
       return sampleFppCameraNode(node, ctx, out, visited)
+    case 'animAnimNode_LookAtController':
+      return sampleLookAtControllerNode(node, ctx, out, visited)
+    case 'animAnimNode_LookAtApplyVehicleRestrictions':
+      return sampleLookAtVehicleRestrictionsNode(node, ctx, out, visited)
+    case 'animAnimNode_LookAtPose360':
+      return sampleLookAtPose360Node(node, ctx, out)
     case 'animAnimNode_TransformToTrack':
       return sampleTransformToTrack(node, ctx, out, visited)
     case 'animAnimNode_OrientConstraint':
@@ -1451,6 +1469,91 @@ function sampleOnePoseChild(
     return false
   }
   return sampleByHandleId(kids[0], ctx, out, visited)
+}
+
+/** Child pose → refresh sphere bones → rebuild Eyes.* (engine OnSample). */
+function sampleLookAtControllerNode(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'LookAtController')
+  if (ctx.instanceStore) {
+    sampleLookAtController(
+      node,
+      ctx.instanceStore,
+      ctx.board,
+      out,
+      ctx.rig,
+      ctx.lookAtSpace ?? DEFAULT_LOOKAT_SPACE_CTX
+    )
+  }
+  return ok
+}
+
+/** Child pose → clamp board (group,name) look target (engine OnSample). */
+function sampleLookAtVehicleRestrictionsNode(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(
+    node,
+    ctx,
+    out,
+    visited,
+    'LookAtApplyVehicleRestrictions'
+  )
+  if (ctx.instanceStore) {
+    sampleLookAtVehicleRestrictions(
+      node,
+      ctx.instanceStore,
+      ctx.board,
+      out,
+      ctx.rig
+    )
+  }
+  return ok
+}
+
+/** Leaf: sample 360 look clip at damped animTime + Trajectory yaw. */
+function sampleLookAtPose360Node(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose
+): boolean {
+  if (!ctx.instanceStore) {
+    writeNullPose(ctx, out)
+    return false
+  }
+  const readFloat = (ref: unknown, fallback: number): number => {
+    // Sample-time float links: prefer Update badge weight already on nodes.
+    const h = resolveHandle(ctx.handles, ref)
+    if (!h) return fallback
+    const st = ctx.nodes[h.HandleId]
+    if (st?.active && typeof st.weight === 'number' && Number.isFinite(st.weight)) {
+      return st.weight
+    }
+    return fallback
+  }
+  const ok = sampleLookAtPose360(
+    node,
+    ctx.instanceStore,
+    out,
+    ctx.rig,
+    ctx.clipLibrary,
+    ctx.clipPoseLibrary,
+    ctx.board,
+    readFloat
+  )
+  if (!ok) {
+    writeNullPose(ctx, out)
+    return false
+  }
+  noteWrittenNull(ctx, false)
+  return true
 }
 
 /**

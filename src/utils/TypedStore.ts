@@ -8,14 +8,14 @@ export class StateKey<TValue> {
 }
 
 /** Heterogeneous map: get/set typed by StateKey; stored under key.id. */
-export class TypedStore {
-  private readonly _data = new Map<string, unknown>()
+export class TypedStore<TValue extends unknown = unknown> {
+  private readonly _data = new Map<string, TValue>()
 
-  get<T>(key: StateKey<T>): T | undefined {
-    return this._data.get(key.id) as T | undefined
+  get<ArgTValue extends TValue>(key: StateKey<ArgTValue>): ArgTValue | undefined {
+    return this._data.get(key.id) as ArgTValue | undefined
   }
 
-  set<T>(key: StateKey<T>, value: T): this {
+  set<ArgTValue extends TValue>(key: StateKey<ArgTValue>, value: ArgTValue): this {
     this._data.set(key.id, value)
     return this
   }
@@ -34,5 +34,9 @@ export class TypedStore {
 
   get size(): number {
     return this._data.size
+  }
+
+  values(): MapIterator<TValue> {
+    return this._data.values()
   }
 }

@@ -13,6 +13,10 @@
  * Vector4 AnimFeatures (VectorInput) live in a separate map — not split into scalars.
  * Quaternion AnimFeatures (QuaternionInput) live in a separate map (xyzw).
  * Bool AnimFeatures (BoolInput / BoolFeature) live in a separate map — not as float 0/1.
+ *
+ * TODO(parity): set*Feature always stores any (group, name). Engine ApplyFeature
+ * no-ops unless the group is in the graph's m_animFeatures (+ matching input
+ * layout entry). Not critical for offline UI; gate later if needed.
  */
 
 import type { SimVec4 } from './evalAnimMathExpressionVector'

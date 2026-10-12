@@ -20,7 +20,21 @@
  * TrackSetter: OnePoseInput + FloatLink → override named float track (legacy FloatTrackModifier Override).
  * DirectConnConstraint: source bone LS → target bone LS with axis masks + weight.
  * FPPCamera / FPPCameraSharedVar: camera.* board features → pitch/yaw + bone Sample; shared TypedStore pitch.
- * HumanIk / FloorIk / LookAt / motion extraction / sync TimeWarper remain out of scope.
+ * LookAtController: service-event Add/Remove/UpdatePositions; WS→MS via entityLocalToWorld;
+ *   MS↔sphere; master LookAtQuaternion follow (+ override/curve); soft cone; hard-limit priority;
+ *   back-behind hold; parent-space via parentObjectLocalToWorld; SM transitions (EaseInEaseOut);
+ *   enableFloatTrack / Eyes override → blendWeight + target blend; coneLimitReached status bits;
+ *   facial Eyes Min(eyesLookAtEnabled, 1−override) / body Max write; main-SM default gates secondaries;
+ *   additionalParts (recursive dependents) blend → follower weight/suppress/mode (outer square × weight);
+ *   Sample substeps × (timeDelta/rawTimeDelta); board graph-input publish; eyesLookAtDirection on dyn.
+ * LookAtApplyVehicleRestrictions: LookAtVehicleRestrictionParams event + Sample clamp of board
+ *   (group,name) vs referenceBone (engine OnSample).
+ * LookAtPose360 / LookAtPose360Direction: eyesLookAtDirectionTemp → damp angle → clip sample +
+ *   Trajectory Z; Direction float from same context.
+ * LookAt followers: Sample V/H default pulls + inner-square chase (speedToTarget + bone offset);
+ *   outer-square step still disabled (engine TODO).
+ * ServiceEvent: bind compileSimGraph (flat handles) + addEventListener; DispatchEvent before Update.
+ * HumanIk / FloorIk / LookAt (bone aim) / motion extraction / sync TimeWarper remain out of scope.
  */
 
 /** animNode_StateMachine — instant transition chain cap */
