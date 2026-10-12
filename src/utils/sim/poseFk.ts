@@ -137,11 +137,18 @@ function parentOf(pose: Pose, rig: RigEntry, unified: number): number {
 const scratchQa = new Float32Array(4)
 const scratchQb = new Float32Array(4)
 const scratchQ = new Float32Array(4)
+/** Caller-owned destinations only — never used as temps inside FK walkers. */
 const scratchParent = { ...IDENTITY_QS }
 const scratchLocal = { ...IDENTITY_QS }
 const scratchMs = { ...IDENTITY_QS }
 const scratchInv = { ...IDENTITY_QS }
 const scratchSnap = { ...IDENTITY_QS }
+/** Private to getTransformMs — safe even when `out` is scratchMs/scratchLocal. */
+const _gtmLocal = { ...IDENTITY_QS }
+const _gtmTmp = { ...IDENTITY_QS }
+/** Private to getReferencePoseMs. */
+const _refLocal = { ...IDENTITY_QS }
+const _refTmp = { ...IDENTITY_QS }
 
 /** parentMs * local → childMs (translation + rotation; scale approx mul). */
 function mulQs(parent: Qs, local: Qs, out: Qs): void {
@@ -215,6 +222,7 @@ function mulInverseMul(parentMs: Qs, childMs: Qs, out: Qs): void {
 /**
  * Model-space transform for unified bone index.
  * Walks parent chain (depth-limited).
+ * Uses private temps — `out` may be scratchMs / scratchParent / scratchLocal.
  */
 export function getTransformMs(
   pose: Pose,
@@ -235,9 +243,9 @@ export function getTransformMs(
   }
   Object.assign(out, IDENTITY_QS)
   for (let i = chain.length - 1; i >= 0; i--) {
-    if (!readLs(pose, chain[i]!, scratchLocal)) return false
-    mulQs(out, scratchLocal, scratchMs)
-    Object.assign(out, scratchMs)
+    if (!readLs(pose, chain[i]!, _gtmLocal)) return false
+    mulQs(out, _gtmLocal, _gtmTmp)
+    Object.assign(out, _gtmTmp)
   }
   return true
 }
@@ -1099,6 +1107,7 @@ export function applyDirectConnConstraint(
 /**
  * Reference pose MS for a rig bone (bind LS chain).
  * Matches engine GetReferencePoseMS for ParentConstraint offset.
+ * Uses private temps — `out` may alias module caller scratches.
  */
 function getReferencePoseMs(rig: RigEntry, boneIndex: number, out: Qs): boolean {
   if (boneIndex < 0 || boneIndex >= rig.boneParents.length) {
@@ -1117,18 +1126,18 @@ function getReferencePoseMs(rig: RigEntry, boneIndex: number, out: Qs): boolean 
     const bi = chain[i]!
     const ti = bi * 3
     const ri = bi * 4
-    scratchLocal.tx = rig.refTranslation[ti]!
-    scratchLocal.ty = rig.refTranslation[ti + 1]!
-    scratchLocal.tz = rig.refTranslation[ti + 2]!
-    scratchLocal.qx = rig.refRotation[ri]!
-    scratchLocal.qy = rig.refRotation[ri + 1]!
-    scratchLocal.qz = rig.refRotation[ri + 2]!
-    scratchLocal.qw = rig.refRotation[ri + 3]!
-    scratchLocal.sx = rig.refScale[ti]!
-    scratchLocal.sy = rig.refScale[ti + 1]!
-    scratchLocal.sz = rig.refScale[ti + 2]!
-    mulQs(out, scratchLocal, scratchMs)
-    Object.assign(out, scratchMs)
+    _refLocal.tx = rig.refTranslation[ti]!
+    _refLocal.ty = rig.refTranslation[ti + 1]!
+    _refLocal.tz = rig.refTranslation[ti + 2]!
+    _refLocal.qx = rig.refRotation[ri]!
+    _refLocal.qy = rig.refRotation[ri + 1]!
+    _refLocal.qz = rig.refRotation[ri + 2]!
+    _refLocal.qw = rig.refRotation[ri + 3]!
+    _refLocal.sx = rig.refScale[ti]!
+    _refLocal.sy = rig.refScale[ti + 1]!
+    _refLocal.sz = rig.refScale[ti + 2]!
+    mulQs(out, _refLocal, _refTmp)
+    Object.assign(out, _refTmp)
   }
   return true
 }
