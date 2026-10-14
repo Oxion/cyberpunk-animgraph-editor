@@ -152,6 +152,30 @@ export type SmFrozenPoseSlot = {
 }
 
 /**
+ * Offline stand-in for engine SharedMetaPoseContext (inject bag).
+ * Keys are part-local bone / track names (easy variant); engine uses meta-mapped indices.
+ */
+export type SharedMetaPoseCtx = {
+  /** Shared bone LS from MetaPose (name → Qs). */
+  parentTransforms: Map<string, Qs>
+  /** Shared float tracks from MetaPose. */
+  parentTracks: Map<string, number>
+  /** A-pose LS for SharedMetaPoseAdditive (convertParentPoseToAdditive). */
+  aTransforms?: Map<string, Qs>
+  /** Reference tracks for SharedMetaPoseAdditive. */
+  referenceTracks?: Map<string, number>
+  /** TrajectoryFromMetaPose / facial trajectory LS. */
+  trajectoryLs?: Qs
+}
+
+export function createEmptySharedMetaPose(): SharedMetaPoseCtx {
+  return {
+    parentTransforms: new Map(),
+    parentTracks: new Map(),
+  }
+}
+
+/**
  * Sample support: follows Update `updateSucc` only (no Data pose rediscovery).
  * Leaves (SkAnim / Identity) may have 0 successors.
  */
@@ -230,6 +254,14 @@ export type SampleCtx = {
    * falls back to pose unified MS when missing.
    */
   parentTransforms?: Map<string, Qs>
+  /**
+   * Engine AnimNodeSampleContext.m_sharedMetaPose — SharedMetaPose / Additive / TrajectoryFromMetaPose.
+   * Filled by caller (inject). Empty → node is passthrough after inputLink.
+   *
+   * TODO(hard): no AnimatedObject / MetaPose / part↔meta mapping — engine fills this from
+   * entity MetaPose + parentTransformsMapping before child-part Sample. Need multi-part hierarchy.
+   */
+  sharedMetaPose?: SharedMetaPoseCtx
   /**
    * Engine AnimNode_Join: sample once per frame, replay cached pose on diamond re-entry.
    * `sampled` cleared each Sample; `poses` may be reused across frames.
@@ -671,6 +703,12 @@ function sampleNodeDispatch(
       return sampleAdditionalFloatTrack(node, ctx, out, visited)
     case 'animAnimNode_ParentTransform':
       return sampleParentTransform(node, ctx, out, visited)
+    case 'animAnimNode_SharedMetaPose':
+      return sampleSharedMetaPose(node, ctx, out, visited)
+    case 'animAnimNode_SharedMetaPoseAdditive':
+      return sampleSharedMetaPoseAdditive(node, ctx, out, visited)
+    case 'animAnimNode_TrajectoryFromMetaPose':
+      return sampleTrajectoryFromMetaPose(node, ctx, out, visited)
     case 'animAnimNode_ParentConstraint':
       return sampleParentConstraint(node, ctx, out, visited)
     case 'animAnimNode_FloatTrackDirectConnConstraint':
@@ -3662,6 +3700,198 @@ function sampleParentTransform(
       writeBoneLs(out, toIdx, slerpQs(current, fromQs, weight))
     }
   }
+  return ok
+}
+
+/** Engine AnimNode_SharedMetaPose::Execute — overwrite / slerp shared MetaPose bones+tracks. */
+function sampleSharedMetaPose(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'SharedMetaPose')
+  const bag = ctx.sharedMetaPose
+  if (!bag) return ok
+  // Engine LinkSafeGetValue(weightLink, 1.0); Update stores weight on node state.
+  const weight = ctx.nodes[node.HandleId]?.weight ?? 1
+  if (weight === 0) return ok
+
+  const scratch: Qs = { ...IDENTITY_QS }
+  for (const [name, shared] of bag.parentTransforms) {
+    const idx = resolveUnifiedName(out, ctx.rig, name)
+    if (idx < 0) continue
+    if (weight === 1) {
+      writeBoneLs(out, idx, shared)
+    } else {
+      readBoneLs(out, idx, scratch)
+      writeBoneLs(out, idx, slerpQs(scratch, shared, weight))
+    }
+  }
+  for (const [name, shared] of bag.parentTracks) {
+    const ti = resolveTrackUnified(out, ctx.rig, name)
+    if (ti < 0) continue
+    if (weight === 1) {
+      writeTrackValue(out, ti, shared)
+    } else {
+      const cur = readTrackValue(out, ti)
+      writeTrackValue(out, ti, cur + (shared - cur) * weight)
+    }
+  }
+  return ok
+}
+
+/**
+ * Engine AnimNode_SharedMetaPoseAdditive::OnSample — additive apply of shared MetaPose.
+ * Easy: Local additive only; AGAT_Ref TODO.
+ */
+function sampleSharedMetaPoseAdditive(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'SharedMetaPoseAdditive')
+  const bag = ctx.sharedMetaPose
+  if (!bag) return ok
+  const weight = ctx.nodes[node.HandleId]?.weight ?? 1
+  if (!(weight > 0)) return ok
+
+  const d = node.Data ?? {}
+  const convert =
+    d.convertParentPoseToAdditive == null
+      ? true
+      : readBool(d.convertParentPoseToAdditive)
+  const additiveType = String(d.additiveType ?? 'AGAT_Local')
+  if (additiveType.includes('Ref')) {
+    // TODO: BlendAdditive_Ref parity (AGAT_Ref).
+  }
+  const blendTracks = String(d.blendTracks ?? 'AGBT_Add')
+
+  const cur: Qs = { ...IDENTITY_QS }
+  const aPose: Qs = { ...IDENTITY_QS }
+  for (const [name, parentQs] of bag.parentTransforms) {
+    const idx = resolveUnifiedName(out, ctx.rig, name)
+    if (idx < 0) continue
+    let addQs = parentQs
+    if (convert) {
+      const aMap = bag.aTransforms?.get(name)
+      if (aMap) {
+        // SetMulInverseMul(a, parent) ≈ LS additive: t' = p.t-a.t, q' = inv(a.q)*p.q, s' = p.s/a.s
+        aPose.tx = aMap.tx
+        aPose.ty = aMap.ty
+        aPose.tz = aMap.tz
+        aPose.qx = aMap.qx
+        aPose.qy = aMap.qy
+        aPose.qz = aMap.qz
+        aPose.qw = aMap.qw
+        aPose.sx = aMap.sx
+        aPose.sy = aMap.sy
+        aPose.sz = aMap.sz
+        const ilen =
+          aPose.qx * aPose.qx +
+          aPose.qy * aPose.qy +
+          aPose.qz * aPose.qz +
+          aPose.qw * aPose.qw
+        const inv =
+          ilen > 1e-12
+            ? {
+                qx: -aPose.qx / ilen,
+                qy: -aPose.qy / ilen,
+                qz: -aPose.qz / ilen,
+                qw: aPose.qw / ilen,
+              }
+            : { qx: 0, qy: 0, qz: 0, qw: 1 }
+        addQs = {
+          tx: parentQs.tx - aPose.tx,
+          ty: parentQs.ty - aPose.ty,
+          tz: parentQs.tz - aPose.tz,
+          qx:
+            inv.qw * parentQs.qx +
+            inv.qx * parentQs.qw +
+            inv.qy * parentQs.qz -
+            inv.qz * parentQs.qy,
+          qy:
+            inv.qw * parentQs.qy -
+            inv.qx * parentQs.qz +
+            inv.qy * parentQs.qw +
+            inv.qz * parentQs.qx,
+          qz:
+            inv.qw * parentQs.qz +
+            inv.qx * parentQs.qy -
+            inv.qy * parentQs.qx +
+            inv.qz * parentQs.qw,
+          qw:
+            inv.qw * parentQs.qw -
+            inv.qx * parentQs.qx -
+            inv.qy * parentQs.qy -
+            inv.qz * parentQs.qz,
+          sx: aPose.sx !== 0 ? parentQs.sx / aPose.sx : parentQs.sx,
+          sy: aPose.sy !== 0 ? parentQs.sy / aPose.sy : parentQs.sy,
+          sz: aPose.sz !== 0 ? parentQs.sz / aPose.sz : parentQs.sz,
+        }
+      }
+    }
+    readBoneLs(out, idx, cur)
+    // Local additive: t += add.t*w; s += (add.s-1)*w; q = base * nlerp(I, add.q, w)
+    const w = weight
+    const nq = slerpQs(IDENTITY_QS, addQs, w)
+    const outQs: Qs = {
+      tx: cur.tx + addQs.tx * w,
+      ty: cur.ty + addQs.ty * w,
+      tz: cur.tz + addQs.tz * w,
+      qx:
+        cur.qw * nq.qx + cur.qx * nq.qw + cur.qy * nq.qz - cur.qz * nq.qy,
+      qy:
+        cur.qw * nq.qy - cur.qx * nq.qz + cur.qy * nq.qw + cur.qz * nq.qx,
+      qz:
+        cur.qw * nq.qz + cur.qx * nq.qy - cur.qy * nq.qx + cur.qz * nq.qw,
+      qw:
+        cur.qw * nq.qw - cur.qx * nq.qx - cur.qy * nq.qy - cur.qz * nq.qz,
+      sx: cur.sx + (addQs.sx - 1) * w,
+      sy: cur.sy + (addQs.sy - 1) * w,
+      sz: cur.sz + (addQs.sz - 1) * w,
+    }
+    writeBoneLs(out, idx, outQs)
+  }
+
+  for (const [name, parentVal] of bag.parentTracks) {
+    const ti = resolveTrackUnified(out, ctx.rig, name)
+    if (ti < 0) continue
+    let tempAdd = parentVal
+    if (convert) {
+      const ref = bag.referenceTracks?.get(name)
+      if (ref !== undefined) tempAdd = parentVal - ref
+    }
+    const curT = readTrackValue(out, ti)
+    if (blendTracks.includes('Interpolate')) {
+      writeTrackValue(out, ti, curT + (tempAdd - curT) * weight)
+    } else {
+      // AGBT_Add (default)
+      writeTrackValue(out, ti, curT + tempAdd * weight)
+    }
+  }
+  return ok
+}
+
+/** Engine AnimNode_TrajectoryFromMetaPose — write shared trajectory onto named bone. */
+function sampleTrajectoryFromMetaPose(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'TrajectoryFromMetaPose')
+  const traj = ctx.sharedMetaPose?.trajectoryLs
+  if (!traj) return ok
+  const boneName = readTransformIndexFromRaw(node.Data?.metaPoseTrajectoryLs)
+  if (!boneName) return ok
+  const idx = resolveUnifiedName(out, ctx.rig, boneName)
+  if (idx < 0) {
+    warnBoneMissing(ctx, node.HandleId, boneName)
+    return ok
+  }
+  writeBoneLs(out, idx, traj)
   return ok
 }
 

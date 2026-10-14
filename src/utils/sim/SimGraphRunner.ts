@@ -128,6 +128,7 @@ import {
 } from './pose'
 import {
   allocSampleScratch,
+  createEmptySharedMetaPose,
   sampleGraphPose,
   samplePoseFromNode,
   type BlendFromPoseDynState,
@@ -3121,9 +3122,24 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     t === 'animAnimNode_SetDrivenKey' ||
     t === 'animAnimNode_AdditionalTransform' ||
     t === 'animAnimNode_ParentTransform' ||
+    t === 'animAnimNode_TrajectoryFromMetaPose' ||
     t === 'animAnimNode_TranslationLimit'
   ) {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    return
+  }
+
+  // SharedMetaPose / Additive — OnePoseInput + optional weightLink (default 1).
+  // TODO(hard): context.m_sharedMetaPose filled from MetaPose; inject via runner.sharedMetaPose for now.
+  if (
+    t === 'animAnimNode_SharedMetaPose' ||
+    t === 'animAnimNode_SharedMetaPoseAdditive'
+  ) {
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const wNode = resolveHandle(handles, d.weightLink)
+    if (wNode) updateFromNode(wNode, ctx)
+    const weight = wNode ? readFloatSource(wNode, ctx, 1) : 1
+    markActive(nodes, node.HandleId, weight, 1)
     return
   }
 
@@ -3812,6 +3828,11 @@ export class SimGraphRunner {
   lastKeepFullUpdate = false
   /** Optional parent-transform MS map for ParentTransform Sample. */
   parentTransforms = new Map<string, Qs>()
+  /**
+   * SharedMetaPose inject bag (engine SampleContext.m_sharedMetaPose).
+   * TODO(hard): fill from AnimatedObject MetaPose + part meta-mapping (no hierarchy yet).
+   */
+  sharedMetaPose = createEmptySharedMetaPose()
   /** Join pose cache (engine diamond re-sample); poses reused, sampled cleared per Sample. */
   private joinPoseCache = {
     sampled: new Set<string>(),
@@ -4034,6 +4055,7 @@ export class SimGraphRunner {
     clearBoneOpFrameCache(this.boneOpCache)
     clearMathExprPoseFrameCache(this.mathExprPoseCache)
     this.parentTransforms.clear()
+    this.sharedMetaPose = createEmptySharedMetaPose()
     this.joinPoseCache.sampled.clear()
     this.joinPoseCache.poses.clear()
     this.clipClocks.clear()
@@ -4086,6 +4108,7 @@ export class SimGraphRunner {
     clearBoneOpFrameCache(this.boneOpCache)
     clearMathExprPoseFrameCache(this.mathExprPoseCache)
     this.parentTransforms.clear()
+    this.sharedMetaPose = createEmptySharedMetaPose()
     this.joinPoseCache.sampled.clear()
     this.joinPoseCache.poses.clear()
     this.clipClocks.clear()
@@ -4221,6 +4244,7 @@ export class SimGraphRunner {
           mathExprCache: this.mathExprCache,
           mathExprPoseCache: this.mathExprPoseCache,
           parentTransforms: this.parentTransforms,
+          sharedMetaPose: this.sharedMetaPose,
           joinPoseCache: this.joinPoseCache,
           fppCameraDyn: this.fppCameraDyn,
         },
@@ -4468,6 +4492,7 @@ export class SimGraphRunner {
           mathExprCache: this.mathExprCache,
           mathExprPoseCache: this.mathExprPoseCache,
           parentTransforms: this.parentTransforms,
+          sharedMetaPose: this.sharedMetaPose,
           joinPoseCache: this.joinPoseCache,
           blendFromPoseDyn: this.blendFromPoseDyn,
           blendFromPoseSmBind: this.blendFromPoseSmBind,

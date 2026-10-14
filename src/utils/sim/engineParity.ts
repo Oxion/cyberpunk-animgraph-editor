@@ -26,6 +26,10 @@
  * Stage / StagePoseEntry / StageFloatEntry: container + parentInput passthrough.
  * TrackSetter: OnePoseInput + FloatLink → override named float track (legacy FloatTrackModifier Override).
  * DirectConnConstraint: source bone LS → target bone LS with axis masks + weight.
+ * SharedMetaPose / SharedMetaPoseAdditive / TrajectoryFromMetaPose: Sample overwrites /
+ *   slerps / additive-applies inject bag runner.sharedMetaPose (name→LS Qs / tracks).
+ *   TODO(hard): AnimatedObject MetaPose + part↔meta mapping fill (no multi-part hierarchy).
+ *   Additive: Local only; AGAT_Ref / FacialSharedMetaPose still TODO.
  * FPPCamera / FPPCameraSharedVar: camera.* board features → pitch/yaw + bone Sample; shared TypedStore pitch.
  * LookAtController: service-event Add/Remove/UpdatePositions; WS→MS via entityLocalToWorld;
  *   MS↔sphere; master LookAtQuaternion follow (+ override/curve); soft cone; hard-limit priority;
