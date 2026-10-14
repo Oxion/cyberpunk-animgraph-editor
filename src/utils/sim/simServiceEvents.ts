@@ -124,17 +124,90 @@ export type LookAtVehicleRestrictionParams = {
   maxRotationSpeed: number
 }
 
+/** One clip entry in MixerSlotParams lists (engine MixerSlotAnimParams). */
+export type SimMixerSlotAnimParams = {
+  animationName: string
+  previousTime?: number
+  currentTime?: number
+  loops?: number
+  weight?: number
+  bodyPartMask?: string
+  convertToAdditive?: boolean
+  extractTrajectoryForBlend?: boolean
+  useDynamicAnimSets?: boolean
+  muteAnimEvents?: 'NONE' | 'STANDARD' | 'FACE_ANIMS' | 'ALL'
+}
+
+export type MixerSlotParams = {
+  kind: 'MixerSlotParams'
+  isFacial?: boolean
+  enableInertiaBlend?: boolean
+  normalAnimParamsList?: SimMixerSlotAnimParams[]
+  additiveAnimParamsList?: SimMixerSlotAnimParams[]
+  overrideAnimParamsList?: SimMixerSlotAnimParams[]
+}
+
+export type MixerSlotIdleParams = {
+  kind: 'MixerSlotIdleParams'
+  isFacial?: boolean
+  blendWeight?: number
+  firstWeight?: number
+  secondWeight?: number
+  firstAnimation?: string
+  secondAnimation?: string
+  firstAddAnimation?: string
+  secondAddAnimation?: string
+  muteAnimEvents?: SimMixerSlotAnimParams['muteAnimEvents']
+}
+
+export type MixerSlotAddIdleParams = {
+  kind: 'MixerSlotAddIdleParams'
+  isFacial?: boolean
+  weight?: number
+}
+
+export type MixerSlotTrajectoryBlendParams = {
+  kind: 'MixerSlotTrajectoryBlendParams'
+  blendIn?: number
+  /** Local Qs: tx,ty,tz, qx,qy,qz,qw, sx,sy,sz */
+  inTransform?: {
+    tx: number
+    ty: number
+    tz: number
+    qx: number
+    qy: number
+    qz: number
+    qw: number
+    sx: number
+    sy: number
+    sz: number
+  }
+}
+
 export type SimServiceEvent =
   | LookAtParams_Add
   | LookAtParams_Remove
   | LookAtParams_UpdatePositions
   | LookAtVehicleRestrictionParams
+  | MixerSlotParams
+  | MixerSlotIdleParams
+  | MixerSlotAddIdleParams
+  | MixerSlotTrajectoryBlendParams
 
 export function isLookAtServiceEvent(e: SimServiceEvent): boolean {
   return (
     e.kind === 'LookAtParams_Add' ||
     e.kind === 'LookAtParams_Remove' ||
     e.kind === 'LookAtParams_UpdatePositions'
+  )
+}
+
+export function isMixerSlotServiceEvent(e: SimServiceEvent): boolean {
+  return (
+    e.kind === 'MixerSlotParams' ||
+    e.kind === 'MixerSlotIdleParams' ||
+    e.kind === 'MixerSlotAddIdleParams' ||
+    e.kind === 'MixerSlotTrajectoryBlendParams'
   )
 }
 

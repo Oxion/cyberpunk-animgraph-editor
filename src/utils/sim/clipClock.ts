@@ -52,6 +52,237 @@ export function createClipClockState(): ClipClockState {
   }
 }
 
+export function ensureClipClock(
+  clocks: Map<string, ClipClockState>,
+  key: string
+): ClipClockState {
+  let s = clocks.get(key)
+  if (!s) {
+    s = createClipClockState()
+    clocks.set(key, s)
+  }
+  return s
+}
+
+/** MixerSlot multi-entry keys (status CLIP lists these when stepped). */
+export function mixerSlotClockKey(handleId: string, slot: string): string {
+  return `${handleId}::${slot}`
+}
+
+export type ScrubClipClockOpts = {
+  currTime: number
+  /** Explicit prev for CollectEvents; default = previous clock.currTime. */
+  prevTime?: number
+  loops?: number
+  collectEvents?: boolean
+  /** MuteAnimEvents::FACE_ANIMS */
+  skipFaceEvents?: boolean
+  clipFront?: number
+  clipEnd?: number
+  /** SkFrameAnim: fire AnimEnd when scrub lands on animEnd. */
+  fireAnimEndName?: string
+  fireAnimEndOnce?: boolean
+}
+
+export type ScrubClipClockResult = {
+  progress: number
+  missing: boolean
+  currTime: number
+  duration: number
+  animEnd: number
+  front: number
+}
+
+/**
+ * External-time clock tick (SkFrameAnim scrub / MixerSlot array entries).
+ * Marks stepped; CollectEvents over prev→curr; optional AnimEnd at animEnd.
+ * Does not += dt.
+ */
+export function scrubClipClock(
+  state: ClipClockState,
+  animName: string,
+  library: ClipLibrary | null,
+  board: SimInputBoard,
+  isWrapperActive: (name: string) => boolean,
+  opts: ScrubClipClockOpts
+): ScrubClipClockResult {
+  if (state.stepped) {
+    return {
+      progress: 0,
+      missing: false,
+      currTime: state.currTime,
+      duration: 0,
+      animEnd: 0,
+      front: 0,
+    }
+  }
+  state.stepped = true
+  state.wasActive = true
+  state.animName = animName || ''
+
+  if (!animName || animName === 'None') {
+    state.resolveHint = 'empty'
+    return {
+      progress: 0,
+      missing: true,
+      currTime: 0,
+      duration: 0,
+      animEnd: 0,
+      front: 0,
+    }
+  }
+
+  const resolved =
+    library && library.entryCount > 0
+      ? library.resolveClipEntry(animName, isWrapperActive)
+      : undefined
+  const clip = resolved?.clip
+  state.setupEntryId = resolved?.entryId ?? ''
+
+  if (!library || library.entryCount === 0) {
+    state.resolveHint = 'no-lib'
+  } else if (!clip) {
+    state.resolveHint = library.hasClipAnywhere(animName) ? 'gated' : 'missing'
+  }
+
+  const duration = clip && clip.duration > 0 ? clip.duration : 0
+  const front = Math.max(0, opts.clipFront ?? 0)
+  const endPad = Math.max(0, opts.clipEnd ?? 0)
+  const animEnd = duration > 0 ? Math.max(duration - endPad, 0) : 0
+  const window = Math.max(0, animEnd - front)
+
+  const prevTime =
+    opts.prevTime !== undefined ? opts.prevTime : state.currTime
+  const currTime = opts.currTime
+  state.prevTime = prevTime
+  state.currTime = currTime
+
+  if (clip && opts.fireAnimEndName && opts.fireAnimEndName !== 'None' && animEnd > 0) {
+    if (Math.abs(currTime - animEnd) < 1e-5) {
+      const timeMoved = Math.abs(prevTime - currTime) > 1e-5
+      if (!opts.fireAnimEndOnce || timeMoved) {
+        board.fireAnimEnd(opts.fireAnimEndName)
+      }
+    }
+  }
+
+  if (clip && opts.collectEvents !== false && animEnd > 0) {
+    collectClipEventsInRange(
+      clip,
+      prevTime,
+      currTime,
+      Math.max(0, opts.loops ?? 0),
+      front,
+      animEnd,
+      (name, value, phase, footPhase) =>
+        board.fireAnimEvent(name, value, phase ?? 'tick', footPhase),
+      { skipFaceEvents: !!opts.skipFaceEvents }
+    )
+  }
+
+  const progress = window > 1e-8 ? (currTime - front) / window : 0
+  return {
+    progress: Math.max(0, Math.min(1, progress)),
+    missing: !clip,
+    currTime,
+    duration,
+    animEnd,
+    front,
+  }
+}
+
+export type TickClipClockDtOpts = {
+  collectEvents?: boolean
+  /** MuteAnimEvents::FACE_ANIMS */
+  skipFaceEvents?: boolean
+  /** Wrap with fmod (MixerSlot idle). Default true. */
+  loop?: boolean
+  /** SkAnim-style AnimEnd — off for MixerSlot. */
+  fireAnimEnd?: boolean
+  fireAnimEndName?: string
+}
+
+/**
+ * += dt clock tick with optional loop wrap (MixerSlot idle).
+ * No clipFront/End window. No AnimEnd unless opted in.
+ */
+export function tickClipClockDt(
+  state: ClipClockState,
+  animName: string,
+  dt: number,
+  library: ClipLibrary | null,
+  board: SimInputBoard,
+  isWrapperActive: (name: string) => boolean,
+  opts?: TickClipClockDtOpts
+): { loops: number; missing: boolean; duration: number } {
+  if (state.stepped) {
+    return { loops: 0, missing: false, duration: 0 }
+  }
+  state.stepped = true
+  state.wasActive = true
+  state.animName = animName || ''
+
+  if (!animName || animName === 'None') {
+    state.resolveHint = 'empty'
+    return { loops: 0, missing: true, duration: 0 }
+  }
+
+  const resolved =
+    library && library.entryCount > 0
+      ? library.resolveClipEntry(animName, isWrapperActive)
+      : undefined
+  const clip = resolved?.clip
+  state.setupEntryId = resolved?.entryId ?? ''
+
+  if (!library || library.entryCount === 0) {
+    state.resolveHint = 'no-lib'
+  } else if (!clip) {
+    state.resolveHint = library.hasClipAnywhere(animName) ? 'gated' : 'missing'
+  }
+
+  const duration = clip && clip.duration > 0 ? clip.duration : 0
+  if (!(duration > 0)) {
+    return { loops: 0, missing: !clip, duration: 0 }
+  }
+
+  state.prevTime = state.currTime
+  const next = state.currTime + dt
+  let loops = 0
+  const loop = opts?.loop !== false
+  if (loop) {
+    state.currTime = ((next % duration) + duration) % duration
+    loops = Math.floor(next / duration) - Math.floor(state.prevTime / duration)
+  } else {
+    state.currTime = Math.min(next, duration)
+    if (state.currTime >= duration - 1e-8) {
+      loops = 0
+      if (opts?.fireAnimEnd) {
+        board.fireAnimEnd(
+          opts.fireAnimEndName && opts.fireAnimEndName !== 'None'
+            ? opts.fireAnimEndName
+            : undefined
+        )
+      }
+    }
+  }
+
+  if (clip && opts?.collectEvents !== false) {
+    collectClipEventsInRange(
+      clip,
+      state.prevTime,
+      state.currTime,
+      Math.max(0, loops),
+      0,
+      duration,
+      (name, value, phase, footPhase) =>
+        board.fireAnimEvent(name, value, phase ?? 'tick', footPhase),
+      { skipFaceEvents: !!opts?.skipFaceEvents }
+    )
+  }
+
+  return { loops: Math.max(0, loops), missing: !clip, duration }
+}
+
 /** Effective playback window (engine SkAnim clipFront / clipEnd). */
 export function clipWindow(clip: ClipMeta, clipFront: number, clipEnd: number) {
   const front = Math.max(0, clipFront)
@@ -69,11 +300,26 @@ type ClipEventEdge = {
   footPhase?: string
 }
 
+/** Engine MuteAnimEvents::FACE_ANIMS → AnimEvent_WorkspotPlayFacialAnim::IsMute. */
+export function isFaceAnimEvent(ev: { type?: string; name: string }): boolean {
+  const t = (ev.type || '').toLowerCase()
+  return (
+    t.includes('workspotplayfacial') ||
+    t.includes('facialanim') ||
+    t.includes('face_anim') ||
+    t.includes('playfacial')
+  )
+}
+
 /** Expand clip events into Tick / DurStart / DurEnd edges (eventsContainer RebuildRuntimeStorage). */
-function clipEventEdges(clip: ClipMeta): ClipEventEdge[] {
+function clipEventEdges(
+  clip: ClipMeta,
+  skipFaceEvents = false
+): ClipEventEdge[] {
   const out: ClipEventEdge[] = []
   for (const ev of clip.events) {
     if (!ev.name || ev.name === 'None') continue
+    if (skipFaceEvents && isFaceAnimEvent(ev)) continue
     const footPhase = ev.footPhase
     if (ev.duration > 0) {
       out.push({ time: ev.time, name: ev.name, value: ev.value, phase: 'durStart', footPhase })
@@ -103,9 +349,10 @@ export function collectClipEventsInRange(
   loops: number,
   front: number,
   animEnd: number,
-  fire: (name: string, value?: number, phase?: SimAnimEventPhase, footPhase?: string) => void
+  fire: (name: string, value?: number, phase?: SimAnimEventPhase, footPhase?: string) => void,
+  opts?: { skipFaceEvents?: boolean }
 ): void {
-  const edges = clipEventEdges(clip)
+  const edges = clipEventEdges(clip, !!opts?.skipFaceEvents)
   if (!edges.length) return
   const emit = (edge: ClipEventEdge) => {
     fire(edge.name, edge.value, edge.phase, edge.footPhase)

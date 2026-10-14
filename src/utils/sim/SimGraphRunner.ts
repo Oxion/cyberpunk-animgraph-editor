@@ -84,10 +84,10 @@ import {
   advanceClipClock,
   beginClipClockStep,
   clipWindow,
-  collectClipEventsInRange,
-  createClipClockState,
   deactivateClipClock,
+  ensureClipClock,
   resolvePhaseClipPads,
+  scrubClipClock,
   type ClipClockState,
 } from './clipClock'
 import {
@@ -107,6 +107,7 @@ import {
   readVector4,
   resolveHandle,
 } from './simDataUtils'
+import { calcSlotNameHash } from '../cnameHash'
 import type { ClipLibrary } from './clipLibrary'
 import { DEFAULT_ANIM_FPS } from './clipLibrary'
 import type { ClipPoseLibrary } from './clipPoseLibrary'
@@ -150,6 +151,15 @@ import { FPP_CAMERA_PITCH } from './fppCameraKeys'
 import { activateFppCamera, updateFppCamera } from './fppCameraUpdate'
 import { LookAtControllerDynDef } from './lookAtControllerDyn'
 import { updateLookAtController } from './lookAtControllerSim'
+import { MixerSlotDynDef } from './mixerSlotDyn'
+import {
+  computeMixerSlotWeights,
+  prepareMixerSlotState,
+  restoreAnimEventFrame,
+  snapshotAnimEventFrame,
+  updateMixerSlot,
+} from './mixerSlotSim'
+import { updateWorkspotHub } from './workspotHubSim'
 import {
   IDENTITY_SPHERE_XF,
   type LookAtSphereXf,
@@ -454,10 +464,6 @@ function runSkFrameAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
   const fields = readSkAnimClockFields(d)
   const clock = ensureClipClock(ctx.clipClocks, node.HandleId)
   const animName = fields.animation || 'None'
-  clock.stepped = true
-  clock.wasActive = true
-  clock.animName = animName
-
   const isWrap = (n: string) => ctx.board.isWrapperActive(n)
   const clip =
     ctx.clipLibrary && ctx.clipLibrary.entryCount > 0
@@ -487,44 +493,25 @@ function runSkFrameAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
     currTime = Number.isFinite(frame) ? frame / Math.max(1e-6, fps) : front
   }
 
-  const prevTime = clock.currTime
-  clock.prevTime = prevTime
-  clock.currTime = currTime
-  if (!ctx.clipLibrary || ctx.clipLibrary.entryCount === 0) {
-    clock.resolveHint = animName && animName !== 'None' ? 'no-lib' : 'empty'
-  } else if (!clip) {
-    clock.resolveHint = ctx.clipLibrary.hasClipAnywhere(animName) ? 'gated' : 'missing'
-  }
-
-  // Engine SkFrameAnim::OnUpdate — fireAnimLoopEvent at animEnd; once unless time moved.
-  if (clip && fields.fireAnimLoopEvent && fields.animLoopEventName && fields.animLoopEventName !== 'None') {
-    const animEnd = Math.max(duration - endPad, 0)
-    if (Math.abs(currTime - animEnd) < 1e-5) {
-      const fireOnce = readBool(d.fireAnimEndOnceOnAnimEnd)
-      const timeMoved = Math.abs(prevTime - currTime) > 1e-5
-      if (!fireOnce || timeMoved) {
-        ctx.board.fireAnimEnd(fields.animLoopEventName)
-      }
-    }
-  }
-
-  // Timeline events across scrub (prev→curr).
-  if (clip && fields.collectEvents) {
-    const animEnd = Math.max(duration - endPad, 0)
-    collectClipEventsInRange(
-      clip,
-      prevTime,
+  const scrub = scrubClipClock(
+    clock,
+    animName,
+    ctx.clipLibrary,
+    ctx.board,
+    isWrap,
+    {
       currTime,
-      0,
-      front,
-      animEnd,
-      (name, value, phase, footPhase) =>
-        ctx.board.fireAnimEvent(name, value, phase ?? 'tick', footPhase)
-    )
-  }
-
-  const progress = window > 1e-8 ? (currTime - front) / window : 0
-  return Math.max(0, Math.min(1, progress))
+      collectEvents: fields.collectEvents,
+      clipFront: fields.clipFront,
+      clipEnd: fields.clipEnd,
+      fireAnimEndName:
+        fields.fireAnimLoopEvent && fields.animLoopEventName !== 'None'
+          ? fields.animLoopEventName
+          : undefined,
+      fireAnimEndOnce: readBool(d.fireAnimEndOnceOnAnimEnd),
+    }
+  )
+  return scrub.progress
 }
 
 /** Resolve AnimDatabase CSV row → animation CName, then run clip clock. */
@@ -633,6 +620,8 @@ type FloatEvalCtx = {
   signalDyn: Map<string, SignalDynState>
   signalUpdated: Set<string>
   clipLibrary: ClipLibrary | null
+  /** GLB pose curves — MixerSlot / SkAnim Sample; optional on Update for duration. */
+  clipPoseLibrary: ClipPoseLibrary | null
   /** Per-runner math expression compile cache (idents + scalar/mixed). */
   mathExprCache: MathExprCompileCache
   /** Instance shared vars (fppCamera.sharedVar, …). */
@@ -695,6 +684,11 @@ type WalkCtx = FloatEvalCtx & {
    * Value/weight links are not recorded — only followUpdate targets.
    */
   updateSucc: Map<string, string[]>
+  /** Bound followUpdate for node sims that recurse without a call-site lambda. */
+  followUpdate: (
+    parent: AnimgraphNode,
+    child: AnimgraphNode | null | undefined
+  ) => void
   boneOpCache: BoneOpFrameCache
   boneRotateDyn: Map<string, BoneOpRotateState>
   boneQuatDyn: Map<string, BoneOpQuatState>
@@ -954,18 +948,6 @@ function readSkAnimClockFields(data: Record<string, unknown>) {
     clipFront: readNumber(data.clipFront, 0),
     clipEnd: readNumber(data.clipEnd, 0),
   }
-}
-
-function ensureClipClock(
-  clocks: Map<string, ClipClockState>,
-  handleId: string
-): ClipClockState {
-  let s = clocks.get(handleId)
-  if (!s) {
-    s = createClipClockState()
-    clocks.set(handleId, s)
-  }
-  return s
 }
 
 /**
@@ -1605,6 +1587,7 @@ function isFloatValueNodeType(t: string): boolean {
     t === 'animAnimNode_BoolInput' ||
     t === 'animAnimNode_FloatConstant' ||
     t === 'animAnimNode_IntConstant' ||
+    t === 'animAnimNode_NameHashConstant' ||
     t === 'animAnimNode_FloatVariable' ||
     t === 'animAnimNode_IntVariable' ||
     t === 'animAnimNode_BoolVariable' ||
@@ -2055,6 +2038,11 @@ function readFloatSource(
 
   if (t === 'animAnimNode_FloatConstant' || t === 'animAnimNode_IntConstant') {
     return readNumber(d.value ?? d.floatValue, fallback)
+  }
+
+  // Engine AnimNode_NameHashConstant::OnGetValue → anim::CalcSlotNameHash(m_value)
+  if (t === 'animAnimNode_NameHashConstant') {
+    return calcSlotNameHash(readCName(d.value))
   }
 
   if (t === 'animAnimNode_FPPCameraSharedVar') {
@@ -3397,6 +3385,31 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
+  // MixerSlot — UpdateWithEventsWeight on inputLink; then mixer clocks/events.
+  if (t === 'animAnimNode_MixerSlot') {
+    const dyn = prepareMixerSlotState(node, ctx)
+    const isWrap = (n: string) => ctx.board.isWrapperActive(n)
+    const weights = computeMixerSlotWeights(dyn, (e) =>
+      e.animationName
+        ? !!ctx.clipLibrary?.resolveClipEntry(e.animationName, isWrap)
+        : false
+    )
+    const eventSnap =
+      weights.inputLink < 1 ? snapshotAnimEventFrame(ctx.board) : null
+    followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    if (eventSnap) restoreAnimEventFrame(ctx.board, eventSnap)
+    const active = updateMixerSlot(node, ctx)
+    markActive(nodes, node.HandleId, active ? 1 : 0, 1)
+    return
+  }
+
+  // WorkspotHub — UpdateWorkspot feature drive; selective additionalLinks Update.
+  if (t === 'animAnimNode_WorkspotHub') {
+    const active = updateWorkspotHub(node, ctx)
+    markActive(nodes, node.HandleId, active ? 1 : 0, 1)
+    return
+  }
+
   // LookAtController — events + board publish; Sample refreshes spheres from pose.
   if (t === 'animAnimNode_LookAtController') {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
@@ -3967,7 +3980,7 @@ export class SimGraphRunner {
     this.animDbLibrary = library
   }
 
-  bind(graphData: RenderData | null): void {
+  bind(graphData: RenderData | null, board: SimInputBoard): void {
     this.handles = graphData?.handlesRegistry ?? new Map()
     this.originalAnimgraph = graphData?.originalAnimgraph ?? null
     this.compiled = null
@@ -4013,7 +4026,13 @@ export class SimGraphRunner {
       const def = readNumber(sm.Data?.defaultStateIndex, 0)
       this.runtimes.set(sm.HandleId, new SimStateMachineRuntime(sm.HandleId, def))
     }
-    this.compiled = compileSimGraph(this.handles, this.instanceStore, compileSimNode)
+    // Compile may seed board feature defaults (WorkspotHub, …).
+    this.compiled = compileSimGraph(
+      this.handles,
+      this.instanceStore,
+      compileSimNode,
+      board
+    )
   }
 
   reset(): void {
@@ -4034,6 +4053,7 @@ export class SimGraphRunner {
     this.instanceStore.clearBucket(LookAtPose360DynDef)
     this.instanceStore.clearBucket(InertializationDynDef)
     this.instanceStore.clearBucket(SwitchInertializationDynDef)
+    this.instanceStore.clearBucket(MixerSlotDynDef)
     this.serviceEvents.length = 0
     this.sharedVars.clear()
     for (const slot of this.smFrozenPoses.values()) slot.valid = false
@@ -4184,7 +4204,7 @@ export class SimGraphRunner {
     }
 
     const rawDt = options?.rawDt ?? dt
-    const walkBase: Omit<WalkCtx, 'nodes' | 'visited'> = {
+    const walkBase: Omit<WalkCtx, 'nodes' | 'visited' | 'followUpdate'> = {
       handles: this.handles,
       board,
       dt,
@@ -4200,6 +4220,7 @@ export class SimGraphRunner {
       runtimes: this.runtimes,
       condCtx,
       clipLibrary: this.clipLibrary,
+      clipPoseLibrary: this.clipPoseLibrary,
       clipClocks: this.clipClocks,
       animDbLibrary: this.animDbLibrary,
       staticSwitchResults: this.staticSwitchResults,
@@ -4253,21 +4274,21 @@ export class SimGraphRunner {
     dispatchCompiledServiceEvents(this.compiled, this.serviceEvents, walkBase)
 
 
+    const walkCtx: WalkCtx = {
+      ...walkBase,
+      nodes,
+      visited: new Set(),
+      followUpdate(parent, child) {
+        followUpdate(parent, child, walkCtx)
+      },
+    }
     const root = findRootHandle(this.handles, this.originalAnimgraph)
     if (root) {
-      updateFromNode(root, {
-        ...walkBase,
-        nodes,
-        visited: new Set(),
-      })
+      updateFromNode(root, walkCtx)
     } else {
       // Fallback: no root — update all SMs (legacy)
       for (const sm of findStateMachineHandles(this.handles)) {
-        updateFromNode(sm, {
-          ...walkBase,
-          nodes,
-          visited: new Set(),
-        })
+        updateFromNode(sm, walkCtx)
       }
     }
 

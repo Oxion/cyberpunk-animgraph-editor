@@ -86,7 +86,10 @@ export type SimUpdateWarning = {
   speed?: number
 }
 
-/** Active SkAnim clip clock sample (all stepped clocks this frame). */
+/**
+ * Active clip clock sample (all stepped clocks this frame).
+ * `handleId` is SkAnim handle, or MixerSlot key `handleId::idle0` / `::n0` / …
+ */
 export interface SimActiveClip {
   handleId: string
   animName: string

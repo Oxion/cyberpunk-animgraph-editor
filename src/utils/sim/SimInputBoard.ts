@@ -37,6 +37,8 @@ export class SimInputBoard {
   private boolFeatures = new Map<string, Map<string, boolean>>()
   /** Snapshot of bool features at previous endFrame — BoolEdge conditions */
   private prevBoolFeatures = new Map<string, Map<string, boolean>>()
+  /** lowercase featureName -> lowercase propertyName -> string (CName AnimFeatures) */
+  private stringFeatures = new Map<string, Map<string, string>>()
   /** variableName -> number (float vars / float variable conditions) */
   floatVars = new Map<string, number>()
   /** variableName -> Vector4 (AnimNode_VectorVariable) */
@@ -148,6 +150,7 @@ export class SimInputBoard {
     this.vectorFeatures.clear()
     this.quatFeatures.clear()
     this.boolFeatures.clear()
+    this.stringFeatures.clear()
     this.floatVars.clear()
     this.vectorVars.clear()
     this.quatVars.clear()
@@ -270,6 +273,24 @@ export class SimInputBoard {
     const key = SimInputBoard.featKey(featureName, propertyName)
     if (!key) return undefined
     return this.boolFeatures.get(key[0])?.get(key[1])
+  }
+
+  setStringFeature(featureName: string, propertyName: string, value: string): void {
+    const key = SimInputBoard.featKey(featureName, propertyName)
+    if (!key) return
+    const [f, p] = key
+    let props = this.stringFeatures.get(f)
+    if (!props) {
+      props = new Map()
+      this.stringFeatures.set(f, props)
+    }
+    props.set(p, value ?? '')
+  }
+
+  getStringFeature(featureName: string, propertyName: string): string | undefined {
+    const key = SimInputBoard.featKey(featureName, propertyName)
+    if (!key) return undefined
+    return this.stringFeatures.get(key[0])?.get(key[1])
   }
 
   /** Previous-frame feature sample for edge conditions. */

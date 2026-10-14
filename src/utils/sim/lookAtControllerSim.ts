@@ -1422,10 +1422,10 @@ export function compileLookAtControllerNode(
   ensureLookAtControllerDyn(ctx.instanceStore, node.HandleId)
   ctx.addEventListener(
     ['LookAtParams_Add', 'LookAtParams_Remove', 'LookAtParams_UpdatePositions'],
-    (n, events, rt) => {
-      const dyn = ensureLookAtControllerDyn(rt.instanceStore, n.HandleId)
+    (events, rt) => {
+      const dyn = ensureLookAtControllerDyn(rt.instanceStore, node.HandleId)
       applyLookAtServiceEvents(dyn, events)
-      rebuildLookAtOutputs(dyn, n)
+      rebuildLookAtOutputs(dyn, node)
       publishLookAtGraphInputs(rt.board, dyn, dyn.publishedParts)
       if (dyn.eyesLookAtDirectionEnabled) {
         rt.eyesLookAtDirection = dyn.eyesLookAtDirection

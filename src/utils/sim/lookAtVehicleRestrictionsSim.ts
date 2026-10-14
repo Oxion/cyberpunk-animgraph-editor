@@ -99,8 +99,8 @@ export function compileLookAtVehicleRestrictionsNode(
   ctx: SimCompileCtx
 ): void {
   ensureLookAtVehicleRestrictionsDyn(ctx.instanceStore, node.HandleId)
-  ctx.addEventListener('LookAtVehicleRestrictionParams', (n, events, rt) => {
-    const dyn = ensureLookAtVehicleRestrictionsDyn(rt.instanceStore, n.HandleId)
+  ctx.addEventListener('LookAtVehicleRestrictionParams', (events, rt) => {
+    const dyn = ensureLookAtVehicleRestrictionsDyn(rt.instanceStore, node.HandleId)
     applyVehicleRestrictionEvents(dyn, events)
   })
 }

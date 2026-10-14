@@ -316,7 +316,8 @@
                 filteredFeatures.length ||
                 filteredVectorFeatures.length ||
                 filteredQuatFeatures.length ||
-                filteredBoolFeatures.length
+                filteredBoolFeatures.length ||
+                filteredStringFeatures.length
               "
               class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto"
             >
@@ -334,6 +335,14 @@
                 :label="`${f.feature}.${f.property}`"
                 :model-value="boolFeatureValue(f.feature, f.property)"
                 @update:model-value="(v) => onBoolFeatureValue(f.feature, f.property, v)"
+              />
+              <PropertyTextField
+                v-for="f in filteredStringFeatures"
+                :key="`s-${f.feature}.${f.property}`.toLowerCase()"
+                :label="`${f.feature}.${f.property}`"
+                :model-value="stringFeatureValue(f.feature, f.property)"
+                placeholder="None"
+                @update:model-value="(v) => onStringFeatureValue(f.feature, f.property, v)"
               />
               <PropertyVecBlock
                 v-for="f in filteredVectorFeatures"
@@ -1052,6 +1061,7 @@ import AnimSetupEntryCard from '@/components/sim/AnimSetupEntryCard.vue'
 import {
   PropertyBoolToggle,
   PropertyNumberControl,
+  PropertyTextField,
   PropertyNumberSlider,
   PropertyVecBlock,
 } from '@/components/nodeDetails'
@@ -1075,6 +1085,7 @@ const props = defineProps<{
     vectorFeatures?: Array<{ feature: string; property: string }>
     quatFeatures?: Array<{ feature: string; property: string }>
     boolFeatures?: Array<{ feature: string; property: string }>
+    stringFeatures?: Array<{ feature: string; property: string }>
     floatVars: string[]
     vectorVars?: string[]
     quatVars?: string[]
@@ -1091,6 +1102,7 @@ const props = defineProps<{
   vectorFeatureDrafts?: Record<string, { x: number; y: number; z: number; w: number }>
   quatFeatureDrafts?: Record<string, { x: number; y: number; z: number; w: number }>
   boolFeatureDrafts?: Record<string, boolean>
+  stringFeatureDrafts?: Record<string, string>
   floatVars: Record<string, number>
   vectorVars?: Record<string, { x: number; y: number; z: number; w: number }>
   quatVars?: Record<string, { x: number; y: number; z: number; w: number }>
@@ -1144,6 +1156,7 @@ const props = defineProps<{
   removeSetupEntry: (id: string) => void
   applyFeature: (feature: string, property: string, value: number) => void
   applyBoolFeature?: (feature: string, property: string, value: boolean) => void
+  applyStringFeature?: (feature: string, property: string, value: string) => void
   applyVectorFeatureAxis?: (
     feature: string,
     property: string,
@@ -1169,6 +1182,7 @@ const props = defineProps<{
   applyWrapperWeight: (name: string, value: number) => void
   resolveFeatureValue: (feature: string, property: string) => number
   resolveBoolFeatureValue?: (feature: string, property: string) => boolean
+  resolveStringFeatureValue?: (feature: string, property: string) => string
   resolveVectorFeatureValue?: (
     feature: string,
     property: string
@@ -1297,7 +1311,8 @@ const featuresTabCount = computed(
     props.discovered.features.length +
     (props.discovered.vectorFeatures?.length ?? 0) +
     (props.discovered.quatFeatures?.length ?? 0) +
-    (props.discovered.boolFeatures?.length ?? 0)
+    (props.discovered.boolFeatures?.length ?? 0) +
+    (props.discovered.stringFeatures?.length ?? 0)
 )
 
 const filteredFeatures = computed(() =>
@@ -1313,6 +1328,17 @@ const filteredFeatures = computed(() =>
 
 const filteredBoolFeatures = computed(() =>
   (props.discovered.boolFeatures ?? [])
+    .filter((f) => matchesQuery(`${f.feature}.${f.property}`, featuresFilter.value))
+    .slice()
+    .sort((a, b) => {
+      const byFeat = localeCmp(a.feature, b.feature)
+      if (byFeat !== 0) return byFeat
+      return localeCmp(a.property, b.property)
+    })
+)
+
+const filteredStringFeatures = computed(() =>
+  (props.discovered.stringFeatures ?? [])
     .filter((f) => matchesQuery(`${f.feature}.${f.property}`, featuresFilter.value))
     .slice()
     .sort((a, b) => {
@@ -1538,6 +1564,9 @@ const featureValue = (feature: string, property: string) =>
 const boolFeatureValue = (feature: string, property: string) =>
   props.resolveBoolFeatureValue?.(feature, property) === true
 
+const stringFeatureValue = (feature: string, property: string) =>
+  props.resolveStringFeatureValue?.(feature, property) ?? ''
+
 const vectorFeatureTarget = (feature: string, property: string) => {
   const v = props.resolveVectorFeatureValue?.(feature, property) ?? {
     x: 0,
@@ -1572,6 +1601,10 @@ const onFeatureValue = (feature: string, property: string, raw: string | number)
 
 const onBoolFeatureValue = (feature: string, property: string, value: boolean) => {
   props.applyBoolFeature?.(feature, property, value === true)
+}
+
+const onStringFeatureValue = (feature: string, property: string, value: string) => {
+  props.applyStringFeature?.(feature, property, value ?? '')
 }
 
 const onVectorFeatureAxis = (

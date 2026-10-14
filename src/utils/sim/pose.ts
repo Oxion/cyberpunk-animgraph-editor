@@ -257,13 +257,25 @@ export function interpolatePose(dst: Pose, a: Pose, b: Pose, alpha: number): voi
   for (let i = 0; i < tn; i++) {
     dst.tracks[i] = a.tracks[i]! * u + b.tracks[i]! * t
   }
+  // Preserve written bitmask — idle/mixer blends must not wipe input extras.
   if (a.extraTrackCount === b.extraTrackCount && a.extraTrackCount > 0) {
     const en = Math.min(dst.extraTrackCapacity, a.extraTrackCount)
     dst.extraTrackCount = en
     for (let i = 0; i < en; i++) {
       dst.extraTrackNames[i] = a.extraTrackNames[i] ?? ''
-      dst.extraTrackValues[i] =
-        (a.extraTrackValues[i] ?? 0) * u + (b.extraTrackValues[i] ?? 0) * t
+      const aw = a.extraTrackWritten[i] ?? 0
+      const bw = b.extraTrackWritten[i] ?? 0
+      if (aw && bw) {
+        dst.extraTrackValues[i] =
+          (a.extraTrackValues[i] ?? 0) * u + (b.extraTrackValues[i] ?? 0) * t
+        dst.extraTrackWritten[i] = 1
+      } else if (bw) {
+        dst.extraTrackValues[i] = b.extraTrackValues[i] ?? 0
+        dst.extraTrackWritten[i] = 1
+      } else {
+        dst.extraTrackValues[i] = a.extraTrackValues[i] ?? 0
+        dst.extraTrackWritten[i] = aw
+      }
     }
   } else {
     copyExtraTracks(dst, a)
@@ -301,6 +313,102 @@ export function interpolatePose(dst: Pose, a: Pose, b: Pose, alpha: number): voi
     }
   } else {
     copyTrackStack(dst, a)
+  }
+}
+
+/** PoseSetZero for BlendAddMul accumulator (zeros incl. quat.w). */
+export function zeroPoseAccumulate(pose: Pose): void {
+  pose.translation.fill(0)
+  pose.rotation.fill(0)
+  pose.scale.fill(0)
+  pose.tracks.fill(0)
+  clearStack(pose)
+  clearTrackStack(pose)
+  clearExtraTrackValues(pose)
+}
+
+/**
+ * Engine BlendAddMul — weighted accumulate into zeroed acc (hemisphere-aware quats).
+ */
+export function blendAddMulPose(acc: Pose, sample: Pose, weight: number): void {
+  if (!(weight > 0)) return
+  const w = weight
+  const n = Math.min(acc.boneCount, sample.boneCount)
+  for (let i = 0; i < n; i++) {
+    const ti = i * 3
+    const ri = i * 4
+    acc.translation[ti]! += sample.translation[ti]! * w
+    acc.translation[ti + 1]! += sample.translation[ti + 1]! * w
+    acc.translation[ti + 2]! += sample.translation[ti + 2]! * w
+    acc.scale[ti]! += sample.scale[ti]! * w
+    acc.scale[ti + 1]! += sample.scale[ti + 1]! * w
+    acc.scale[ti + 2]! += sample.scale[ti + 2]! * w
+    let sx = sample.rotation[ri]!
+    let sy = sample.rotation[ri + 1]!
+    let sz = sample.rotation[ri + 2]!
+    let sw = sample.rotation[ri + 3]!
+    const ax = acc.rotation[ri]!
+    const ay = acc.rotation[ri + 1]!
+    const az = acc.rotation[ri + 2]!
+    const aw = acc.rotation[ri + 3]!
+    if (ax * sx + ay * sy + az * sz + aw * sw < 0) {
+      sx = -sx
+      sy = -sy
+      sz = -sz
+      sw = -sw
+    }
+    acc.rotation[ri]! += sx * w
+    acc.rotation[ri + 1]! += sy * w
+    acc.rotation[ri + 2]! += sz * w
+    acc.rotation[ri + 3]! += sw * w
+  }
+  const tn = Math.min(acc.trackCount, sample.trackCount)
+  for (let i = 0; i < tn; i++) {
+    acc.tracks[i]! += sample.tracks[i]! * w
+  }
+  const en = Math.min(acc.extraTrackCapacity, sample.extraTrackCount)
+  if (en > acc.extraTrackCount) {
+    for (let i = acc.extraTrackCount; i < en; i++) {
+      acc.extraTrackNames[i] = sample.extraTrackNames[i] ?? ''
+    }
+    acc.extraTrackCount = en
+  }
+  for (let i = 0; i < en; i++) {
+    if (!(sample.extraTrackWritten[i] ?? 0)) continue
+    acc.extraTrackValues[i]! += (sample.extraTrackValues[i] ?? 0) * w
+    acc.extraTrackWritten[i] = 1
+  }
+}
+
+/** Engine RenormalizeSample / FastRenormalize after BlendAddMul. */
+export function renormalizePose(pose: Pose, sumWeight: number): void {
+  if (!(sumWeight > 1e-8)) return
+  const inv = 1 / sumWeight
+  const n = pose.boneCount
+  for (let i = 0; i < n; i++) {
+    const ti = i * 3
+    const ri = i * 4
+    pose.translation[ti]! *= inv
+    pose.translation[ti + 1]! *= inv
+    pose.translation[ti + 2]! *= inv
+    pose.scale[ti]! *= inv
+    pose.scale[ti + 1]! *= inv
+    pose.scale[ti + 2]! *= inv
+    let x = pose.rotation[ri]! * inv
+    let y = pose.rotation[ri + 1]! * inv
+    let z = pose.rotation[ri + 2]! * inv
+    let w = pose.rotation[ri + 3]! * inv
+    const len = Math.hypot(x, y, z, w) || 1
+    pose.rotation[ri] = x / len
+    pose.rotation[ri + 1] = y / len
+    pose.rotation[ri + 2] = z / len
+    pose.rotation[ri + 3] = w / len
+  }
+  for (let i = 0; i < pose.trackCount; i++) {
+    pose.tracks[i]! *= inv
+  }
+  for (let i = 0; i < pose.extraTrackCount; i++) {
+    if (pose.extraTrackWritten[i]) pose.extraTrackValues[i]! *= inv
   }
 }
 

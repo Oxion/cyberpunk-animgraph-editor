@@ -1,14 +1,28 @@
 /**
  * Singleton animgraph simulation runtime (clock, runners, board, libraries).
  * Created once for the app; UI (SimPanel, windows) imports from here.
+ * Drivers / console attach here — not inside useAnimgraphSim.
  */
 import { useAnimgraphSim } from '../composables/useAnimgraphSim'
+import { installSimLookAtConsole } from '../utils/sim/simLookAtDriver'
+import { installSimMixerSlotConsole } from '../utils/sim/simMixerSlotDriver'
+import {
+  createSimWorkspotHubDriver,
+  installSimWorkspotHubConsole,
+} from '../utils/sim/simWorkspotHubDriver'
 
 export const animgraphSim = useAnimgraphSim()
 
 export const {
   enabled: simEnabled,
   active: simActive,
+  getPrimaryRunner: simGetPrimaryRunner,
+  withFeatureBatch: simWithFeatureBatch,
+  getFeature: simGetFeature,
+  getBoolFeature: simGetBoolFeature,
+  getStringFeature: simGetStringFeature,
+  getVectorFeature: simGetVectorFeature,
+  getQuatFeature: simGetQuatFeature,
   /** Active-diagram view of snapshotsByDiagram (computed). */
   snapshot: simSnapshot,
   snapshotsByDiagram: simSnapshotsByDiagram,
@@ -21,6 +35,7 @@ export const {
   vectorFeatureDrafts: simVectorFeatureDrafts,
   quatFeatureDrafts: simQuatFeatureDrafts,
   boolFeatureDrafts: simBoolFeatureDrafts,
+  stringFeatureDrafts: simStringFeatureDrafts,
   floatVarDrafts: simFloatVarDrafts,
   vectorVarDrafts: simVectorVarDrafts,
   quatVarDrafts: simQuatVarDrafts,
@@ -44,6 +59,7 @@ export const {
   draftVectorFeatureValue: simDraftVectorFeatureValue,
   draftQuatFeatureValue: simDraftQuatFeatureValue,
   draftBoolFeatureValue: simDraftBoolFeatureValue,
+  draftStringFeatureValue: simDraftStringFeatureValue,
   getClip: simGetClip,
   lookupClip: simLookupClip,
   isClipActive: simIsClipActive,
@@ -103,6 +119,7 @@ export const {
   setWrapperWeight: simSetWrapperWeight,
   setFeature: simSetFeature,
   setBoolFeature: simSetBoolFeature,
+  setStringFeature: simSetStringFeature,
   setVectorFeature: simSetVectorFeature,
   setVectorFeatureAxis: simSetVectorFeatureAxis,
   setQuatFeature: simSetQuatFeature,
@@ -110,3 +127,22 @@ export const {
   rebind: simRebind,
   dispose: disposeAnimgraphSim,
 } = animgraphSim
+
+/** WorkspotHub driver — UI and `__simWorkspotHub` share this instance. */
+export const simWorkspotHub = createSimWorkspotHubDriver(() => ({
+  setFeature: simSetFeature,
+  setBoolFeature: simSetBoolFeature,
+  setStringFeature: simSetStringFeature,
+  setVectorFeature: simSetVectorFeature,
+  setQuatFeature: simSetQuatFeature,
+  getFeature: simGetFeature,
+  getBoolFeature: simGetBoolFeature,
+  getStringFeature: simGetStringFeature,
+  getVectorFeature: simGetVectorFeature,
+  getQuatFeature: simGetQuatFeature,
+  withBatch: simWithFeatureBatch,
+}))
+
+installSimLookAtConsole(simGetPrimaryRunner)
+installSimMixerSlotConsole(simGetPrimaryRunner)
+installSimWorkspotHubConsole(simWorkspotHub)

@@ -45,7 +45,11 @@
  *   Node: ExtractTrajectory → 2-frame cache + quintic error decay → ApplyTrajectory;
  *   SnapToTerrain tracks excluded; optional rotationLimits. No LOD/ragdoll (sim TODO).
  *   GraphSlot: WorkspotInertialization.duration + hit.hitType==0 → request, clear duration.
- *   MixerSlot requester deferred (MixerSlot not implemented).
+ *   MixerSlot: service-event idle/params/addIdle/trajectory; Sample idle→normal→
+ *   override→additive on inputLink; inertia 0.5s; facial ignored (FacialMixerSlot).
+ *   Shared weight table; UpdateWithEventsWeight gate; FACE_ANIMS mute; BlendAddMul
+ *   normals; traj accumulate+slerp; CollectExtraData from clip.extraFloatTracks.
+ *   Driver clear: 1 miss frame → empty MixerSlotParams unless setCacheParams(true).
  */
 
 /** Frame-scoped inertialization request (engine AnimNodeUpdateContext fields). */

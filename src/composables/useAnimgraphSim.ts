@@ -34,7 +34,6 @@ import {
   SimGraphRunner,
   type SimGraphSlotHost,
 } from '../utils/sim/SimGraphRunner'
-import { installSimLookAtConsole } from '../utils/sim/simLookAtDriver'
 import { SimInputBoard } from '../utils/sim/SimInputBoard'
 import {
   IDENTITY_QUAT_VEC4,
@@ -121,6 +120,8 @@ export function useAnimgraphSim() {
   const quatFeatureDrafts = ref<Record<string, SimVec4>>({})
   /** Bool AnimFeature drafts: feature\\0property → boolean */
   const boolFeatureDrafts = ref<Record<string, boolean>>({})
+  /** CName AnimFeature drafts: feature\\0property → string */
+  const stringFeatureDrafts = ref<Record<string, string>>({})
   const floatVarDrafts = ref<Record<string, number>>({})
   const vectorVarDrafts = ref<Record<string, SimVec4>>({})
   const quatVarDrafts = ref<Record<string, SimVec4>>({})
@@ -215,12 +216,12 @@ export function useAnimgraphSim() {
     return r
   }
 
-  /** Browser console: `__simLookAt.attach()` / `.add('Eyes', {x,y,z,w})` */
-  installSimLookAtConsole(() => {
+  /** Active-diagram runner for drivers (LookAt / MixerSlot attach). */
+  const getPrimaryRunner = () => {
     const id = activeDiagramId.value
     if (!id) return null
     return runners.get(id) ?? ensureRunner(id)
-  })
+  }
 
   /**
    * Active-diagram view into `snapshotsByDiagram` (not a separate store).
@@ -246,6 +247,7 @@ export function useAnimgraphSim() {
     const vectorFeatures: { feature: string; property: string }[] = []
     const quatFeatures: { feature: string; property: string }[] = []
     const boolFeatures: { feature: string; property: string }[] = []
+    const stringFeatures: { feature: string; property: string }[] = []
     const floatVars: string[] = []
     const vectorVars: string[] = []
     const quatVars: string[] = []
@@ -260,6 +262,7 @@ export function useAnimgraphSim() {
     const vecFeatSeen = new Set<string>()
     const quatFeatSeen = new Set<string>()
     const boolFeatSeen = new Set<string>()
+    const stringFeatSeen = new Set<string>()
     const mergeUnique = (into: string[], seen: Set<string>, names: string[]) => {
       for (const n of names) {
         const k = n.toLowerCase()
@@ -307,6 +310,12 @@ export function useAnimgraphSim() {
         boolFeatSeen.add(k)
         boolFeatures.push(f)
       }
+      for (const f of fromGraph.stringFeatures) {
+        const k = `${f.feature}\0${f.property}`.toLowerCase()
+        if (stringFeatSeen.has(k)) continue
+        stringFeatSeen.add(k)
+        stringFeatures.push(f)
+      }
       mergeUnique(floatVars, floatSeen, fromGraph.floatVars)
       mergeUnique(vectorVars, vectorSeen, fromGraph.vectorVars)
       mergeUnique(quatVars, quatVarSeen, fromGraph.quatVars)
@@ -338,6 +347,9 @@ export function useAnimgraphSim() {
     boolFeatures.sort((a, b) =>
       `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
     )
+    stringFeatures.sort((a, b) =>
+      `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
+    )
     floatVars.sort((a, b) => a.localeCompare(b))
     vectorVars.sort((a, b) => a.localeCompare(b))
     quatVars.sort((a, b) => a.localeCompare(b))
@@ -354,6 +366,7 @@ export function useAnimgraphSim() {
       vectorFeatures,
       quatFeatures,
       boolFeatures,
+      stringFeatures,
       floatVars,
       vectorVars,
       quatVars,
@@ -450,6 +463,11 @@ export function useAnimgraphSim() {
       const sep = key.indexOf('\0')
       if (sep < 0) continue
       board.value.setBoolFeature(key.slice(0, sep), key.slice(sep + 1), val === true)
+    }
+    for (const [key, val] of Object.entries(stringFeatureDrafts.value)) {
+      const sep = key.indexOf('\0')
+      if (sep < 0) continue
+      board.value.setStringFeature(key.slice(0, sep), key.slice(sep + 1), val ?? '')
     }
     for (const [name, val] of Object.entries(floatVarDrafts.value)) {
       const n = Number(val)
@@ -667,37 +685,51 @@ export function useAnimgraphSim() {
     for (const id of [...runners.keys()]) {
       if (!keep.has(id)) runners.delete(id)
     }
+    // Clear then bind: compile seeds board defaults from nodes.
+    board.value.clearAll()
     for (const id of ids) {
       const data = getRenderData(id)
       const runner = ensureRunner(id)
-      runner.bind(data)
+      runner.bind(data, board.value)
       runner.setClipLibrary(clipLibrary.value)
       runner.setAnimDatabaseLibrary(animDbLibrary.value)
       runner.setClipPoseLibrary(clipPoseLibrary.value)
       runner.setActiveRig(rigLibrary.value.getActive())
     }
-    board.value.clearAll()
     clock.value.reset()
+    // Drafts mirror board (incl. compile-time feature seeds).
     const drafts: Record<string, number> = {}
     for (const f of discovered.value.features) {
-      drafts[featureKey(f.feature, f.property)] = 0
+      drafts[featureKey(f.feature, f.property)] =
+        board.value.getFeature(f.feature, f.property) ?? 0
     }
     featureDrafts.value = drafts
     const vecDrafts: Record<string, SimVec4> = {}
     for (const f of discovered.value.vectorFeatures) {
-      vecDrafts[featureKey(f.feature, f.property)] = { ...ZERO_VEC4 }
+      vecDrafts[featureKey(f.feature, f.property)] =
+        board.value.getVectorFeature(f.feature, f.property) ?? { ...ZERO_VEC4 }
     }
     vectorFeatureDrafts.value = vecDrafts
     const quatDrafts: Record<string, SimVec4> = {}
     for (const f of discovered.value.quatFeatures) {
-      quatDrafts[featureKey(f.feature, f.property)] = { ...IDENTITY_QUAT_VEC4 }
+      quatDrafts[featureKey(f.feature, f.property)] =
+        board.value.getQuatFeature(f.feature, f.property) ?? {
+          ...IDENTITY_QUAT_VEC4,
+        }
     }
     quatFeatureDrafts.value = quatDrafts
     const boolDrafts: Record<string, boolean> = {}
     for (const f of discovered.value.boolFeatures) {
-      boolDrafts[featureKey(f.feature, f.property)] = false
+      boolDrafts[featureKey(f.feature, f.property)] =
+        board.value.getBoolFeature(f.feature, f.property) ?? false
     }
     boolFeatureDrafts.value = boolDrafts
+    const stringDrafts: Record<string, string> = {}
+    for (const f of discovered.value.stringFeatures) {
+      stringDrafts[featureKey(f.feature, f.property)] =
+        board.value.getStringFeature(f.feature, f.property) ?? ''
+    }
+    stringFeatureDrafts.value = stringDrafts
     floatVarDrafts.value = {}
     vectorVarDrafts.value = {}
     quatVarDrafts.value = {}
@@ -945,6 +977,23 @@ export function useAnimgraphSim() {
     publish(0)
   }
 
+  /** Nested withBatch depth — publish only when outermost batch ends. */
+  let featureBatchDepth = 0
+
+  const withFeatureBatch = (fn: () => void) => {
+    featureBatchDepth++
+    try {
+      fn()
+    } finally {
+      featureBatchDepth--
+      if (featureBatchDepth === 0) publish(0)
+    }
+  }
+
+  const publishFeatureUnlessBatch = () => {
+    if (featureBatchDepth === 0) publish(0)
+  }
+
   const setFeature = (feature: string, property: string, value: number) => {
     const n = Number(value)
     if (!feature || !property || !Number.isFinite(n)) return
@@ -964,7 +1013,7 @@ export function useAnimgraphSim() {
     next[key] = n
     featureDrafts.value = next
     board.value.setFeature(feature, property, n)
-    publish(0)
+    publishFeatureUnlessBatch()
   }
 
   const draftFeatureValue = (feature: string, property: string) => {
@@ -1016,7 +1065,73 @@ export function useAnimgraphSim() {
     next[key] = value === true
     boolFeatureDrafts.value = next
     board.value.setBoolFeature(feature, property, value === true)
-    publish(0)
+    publishFeatureUnlessBatch()
+  }
+
+  const draftStringFeatureValue = (feature: string, property: string): string => {
+    const key = featureKey(feature, property)
+    if (key in stringFeatureDrafts.value) return stringFeatureDrafts.value[key] ?? ''
+    const want = `${feature}.${property}`.toLowerCase()
+    for (const [k, v] of Object.entries(stringFeatureDrafts.value)) {
+      if (k.toLowerCase() === want) return v
+    }
+    return ''
+  }
+
+  const setStringFeature = (feature: string, property: string, value: string) => {
+    if (!feature || !property) return
+    const key = featureKey(feature, property)
+    const next: Record<string, string> = { ...stringFeatureDrafts.value }
+    const want = `${feature}.${property}`.toLowerCase()
+    for (const k of Object.keys(next)) {
+      if (k === key) continue
+      if (k.includes('\0')) {
+        const sep = k.indexOf('\0')
+        const label = `${k.slice(0, sep)}.${k.slice(sep + 1)}`.toLowerCase()
+        if (label === want) delete next[k]
+      } else if (k.toLowerCase() === want) {
+        delete next[k]
+      }
+    }
+    next[key] = value ?? ''
+    stringFeatureDrafts.value = next
+    board.value.setStringFeature(feature, property, value ?? '')
+    publishFeatureUnlessBatch()
+  }
+
+  const getFeature = (feature: string, property: string): number | undefined => {
+    const key = featureKey(feature, property)
+    if (key in featureDrafts.value) {
+      const n = Number(featureDrafts.value[key])
+      return Number.isFinite(n) ? n : undefined
+    }
+    return board.value.getFeature(feature, property)
+  }
+
+  const getBoolFeature = (feature: string, property: string): boolean | undefined => {
+    const key = featureKey(feature, property)
+    if (key in boolFeatureDrafts.value) return boolFeatureDrafts.value[key] === true
+    return board.value.getBoolFeature(feature, property)
+  }
+
+  const getStringFeature = (feature: string, property: string): string | undefined => {
+    const key = featureKey(feature, property)
+    if (key in stringFeatureDrafts.value) return stringFeatureDrafts.value[key]
+    return board.value.getStringFeature(feature, property)
+  }
+
+  const getVectorFeature = (feature: string, property: string): SimVec4 | undefined => {
+    const key = featureKey(feature, property)
+    const direct = vectorFeatureDrafts.value[key]
+    if (direct) return { ...direct }
+    return board.value.getVectorFeature(feature, property)
+  }
+
+  const getQuatFeature = (feature: string, property: string): SimVec4 | undefined => {
+    const key = featureKey(feature, property)
+    const direct = quatFeatureDrafts.value[key]
+    if (direct) return { ...direct }
+    return board.value.getQuatFeature(feature, property)
   }
 
   const setVectorFeature = (feature: string, property: string, value: SimVec4) => {
@@ -1043,7 +1158,7 @@ export function useAnimgraphSim() {
     next[key] = v
     vectorFeatureDrafts.value = next
     board.value.setVectorFeature(feature, property, v)
-    publish(0)
+    publishFeatureUnlessBatch()
   }
 
   const setVectorFeatureAxis = (
@@ -1093,7 +1208,7 @@ export function useAnimgraphSim() {
     next[key] = v
     quatFeatureDrafts.value = next
     board.value.setQuatFeature(feature, property, v)
-    publish(0)
+    publishFeatureUnlessBatch()
   }
 
   const setQuatFeatureAxis = (
@@ -1576,6 +1691,13 @@ export function useAnimgraphSim() {
   return {
     enabled,
     active,
+    getPrimaryRunner,
+    withFeatureBatch,
+    getFeature,
+    getBoolFeature,
+    getStringFeature,
+    getVectorFeature,
+    getQuatFeature,
     snapshot,
     snapshotsByDiagram,
     snapshotForDiagram,
@@ -1587,6 +1709,7 @@ export function useAnimgraphSim() {
     vectorFeatureDrafts,
     quatFeatureDrafts,
     boolFeatureDrafts,
+    stringFeatureDrafts,
     floatVarDrafts,
     vectorVarDrafts,
     quatVarDrafts,
@@ -1610,6 +1733,7 @@ export function useAnimgraphSim() {
     draftVectorFeatureValue,
     draftQuatFeatureValue,
     draftBoolFeatureValue,
+    draftStringFeatureValue,
     getClip,
     lookupClip,
     isClipActive,
@@ -1669,6 +1793,7 @@ export function useAnimgraphSim() {
     setWrapperWeight,
     setFeature,
     setBoolFeature,
+    setStringFeature,
     setVectorFeature,
     setVectorFeatureAxis,
     setQuatFeature,

@@ -25,13 +25,11 @@ export type SimServiceDispatchCtx = {
  * (Engine calls per-event; we batch so nodes can rebuild once.)
  */
 export type SimServiceEventBatchHandler = (
-  node: AnimgraphNode,
   events: readonly SimServiceEvent[],
   rt: SimServiceDispatchCtx
 ) => void
 
 export type SimServiceEventListener = {
-  handleId: string
   kinds: ReadonlySet<SimServiceEventKind>
   onEvents: SimServiceEventBatchHandler
 }
@@ -39,6 +37,8 @@ export type SimServiceEventListener = {
 /** Shared compile services (engine AnimInstanceBufferCompiler subset). */
 export type SimCompileCtx = {
   instanceStore: InstanceStore
+  /** Shared input board — nodes may seed feature defaults at bind/compile. */
+  board: SimInputBoard
   /**
    * Engine AddEventListener — register for ServiceEvent kinds.
    * Bound to the current node being compiled.
@@ -64,23 +64,24 @@ export type SimCompileNodeFn = (
 export function compileSimGraph(
   handles: Map<string, AnimgraphNode>,
   instanceStore: InstanceStore,
-  compileNode: SimCompileNodeFn
+  compileNode: SimCompileNodeFn,
+  board: SimInputBoard
 ): SimCompiledGraph {
   const serviceListeners: SimServiceEventListener[] = []
+  const ctx: SimCompileCtx = {
+    instanceStore,
+    board,
+    addEventListener(kinds, onEvents) {
+      const list = (Array.isArray(kinds) ? kinds : [kinds]) as SimServiceEventKind[]
+      serviceListeners.push({
+        kinds: new Set(list),
+        onEvents,
+      })
+    },
+  }
 
-  for (const [handleId, node] of handles) {
+  for (const [, node] of handles) {
     if (!node) continue
-    const ctx: SimCompileCtx = {
-      instanceStore,
-      addEventListener(kinds, onEvents) {
-        const list = (Array.isArray(kinds) ? kinds : [kinds]) as SimServiceEventKind[]
-        serviceListeners.push({
-          handleId,
-          kinds: new Set(list),
-          onEvents,
-        })
-      },
-    }
     compileNode(node, ctx)
   }
 
@@ -102,8 +103,6 @@ export function dispatchCompiledServiceEvents(
   for (const L of compiled.serviceListeners) {
     const matched = events.filter((e) => L.kinds.has(e.kind))
     if (matched.length === 0) continue
-    const node = rt.handles.get(L.handleId)
-    if (!node) continue
-    L.onEvents(node, matched, rt)
+    L.onEvents(matched, rt)
   }
 }

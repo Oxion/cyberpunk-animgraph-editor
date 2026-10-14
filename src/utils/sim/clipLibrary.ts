@@ -28,6 +28,8 @@ export type ClipMeta = {
   source?: string
   /** animAnimationType from .anims.json (Normal / Additive*) */
   animationType?: string
+  /** Optional extra float track names (CollectExtraData). */
+  extraFloatTracks?: string[]
 }
 
 /** One animAnimSetupEntry: animSet + priority + wrapper gates. */

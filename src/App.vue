@@ -226,6 +226,7 @@
                 :vector-feature-drafts="simVectorFeatureDrafts"
                 :quat-feature-drafts="simQuatFeatureDrafts"
                 :bool-feature-drafts="simBoolFeatureDrafts"
+                :string-feature-drafts="simStringFeatureDrafts"
                 :float-vars="simFloatVarDrafts"
                 :vector-vars="simVectorVarDrafts"
                 :quat-vars="simQuatVarDrafts"
@@ -265,6 +266,7 @@
                 :remove-setup-entry="simRemoveSetupEntry"
                 :apply-feature="simSetFeature"
                 :apply-bool-feature="simSetBoolFeature"
+                :apply-string-feature="simSetStringFeature"
                 :apply-vector-feature-axis="simSetVectorFeatureAxis"
                 :apply-quat-feature-axis="simSetQuatFeatureAxis"
                 :apply-float-var="simSetFloatVar"
@@ -280,6 +282,7 @@
                 :apply-wrapper-weight="simSetWrapperWeight"
                 :resolve-feature-value="simDraftFeatureValue"
                 :resolve-bool-feature-value="simDraftBoolFeatureValue"
+                :resolve-string-feature-value="simDraftStringFeatureValue"
                 :resolve-vector-feature-value="simDraftVectorFeatureValue"
                 :resolve-quat-feature-value="simDraftQuatFeatureValue"
                 @update:event-draft="simEventDraft = $event"
@@ -644,6 +647,9 @@ import {
   simApplyProjectSimResources,
   simBoolFeatureDrafts,
   simBoolVarDrafts,
+  simDraftStringFeatureValue,
+  simSetStringFeature,
+  simStringFeatureDrafts,
   simClearAnimsetGlb,
   simClipNames,
   simClipPoseSets,

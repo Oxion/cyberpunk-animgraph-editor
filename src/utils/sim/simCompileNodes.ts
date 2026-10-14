@@ -6,6 +6,8 @@ import type { AnimgraphNode } from '../graph/animgraphTypes'
 import type { SimCompileCtx } from './simCompile'
 import { compileLookAtControllerNode } from './lookAtControllerSim'
 import { compileLookAtVehicleRestrictionsNode } from './lookAtVehicleRestrictionsSim'
+import { compileMixerSlotNode } from './mixerSlotSim'
+import { compileWorkspotHubNode } from './workspotHubSim'
 
 export function compileSimNode(
   node: AnimgraphNode,
@@ -18,5 +20,13 @@ export function compileSimNode(
   }
   if (t === 'animAnimNode_LookAtApplyVehicleRestrictions') {
     compileLookAtVehicleRestrictionsNode(node, ctx)
+    return
+  }
+  if (t === 'animAnimNode_MixerSlot') {
+    compileMixerSlotNode(node, ctx)
+    return
+  }
+  if (t === 'animAnimNode_WorkspotHub') {
+    compileWorkspotHubNode(node, ctx)
   }
 }

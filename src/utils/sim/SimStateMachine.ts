@@ -17,6 +17,7 @@ import {
 import type { SimInputBoard } from './SimInputBoard'
 import type { SimConditionDyn } from './conditionDyn'
 import type { SimConditionTruth, SimNodeState, SimSmState } from './simTypes'
+import { UPDATE_WORKSPOT_FEATURE, UpdateWorkspotProp as P } from './workspotHubKeys'
 
 function listHandles(
   handles: Map<string, AnimgraphNode>,
@@ -497,6 +498,8 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   quatFeatures: Array<{ feature: string; property: string }>
   /** Bool AnimFeatures (BoolInput / BoolFeature) — one entry per group.name */
   boolFeatures: Array<{ feature: string; property: string }>
+  /** CName AnimFeatures (UpdateWorkspot.animName, …) */
+  stringFeatures: Array<{ feature: string; property: string }>
   floatVars: string[]
   vectorVars: string[]
   quatVars: string[]
@@ -514,10 +517,12 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   const vectorFeatures: Array<{ feature: string; property: string }> = []
   const quatFeatures: Array<{ feature: string; property: string }> = []
   const boolFeatures: Array<{ feature: string; property: string }> = []
+  const stringFeatures: Array<{ feature: string; property: string }> = []
   const featureKeys = new Set<string>()
   const vectorKeys = new Set<string>()
   const quatKeys = new Set<string>()
   const boolKeys = new Set<string>()
+  const stringKeys = new Set<string>()
   const floatVars = new Set<string>()
   const vectorVars = new Set<string>()
   const quatVars = new Set<string>()
@@ -593,6 +598,22 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
     boolFeatures.push({ feature, property })
   }
 
+  const addStringFeature = (feature: string, property: string, preferDisplay = false) => {
+    if (!feature || !property || feature === 'None' || property === 'None') return
+    const key = `${feature}.${property}`.toLowerCase()
+    if (stringKeys.has(key)) {
+      if (preferDisplay) {
+        const i = stringFeatures.findIndex(
+          (f) => `${f.feature}.${f.property}`.toLowerCase() === key
+        )
+        if (i >= 0) stringFeatures[i] = { feature, property }
+      }
+      return
+    }
+    stringKeys.add(key)
+    stringFeatures.push({ feature, property })
+  }
+
   const addWrapper = (name: string) => {
     if (name && name !== 'None') wrappers.add(name)
   }
@@ -608,6 +629,29 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
       // GraphSlot C++ TAnimInstanceInput binds (not serialized on the node).
       addFeature('WorkspotInertialization', 'duration', true)
       addFeature('hit', 'hitType', true)
+    }
+    if (t === 'animAnimNode_WorkspotHub') {
+      // WorkspotHub TAnimInstanceInput binds (AnimFeatureUpdateWorkspot).
+      addFeature(UPDATE_WORKSPOT_FEATURE, P.recordID, true)
+      addFeature(UPDATE_WORKSPOT_FEATURE, P.updateCounter, true)
+      addFeature(UPDATE_WORKSPOT_FEATURE, P.animBlendTime, true)
+      addFeature(UPDATE_WORKSPOT_FEATURE, P.forcedBlendIn, true)
+      addFeature(UPDATE_WORKSPOT_FEATURE, P.forceAnimTime, true)
+      addFeature(UPDATE_WORKSPOT_FEATURE, P.timeScale, true)
+      addFeature(UPDATE_WORKSPOT_FEATURE, P.animationStartTime, true)
+      addFeature(UPDATE_WORKSPOT_FEATURE, P.facialKeyWeight, true)
+      addFeature(UPDATE_WORKSPOT_FEATURE, P.globalBlendDuration, true)
+      addBoolFeature(UPDATE_WORKSPOT_FEATURE, P.isPaused, true)
+      addBoolFeature(UPDATE_WORKSPOT_FEATURE, P.isLooped, true)
+      addBoolFeature(UPDATE_WORKSPOT_FEATURE, P.isExitAnim, true)
+      addBoolFeature(UPDATE_WORKSPOT_FEATURE, P.enableMotion, true)
+      addBoolFeature(UPDATE_WORKSPOT_FEATURE, P.isActive, true)
+      addBoolFeature(UPDATE_WORKSPOT_FEATURE, P.isAnimValid, true)
+      addBoolFeature(UPDATE_WORKSPOT_FEATURE, P.globalBlendIn, true)
+      addFeature(UPDATE_WORKSPOT_FEATURE, P.slotNameHash, true)
+      addStringFeature(UPDATE_WORKSPOT_FEATURE, P.animName, true)
+      addStringFeature(UPDATE_WORKSPOT_FEATURE, P.facialIdleAnimation, true)
+      addStringFeature(UPDATE_WORKSPOT_FEATURE, P.facialIdleKeyAnimation, true)
     }
     if (
       t === 'animAnimStateTransitionCondition_FloatFeature' ||
@@ -730,12 +774,16 @@ export function collectDiscoveredInputs(handles: Map<string, AnimgraphNode>): {
   boolFeatures.sort((a, b) =>
     `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
   )
+  stringFeatures.sort((a, b) =>
+    `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
+  )
 
   return {
     features,
     vectorFeatures,
     quatFeatures,
     boolFeatures,
+    stringFeatures,
     floatVars: [...floatVars].sort((a, b) => a.localeCompare(b)),
     vectorVars: [...vectorVars].sort((a, b) => a.localeCompare(b)),
     quatVars: [...quatVars].sort((a, b) => a.localeCompare(b)),

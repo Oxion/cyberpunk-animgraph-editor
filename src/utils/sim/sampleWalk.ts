@@ -115,6 +115,8 @@ import {
 } from './lookAtControllerSim'
 import { sampleLookAtVehicleRestrictions } from './lookAtVehicleRestrictionsSim'
 import { sampleLookAtPose360 } from './lookAtPose360Sim'
+import { sampleMixerSlot } from './mixerSlotSim'
+import { sampleWorkspotHub } from './workspotHubSim'
 import {
   evaluateSmTransitionBlendAlpha,
   smShouldUseFrozenPose,
@@ -664,6 +666,10 @@ function sampleNodeDispatch(
       return sampleDirectConnConstraint(node, ctx, out, visited)
     case 'animAnimNode_FPPCamera':
       return sampleFppCameraNode(node, ctx, out, visited)
+    case 'animAnimNode_MixerSlot':
+      return sampleMixerSlotNode(node, ctx, out, visited)
+    case 'animAnimNode_WorkspotHub':
+      return sampleWorkspotHubNode(node, ctx, out, visited)
     case 'animAnimNode_LookAtController':
       return sampleLookAtControllerNode(node, ctx, out, visited)
     case 'animAnimNode_LookAt':
@@ -1535,6 +1541,38 @@ function sampleLookAtBoneAim(
     targetMs: snap?.targetMs ?? { x: 0, y: 0, z: 0 },
   })
   return ok
+}
+
+/** Child pose → MixerSlot blends idle/normal/override/additive on top. */
+function sampleMixerSlotNode(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'MixerSlot')
+  if (ctx.instanceStore) {
+    sampleMixerSlot(node, ctx.instanceStore, ctx, out)
+  }
+  return ok
+}
+
+/** WorkspotHub — clip / parallel socket / facial (no inputLink). */
+function sampleWorkspotHubNode(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  if (!ctx.instanceStore) {
+    writeRefPose(ctx, out)
+    return false
+  }
+  sampleWorkspotHub(node, ctx.instanceStore, ctx, out, (linked, linkOut) =>
+    samplePoseFromNode(linked, ctx, linkOut)
+  )
+  void visited
+  return true
 }
 
 /** Child pose → refresh sphere bones → rebuild Eyes.* (engine OnSample). */
