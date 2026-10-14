@@ -184,6 +184,65 @@ export type MixerSlotTrajectoryBlendParams = {
   }
 }
 
+/** anim::IKTargetRef — part = chainName. */
+export type SimIkTargetRef = {
+  id: number
+  part: string
+}
+
+/** anim::IKTargetRequest — lower priority value = higher importance. */
+export type SimIkTargetRequest = {
+  weightPosition: number
+  weightOrientation: number
+  poleVectorOverrideWeight: number
+  transitionIn: number
+  transitionOut: number
+  priority: number
+}
+
+export const IK_PRIORITY_DEFAULT = 0
+export const IK_PRIORITY_HIGH = -100
+export const IK_PRIORITY_LOW = 100
+/** Graph-sourced requests default priority (engine c_priorityAnimGraph). */
+export const IK_PRIORITY_ANIM_GRAPH = IK_PRIORITY_LOW
+
+export function defaultIkTargetRequest(
+  patch?: Partial<SimIkTargetRequest>
+): SimIkTargetRequest {
+  return {
+    weightPosition: 1,
+    weightOrientation: 1,
+    poleVectorOverrideWeight: 0,
+    transitionIn: 0,
+    transitionOut: 0,
+    priority: IK_PRIORITY_DEFAULT,
+    ...patch,
+  }
+}
+
+export type IKTargetParams_Add = {
+  kind: 'IKTargetParams_Add'
+  ref: SimIkTargetRef
+  request: SimIkTargetRequest
+}
+
+export type IKTargetParams_Remove = {
+  kind: 'IKTargetParams_Remove'
+  ref: SimIkTargetRef
+}
+
+export type IKTargetParamsUpdateInfo = {
+  ref: SimIkTargetRef
+  externalTargetPositionWs: SimVec4
+  externalTargetOrientationWs: SimVec4
+  hasValidPosition: boolean
+}
+
+export type IKTargetParams_Update = {
+  kind: 'IKTargetParams_Update'
+  infos: IKTargetParamsUpdateInfo[]
+}
+
 export type SimServiceEvent =
   | LookAtParams_Add
   | LookAtParams_Remove
@@ -193,6 +252,9 @@ export type SimServiceEvent =
   | MixerSlotIdleParams
   | MixerSlotAddIdleParams
   | MixerSlotTrajectoryBlendParams
+  | IKTargetParams_Add
+  | IKTargetParams_Remove
+  | IKTargetParams_Update
 
 export function isLookAtServiceEvent(e: SimServiceEvent): boolean {
   return (
@@ -208,6 +270,14 @@ export function isMixerSlotServiceEvent(e: SimServiceEvent): boolean {
     e.kind === 'MixerSlotIdleParams' ||
     e.kind === 'MixerSlotAddIdleParams' ||
     e.kind === 'MixerSlotTrajectoryBlendParams'
+  )
+}
+
+export function isIkTargetServiceEvent(e: SimServiceEvent): boolean {
+  return (
+    e.kind === 'IKTargetParams_Add' ||
+    e.kind === 'IKTargetParams_Remove' ||
+    e.kind === 'IKTargetParams_Update'
   )
 }
 

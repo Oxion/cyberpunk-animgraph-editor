@@ -149,9 +149,7 @@ import { InstanceStore } from '../InstanceStore'
 import { createFppCameraDyn, type FppCameraDyn } from './fppCameraDyn'
 import { FPP_CAMERA_PITCH } from './fppCameraKeys'
 import { activateFppCamera, updateFppCamera } from './fppCameraUpdate'
-import { LookAtControllerDynDef } from './lookAtControllerDyn'
 import { updateLookAtController } from './lookAtControllerSim'
-import { MixerSlotDynDef } from './mixerSlotDyn'
 import {
   computeMixerSlotWeights,
   prepareMixerSlotState,
@@ -164,7 +162,6 @@ import {
   IDENTITY_SPHERE_XF,
   type LookAtSphereXf,
 } from './lookAtMath'
-import { LookAtVehicleRestrictionsDynDef } from './lookAtVehicleRestrictionsDyn'
 import { updateLookAtVehicleRestrictions } from './lookAtVehicleRestrictionsSim'
 import {
   compileSimGraph,
@@ -172,6 +169,11 @@ import {
   type SimCompiledGraph,
 } from './simCompile'
 import { compileSimNode } from './simCompileNodes'
+import {
+  ensureIkTargetsController,
+  resolveGenerateIkChainSettings,
+  resolveHumanIkChainSettings,
+} from './ikTargetsControllerSim'
 import { LookAtPose360DynDef } from './lookAtPose360Dyn'
 import {
   evalLookAtPose360Direction,
@@ -708,6 +710,11 @@ type WalkCtx = FloatEvalCtx & {
   /** When true, Update appends diagnostics into updateWarnings. */
   updateWarningsEnabled?: boolean
   updateWarnings?: SimUpdateWarning[]
+  /**
+   * Engine AnimNodeUpdateContext.m_keepFullUpdate — OR true only (workspot sleep gate).
+   * Set by GenerateIk / HumanIk when controller HasAnyActiveIK.
+   */
+  keepFullUpdate: boolean
 }
 
 const CLIP_ZERO_SPEED_EPS = 1e-8
@@ -788,6 +795,8 @@ export type SimGraphSlotHost = {
     snap: SimSnapshot
     /** Nested UpdateContext inertialization request (graphWrapper up-copy). */
     inertialization: InertializationRequestSink
+    /** Nested keepFullUpdate (OR into parent). */
+    keepFullUpdate: boolean
   } | null
   /** Latest nested Sample pose for slot (after stepNested this frame). */
   getNestedPose(slotName: string): Pose | null
@@ -2643,6 +2652,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
 
     if (nested) {
       mergeInertializationRequest(ctx.inertialization, nested.inertialization)
+      if (nested.keepFullUpdate) ctx.keepFullUpdate = true
       markActive(nodes, node.HandleId, undefined, 1)
       // Engine: when dontDeactivateInput, also Update inputLink from the slot itself.
       if (dontDeactivate) followUpdate(node, inputLink, ctx)
@@ -3278,9 +3288,23 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
-  // HumanIk — OnePoseInput; Sample solves limbs from board / ikTargets.
-  if (t === 'animAnimNode_HumanIk') {
+  // HumanIk / GenerateIk — OnePoseInput; stash dt; keepFullUpdate if active IK.
+  if (
+    t === 'animAnimNode_HumanIk' ||
+    t === 'animAnimNode_GenerateIkAnimFeatureData'
+  ) {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
+    const settings =
+      t === 'animAnimNode_HumanIk'
+        ? resolveHumanIkChainSettings(node, ctx.board)
+        : resolveGenerateIkChainSettings(node)
+    const ctrl = ensureIkTargetsController(
+      ctx.instanceStore,
+      node.HandleId,
+      settings
+    )
+    ctrl.lastDt = ctx.dt
+    if (ctrl.hasAnyActiveIK()) ctx.keepFullUpdate = true
     markActive(nodes, node.HandleId, 1, 1)
     return
   }
@@ -3781,6 +3805,11 @@ export class SimGraphRunner {
    * Nested GraphSlot merges child into parent via host return.
    */
   inertializationRequest = createInertializationRequestSink()
+  /**
+   * Last step's keepFullUpdate (engine graphContext.m_keepFullUpdate).
+   * True when GenerateIk/HumanIk HasAnyActiveIK (or other nodes that set it).
+   */
+  lastKeepFullUpdate = false
   /** Optional parent-transform MS map for ParentTransform Sample. */
   parentTransforms = new Map<string, Qs>()
   /** Join pose cache (engine diamond re-sample); poses reused, sampled cleared per Sample. */
@@ -4048,16 +4077,12 @@ export class SimGraphRunner {
     this.boneTranslateDyn.clear()
     this.blendFromPoseDyn.clear()
     this.fppCameraDyn.clear()
-    this.instanceStore.clearBucket(LookAtControllerDynDef)
-    this.instanceStore.clearBucket(LookAtVehicleRestrictionsDynDef)
-    this.instanceStore.clearBucket(LookAtPose360DynDef)
-    this.instanceStore.clearBucket(InertializationDynDef)
-    this.instanceStore.clearBucket(SwitchInertializationDynDef)
-    this.instanceStore.clearBucket(MixerSlotDynDef)
+    this.instanceStore.clear()
     this.serviceEvents.length = 0
     this.sharedVars.clear()
     for (const slot of this.smFrozenPoses.values()) slot.valid = false
     clearInertializationRequest(this.inertializationRequest)
+    this.lastKeepFullUpdate = false
     clearBoneOpFrameCache(this.boneOpCache)
     clearMathExprPoseFrameCache(this.mathExprPoseCache)
     this.parentTransforms.clear()
@@ -4256,6 +4281,7 @@ export class SimGraphRunner {
       extraTracks: this.extraTracks,
       updateWarningsEnabled: this.updateWarningsEnabled,
       updateWarnings,
+      keepFullUpdate: false,
     }
 
     this.extraTracks.clear()
@@ -4294,6 +4320,7 @@ export class SimGraphRunner {
 
     // Persist Eyes enable for facial graphs / next frame (engine context field).
     this.eyesLookAtEnabled = walkBase.eyesLookAtEnabled
+    this.lastKeepFullUpdate = walkCtx.keepFullUpdate
 
     // Unconsumed custom params do not carry across frames.
     this.serviceEvents.length = 0

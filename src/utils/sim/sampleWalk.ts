@@ -56,7 +56,14 @@ import {
   applySnapToTerrainIkFlat,
   SNAP_TO_TERRAIN_PARTIAL_MSG,
 } from './snapToTerrainIk'
-import { applyHumanIk, publishIkTargetsToBoard } from './humanIkSim'
+import { applyHumanIk } from './humanIkSim'
+import {
+  ensureIkTargetsController,
+  IK_GRAPH_REQUEST_ID,
+  interpolateIkTargetsMaps,
+  resolveGenerateIkChainSettings,
+  resolveHumanIkChainSettings,
+} from './ikTargetsControllerSim'
 import {
   applyFloorIkPartial,
   FLOOR_IK_PARTIAL_MSG,
@@ -230,7 +237,7 @@ export type SampleCtx = {
   joinPoseCache?: { sampled: Set<string>; poses: Map<string, Pose> }
   /**
    * Engine SampleOutput.m_ikTargets — shared for one Sample pass (Add/ReadIkRequest).
-   * Cleared at sampleGraphPose begin. Blend cross-merge deferred.
+   * Cleared at sampleGraphPose begin. Blend2/BlendMultiple merge via interpolateIkTargetsMaps.
    */
   ikTargets?: Map<string, IkTargetSnap>
   /** BlendFromPose dyn state from Update. */
@@ -251,14 +258,20 @@ export type SampleCtx = {
   lookAtSpace?: LookAtSpaceCtx
 }
 
-/** Offline IK request snap (AddIkRequest → ReadIkRequest). */
+/** Offline IK request snap (AddIkRequest → ReadIkRequest / controller graph ingest). */
 export type IkTargetSnap = {
   chain: string
+  /** Negative graph id; default IK_GRAPH_REQUEST_ID. */
+  id?: number
   posMs: { x: number; y: number; z: number }
   rotMs: { x: number; y: number; z: number; w: number }
   weightPosition: number
   weightRotation: number
   priority: number
+  poleMs?: { x: number; y: number; z: number }
+  poleOverrideWeight?: number
+  transitionIn?: number
+  transitionOut?: number
 }
 
 export type SampleResult = {
@@ -703,6 +716,8 @@ function sampleNodeDispatch(
       return sampleAddSnapToTerrainIkRequest(node, ctx, out, visited)
     case 'animAnimNode_HumanIk':
       return sampleHumanIk(node, ctx, out, visited)
+    case 'animAnimNode_GenerateIkAnimFeatureData':
+      return sampleGenerateIkAnimFeatureData(node, ctx, out, visited)
     case 'animAnimNode_FloorIk':
     case 'animAnimNode_FloorIkBase':
       return sampleFloorIk(node, ctx, out, visited)
@@ -1104,6 +1119,37 @@ function sampleSkFrameAnimByTrack(
   return sampleSkAnim(node, ctx, out)
 }
 
+/** Sample child with a private ikTargets map (engine per-SampleOutput list). */
+function sampleChildIkIsolated(
+  handleId: string,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): Map<string, IkTargetSnap> {
+  const parent = ctx.ikTargets
+  const local = new Map<string, IkTargetSnap>()
+  ctx.ikTargets = local
+  try {
+    sampleByHandleId(handleId, ctx, out, visited)
+  } finally {
+    ctx.ikTargets = parent
+  }
+  return local
+}
+
+/** Write merged ikTargets into parent ctx map (replace contents). */
+function assignIkTargetsMap(
+  ctx: SampleCtx,
+  merged: Map<string, IkTargetSnap>
+): void {
+  if (!ctx.ikTargets) {
+    ctx.ikTargets = merged
+    return
+  }
+  ctx.ikTargets.clear()
+  for (const [k, v] of merged) ctx.ikTargets.set(k, v)
+}
+
 function sampleBlend2(
   node: AnimgraphNode,
   ctx: SampleCtx,
@@ -1117,11 +1163,12 @@ function sampleBlend2(
     const a = acquirePose(ctx)
     const b = acquirePose(ctx)
     try {
-      sampleByHandleId(kids[0], ctx, a, new Set(visited))
+      const ikA = sampleChildIkIsolated(kids[0]!, ctx, a, new Set(visited))
       const aNull = ctx.lastWrittenNull
-      sampleByHandleId(kids[1], ctx, b, new Set(visited))
+      const ikB = sampleChildIkIsolated(kids[1]!, ctx, b, new Set(visited))
       const bNull = ctx.lastWrittenNull
       interpolatePose(out, a, b, weight)
+      assignIkTargetsMap(ctx, interpolateIkTargetsMaps(ikA, ikB, weight))
       if (ctx.warningsEnabled) {
         let side: 'first' | 'second' | 'both' | null = null
         if (weight <= 0) {
@@ -1169,11 +1216,12 @@ function sampleBlendMultiple(
     const a = acquirePose(ctx)
     const b = acquirePose(ctx)
     try {
-      sampleByHandleId(kids[0], ctx, a, new Set(visited))
+      const ikA = sampleChildIkIsolated(kids[0]!, ctx, a, new Set(visited))
       const aNull = ctx.lastWrittenNull
-      sampleByHandleId(kids[1], ctx, b, new Set(visited))
+      const ikB = sampleChildIkIsolated(kids[1]!, ctx, b, new Set(visited))
       const bNull = ctx.lastWrittenNull
       interpolatePose(out, a, b, alpha)
+      assignIkTargetsMap(ctx, interpolateIkTargetsMaps(ikA, ikB, alpha))
       if (ctx.warningsEnabled) {
         noteWrittenNull(ctx, alpha <= 0 ? aNull : alpha >= 1 ? bNull : aNull && bNull)
       }
@@ -3316,6 +3364,7 @@ function sampleAddIkRequest(
 
   map.set(chain, {
     chain,
+    id: IK_GRAPH_REQUEST_ID,
     posMs: {
       x: ms.tx + posOff.x,
       y: ms.ty + posOff.y,
@@ -3349,7 +3398,56 @@ function sampleAddSnapToTerrainIkRequest(
   return ok
 }
 
-/** HumanIk: board / ikTargets → 4-limb Ik2. */
+function runIkTargetsControllerSample(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  settings: ReturnType<typeof resolveGenerateIkChainSettings>
+): void {
+  if (!ctx.instanceStore) return
+  const ctrl = ensureIkTargetsController(
+    ctx.instanceStore,
+    node.HandleId,
+    settings
+  )
+  const space = ctx.lookAtSpace ?? DEFAULT_LOOKAT_SPACE_CTX
+  ctrl.update(
+    node.HandleId,
+    {
+      pose: out,
+      rig: ctx.rig,
+      entityLocalToWorld: space.entityLocalToWorld,
+      ikTargets: ctx.ikTargets,
+    },
+    ctrl.lastDt
+  )
+  ctrl.publish(ctx.board)
+}
+
+/** GenerateIkAnimFeatureData: controller update + board publish; pose passthrough. */
+function sampleGenerateIkAnimFeatureData(
+  node: AnimgraphNode,
+  ctx: SampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(
+    node,
+    ctx,
+    out,
+    visited,
+    'GenerateIkAnimFeatureData'
+  )
+  runIkTargetsControllerSample(
+    node,
+    ctx,
+    out,
+    resolveGenerateIkChainSettings(node)
+  )
+  return ok
+}
+
+/** HumanIk: controller publish → 4-limb Ik2 from board. */
 function sampleHumanIk(
   node: AnimgraphNode,
   ctx: SampleCtx,
@@ -3358,10 +3456,13 @@ function sampleHumanIk(
 ): boolean {
   const ok = sampleOnePoseChild(node, ctx, out, visited, 'HumanIk')
   if (!ctx.rig) return ok
-  if (ctx.ikTargets && ctx.ikTargets.size > 0) {
-    publishIkTargetsToBoard(ctx.board, ctx.ikTargets)
-  }
-  applyHumanIk(out, ctx.rig, ctx.board, ctx.ikTargets)
+  runIkTargetsControllerSample(
+    node,
+    ctx,
+    out,
+    resolveHumanIkChainSettings(node, ctx.board)
+  )
+  applyHumanIk(out, ctx.rig, ctx.board)
   return ok
 }
 

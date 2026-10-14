@@ -574,6 +574,7 @@ export function useAnimgraphSim() {
             inertializationDuration:
               runner.inertializationRequest.inertializationDuration,
           },
+          keepFullUpdate: runner.lastKeepFullUpdate,
         }
       } finally {
         nestStack.pop()

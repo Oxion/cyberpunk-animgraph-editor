@@ -25,6 +25,7 @@ import { readCName } from './simDataUtils'
 /** Matches sampleWalk IkTargetSnap — kept local to avoid import cycle. */
 type IkTargetSnap = {
   chain: string
+  id?: number
   posMs: { x: number; y: number; z: number }
   rotMs: { x: number; y: number; z: number; w: number }
   weightPosition: number
@@ -123,6 +124,7 @@ function writeIkTarget(
   if (prev && prev.priority > priority) return
   map.set(chain, {
     chain,
+    id: -1,
     posMs: { ...pos },
     rotMs: { ...rot },
     weightPosition: 1,

@@ -1,11 +1,10 @@
 /**
- * animAnimNode_HumanIk — 4-limb Ik2 from board (ikLeftLeg/…) + SampleOutput ikTargets.
+ * animAnimNode_HumanIk — 4-limb Ik2 from board (ikLeftLeg/…).
  *
  * Engine: IKTargetsController publishes chain inputs; ProcessLimb → SolveLimbIK.
- * Offline: no full IKTargetsStateMachine; consume board features and/or ctx.ikTargets.
+ * Offline: controller publishes board; this solves limbs from board only.
  */
 
-import type { SimVec4 } from './evalAnimMathExpressionVector'
 import { applyIk2 } from './ik2Solver'
 import type { Pose } from './pose'
 import {
@@ -18,16 +17,6 @@ import {
 } from './poseFk'
 import type { RigEntry } from './rigResource'
 import type { SimInputBoard } from './SimInputBoard'
-
-/** Matches sampleWalk IkTargetSnap. */
-export type HumanIkTargetSnap = {
-  chain: string
-  posMs: { x: number; y: number; z: number }
-  rotMs: { x: number; y: number; z: number; w: number }
-  weightPosition: number
-  weightRotation: number
-  priority: number
-}
 
 type LimbDef = {
   group: string
@@ -120,48 +109,18 @@ function readLimbFromBoard(
   }
 }
 
-function readLimbFromIkTargets(
-  map: Map<string, HumanIkTargetSnap> | undefined,
-  group: string
-): LimbInput | null {
-  const snap = map?.get(group)
-  if (!snap) return null
-  if (!(snap.weightPosition > 0) && !(snap.weightRotation > 0)) return null
-  return {
-    enabled: true,
-    position: { ...snap.posMs },
-    rotation: { ...snap.rotMs },
-    weightPosition: snap.weightPosition,
-    weightRotation: snap.weightRotation,
-    poleVector: { x: 0, y: 0, z: 0 },
-    poleOverrideWeight: 0,
-  }
-}
-
-function mergeLimbInput(
-  board: SimInputBoard | undefined,
-  ikTargets: Map<string, HumanIkTargetSnap> | undefined,
-  group: string
-): LimbInput | null {
-  const fromBoard = readLimbFromBoard(board, group)
-  const fromMap = readLimbFromIkTargets(ikTargets, group)
-  if (!fromBoard) return fromMap
-  if (!fromMap) return fromBoard
-  return fromBoard.enabled ? fromBoard : fromMap
-}
-
 function poleIsZero(p: { x: number; y: number; z: number }): boolean {
   return Math.hypot(p.x, p.y, p.z) < 1e-8
 }
 
 /**
  * Engine HumanIk::OnSample limb pass (lodWeightFactor = 1 offline).
+ * Expects IKTargetsController.publish to have written board groups.
  */
 export function applyHumanIk(
   pose: Pose,
   rig: RigEntry,
   board: SimInputBoard | undefined,
-  ikTargets: Map<string, HumanIkTargetSnap> | undefined,
   lodWeightFactor = 1
 ): number {
   if (!(lodWeightFactor > 0.001)) return 0
@@ -169,7 +128,7 @@ export function applyHumanIk(
   const midMs = { ...IDENTITY_QS }
 
   for (const limb of LIMBS) {
-    const input = mergeLimbInput(board, ikTargets, limb.group)
+    const input = readLimbFromBoard(board, limb.group)
     if (!input?.enabled) continue
 
     const weight = input.weightPosition * lodWeightFactor
@@ -218,7 +177,6 @@ export function applyHumanIk(
     if (!ok) continue
     solved++
 
-    // Orient constraint: slerp end MS rotation toward effector
     const rotW = input.weightRotation
     if (rotW > 0) {
       const endIdx = resolveUnifiedName(pose, rig, limb.end)
@@ -249,30 +207,4 @@ export function applyHumanIk(
   }
 
   return solved
-}
-
-/** Sync ikTargets map → board groups (AddIkRequest / SnapToTerrain → HumanIk). */
-export function publishIkTargetsToBoard(
-  board: SimInputBoard,
-  ikTargets: Map<string, HumanIkTargetSnap>
-): void {
-  for (const [chain, snap] of ikTargets) {
-    if (!chain || chain === 'None') continue
-    const on = snap.weightPosition > 0 || snap.weightRotation > 0
-    board.setBoolFeature(chain, 'isEnabled', on)
-    board.setVectorFeature(chain, 'position', {
-      x: snap.posMs.x,
-      y: snap.posMs.y,
-      z: snap.posMs.z,
-      w: 0,
-    } as SimVec4)
-    board.setQuatFeature(chain, 'rotation', {
-      x: snap.rotMs.x,
-      y: snap.rotMs.y,
-      z: snap.rotMs.z,
-      w: snap.rotMs.w,
-    })
-    board.setFeature(chain, 'weightPosition', snap.weightPosition)
-    board.setFeature(chain, 'weightRotation', snap.weightRotation)
-  }
 }

@@ -11,7 +11,11 @@
  *
  * Offline sim implements Update (+ numeric weights) and Sample (glb pose).
  * Ik2 / Ik2Constraint / AddIkRequest / ReadIkRequest are supported.
- * HumanIk: 4-limb Ik2 from board (ikLeftLeg/…) + ikTargets map; no full IKTargetsStateMachine.
+ * IKTargetsController class (shared GenerateIkAnimFeatureData + HumanIk): SM priority/
+ *   transitions, WS→MS+offsets, enableFloatTrack, graph ikTargets ingest, board GraphInput
+ *   publish, IKTargetParams_Add/Remove/Update; Update keepFullUpdate when HasAnyActiveIK;
+ *   Blend2/BlendMultiple InterpolateIKTargets cross-merge. Skips ragdoll gate (no physics).
+ *   HumanIk solves 4-limb Ik2 from board after publish.
  * AddSnapToTerrainIkRequest: flat-ground subset only (plant Z + hip Z + ikTargets + Ik2
  * stand-in); emits snap-to-terrain-partial Update/Sample warnings — not full PhysicsTracer /
  * foot-lock parity.
