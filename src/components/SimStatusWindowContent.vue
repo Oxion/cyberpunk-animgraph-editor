@@ -1,21 +1,13 @@
 <template>
   <div class="flex h-full min-h-0 flex-col gap-1.5 p-2 text-[11px] text-muted-foreground">
     <div class="flex shrink-0 flex-wrap items-center gap-2">
-      <span class="text-[10px] uppercase tracking-wide text-muted-foreground">Diagram</span>
-      <Select :model-value="selectedDiagramId" @update:model-value="onDiagramUpdate">
-        <SelectTrigger
-          size="sm"
-          class="h-6! w-[min(14rem,100%)] min-w-0 rounded-sm px-2 py-0 text-[11px]"
-          title="Diagram whose sim status to show"
-        >
-          <SelectValue placeholder="Diagram" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem v-for="id in diagramOptions" :key="id" :value="id">
-            {{ id }}
-          </SelectItem>
-        </SelectContent>
-      </Select>
+      <span class="text-[10px] uppercase tracking-wide text-muted-foreground">Runner</span>
+      <SimRunnerSelect
+        v-model="selectedRunnerId"
+        trigger-class="h-6! w-[min(14rem,100%)]"
+        trigger-title="Runner whose sim status to show"
+        placeholder="Runner"
+      />
     </div>
 
     <div
@@ -102,61 +94,26 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { computed, ref } from 'vue'
+import SimRunnerSelect from './sim/SimRunnerSelect.vue'
 import {
   simClipStats,
   simFeatureDrafts,
+  simGetRootRunnerId,
   simSampleWarningsEnabled,
   simSetupEntries,
-  simSnapshotsByDiagram,
+  simSnapshotsByRunner,
   simUpdateWarningsEnabled,
   simWrapperWeightDrafts,
 } from '../stores/animgraphSim'
-import {
-  activeDiagramId,
-  listDiagramIds,
-  mainDiagramId,
-} from '../stores/graphProject'
 import { emptySimSnapshot } from '../utils/sim/simSnapshot'
 import { SimInputBoard } from '../utils/sim/SimInputBoard'
 
-const diagramOptions = computed(() => listDiagramIds.value)
-
-const pickDefaultDiagram = () => {
-  const ids = diagramOptions.value
-  const active = activeDiagramId.value
-  if (active && ids.includes(active)) return active
-  const main = mainDiagramId.value
-  if (main && ids.includes(main)) return main
-  return ids[0] ?? ''
-}
-
-const selectedDiagramId = ref(pickDefaultDiagram())
-
-watch(diagramOptions, (ids) => {
-  if (!ids.length) {
-    selectedDiagramId.value = ''
-    return
-  }
-  if (!ids.includes(selectedDiagramId.value)) {
-    selectedDiagramId.value = pickDefaultDiagram()
-  }
-}, { immediate: true })
-
-const onDiagramUpdate = (value: unknown) => {
-  if (typeof value === 'string') selectedDiagramId.value = value
-}
+const selectedRunnerId = ref(simGetRootRunnerId())
 
 const snapshot = computed(
   () =>
-    simSnapshotsByDiagram.value[selectedDiagramId.value] ?? emptySimSnapshot()
+    simSnapshotsByRunner.value[selectedRunnerId.value] ?? emptySimSnapshot()
 )
 
 type StatusRow = {

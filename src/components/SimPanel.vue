@@ -4,11 +4,12 @@
       <Button
         type="button"
         size="sm"
-        :variant="snapshot.playing ? 'default' : 'secondary'"
+        :variant="simPlaying ? 'default' : 'secondary'"
         class="h-7 rounded-sm px-2.5 text-xs"
+        :aria-pressed="simPlaying"
         @click="emit('toggle')"
       >
-        {{ snapshot.playing ? 'Pause' : 'Play' }}
+        {{ simPlaying ? 'Pause' : 'Play' }}
       </Button>
       <Button
         type="button"
@@ -144,7 +145,16 @@
 
     <Tabs v-model="activeTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
       <div ref="mainTabsRowEl">
-        <TabsList class="grid h-8 w-full shrink-0 grid-cols-3 rounded-sm bg-muted/60 p-0.5">
+        <TabsList class="grid h-8 w-full shrink-0 grid-cols-4 rounded-sm bg-muted/60 p-0.5">
+          <TabsTrigger
+            value="diagrams"
+            class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+            title="Diagrams"
+            aria-label="Diagrams"
+          >
+            <Network class="size-3.5 shrink-0" :size="14" />
+            <span v-if="!mainTabsIconOnly" class="truncate">Diagrams</span>
+          </TabsTrigger>
           <TabsTrigger
             value="events"
             class="h-7 gap-1 rounded-sm px-1 text-[11px]"
@@ -174,6 +184,54 @@
           </TabsTrigger>
         </TabsList>
       </div>
+
+      <TabsContent
+        value="diagrams"
+        class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden"
+      >
+        <p class="m-0 shrink-0 text-[10px] text-muted-foreground">
+          GraphSlot execution: assign a project diagram to root and each slot.
+        </p>
+        <div class="min-h-0 flex-1 overflow-y-auto">
+          <div v-if="!diagramSlotRows.length" class="px-1 py-1 text-[11px] text-muted-foreground">
+            No runners — load a project diagram.
+          </div>
+          <div v-else class="flex flex-col gap-0.5">
+            <div
+              v-for="row in diagramSlotRows"
+              :key="row.key"
+              class="flex min-w-0 items-center"
+              :title="row.title"
+            >
+              <span
+                v-for="d in row.depth"
+                :key="d"
+                class="relative w-5 shrink-0 self-stretch"
+                aria-hidden="true"
+              >
+                <span
+                  class="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-hairline"
+                />
+              </span>
+              <span
+                v-if="row.hasChildren"
+                class="relative flex w-5 shrink-0 items-center justify-center self-stretch"
+                aria-hidden="true"
+              >
+                <span class="size-1.5 rounded-full bg-muted-foreground" />
+              </span>
+              <PropertyEnumSelect
+                class="min-w-0 flex-1"
+                :label="row.label"
+                :model-value="row.diagramId"
+                :options="diagramSelectOptions"
+                :option-labels="DIAGRAM_OPTION_LABELS"
+                @update:model-value="(v) => onDiagramSlotSelect(row, String(v ?? ''))"
+              />
+            </div>
+          </div>
+        </div>
+      </TabsContent>
 
       <TabsContent value="events" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
         <div class="flex shrink-0 flex-wrap items-center gap-1.5">
@@ -1018,7 +1076,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, type Ref } from 'vue'
+import { computed, ref, watch, type Ref } from 'vue'
 import { useResizeObserver } from '@vueuse/core'
 import {
   Activity,
@@ -1028,6 +1086,7 @@ import {
   Film,
   Info,
   Layers,
+  Network,
   Package,
   PencilIcon,
   RotateCcw,
@@ -1060,6 +1119,7 @@ import {
 import AnimSetupEntryCard from '@/components/sim/AnimSetupEntryCard.vue'
 import {
   PropertyBoolToggle,
+  PropertyEnumSelect,
   PropertyNumberControl,
   PropertyTextField,
   PropertyNumberSlider,
@@ -1076,6 +1136,16 @@ import {
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  simGetPrimaryRunner,
+  simGetRootRunnerId,
+  simListSlotRunners,
+  simPlaying,
+  simSetRunnerDiagramId,
+  simSetSlotDiagramId,
+  simRunnersRev,
+} from '../stores/animgraphSim'
+import { listDiagramIds, projectRef } from '../stores/graphProject'
 
 const props = defineProps<{
   snapshot: SimSnapshot
@@ -1206,10 +1276,97 @@ const emit = defineEmits<{
   fireAnimEnd: []
 }>()
 
-const activeTab = ref<'events' | 'values' | 'resources'>('events')
+const activeTab = ref<'diagrams' | 'events' | 'values' | 'resources'>('diagrams')
 const valuesSubTab = ref<'features' | 'vars' | 'wrappers' | 'tags'>('features')
 const resourcesSubTab = ref<'sets' | 'db' | 'rig' | 'entity'>('sets')
 const eventValueEnabled = ref(false)
+
+const DIAGRAM_OPTION_LABELS: Readonly<Record<string, string>> = { '': 'None' }
+const diagramSelectOptions = computed(() => ['', ...listDiagramIds.value])
+/** Bump when slot topology / assignments change (Maps are not reactive). */
+const diagramSlotsRev = ref(0)
+const bumpDiagramSlots = () => {
+  diagramSlotsRev.value++
+}
+
+watch(
+  [projectRef, listDiagramIds, simRunnersRev],
+  () => bumpDiagramSlots(),
+  { deep: false }
+)
+
+type DiagramSlotRow = {
+  key: string
+  parentRunnerId: string
+  /** Live child runner; omitted for None slots. Root always uses root id. */
+  runnerId?: string
+  slotName: string
+  diagramId: string
+  label: string
+  title: string
+  depth: number
+  hasChildren: boolean
+}
+
+const diagramSlotRows = computed((): DiagramSlotRow[] => {
+  void diagramSlotsRev.value
+  void projectRef.value
+  void simRunnersRev.value
+  const rootId = simGetRootRunnerId()
+  const root = simGetPrimaryRunner()
+  const rootSlots = root?.diagramId ? simListSlotRunners(rootId) : []
+  const rows: DiagramSlotRow[] = [
+    {
+      key: `root:${rootId}`,
+      parentRunnerId: rootId,
+      runnerId: rootId,
+      slotName: '',
+      diagramId: root?.diagramId ?? '',
+      label: 'root',
+      title: root ? `root (${rootId})` : `root (${rootId}) · None`,
+      depth: 0,
+      hasChildren: rootSlots.length > 0,
+    },
+  ]
+  if (!root?.diagramId) return rows
+  // DFS so nested slots appear directly under their parent (not after siblings).
+  const visited = new Set<string>([rootId])
+  const visit = (parentId: string, depth: number) => {
+    for (const slot of simListSlotRunners(parentId)) {
+      const childSlots =
+        slot.diagramId && slot.runnerId ? simListSlotRunners(slot.runnerId) : []
+      rows.push({
+        key: `${parentId}/${slot.slotName}`,
+        parentRunnerId: parentId,
+        runnerId: slot.runnerId || undefined,
+        slotName: slot.slotName,
+        diagramId: slot.diagramId,
+        label: slot.slotName,
+        title: slot.runnerId
+          ? `${slot.slotName} → ${slot.runnerId}`
+          : `${slot.slotName} → None`,
+        depth: depth + 1,
+        hasChildren: childSlots.length > 0,
+      })
+      if (slot.diagramId && slot.runnerId && !visited.has(slot.runnerId)) {
+        visited.add(slot.runnerId)
+        visit(slot.runnerId, depth + 1)
+      }
+    }
+  }
+  visit(rootId, 0)
+  return rows
+})
+
+function onDiagramSlotSelect(row: DiagramSlotRow, next: string) {
+  const diagramId = next.trim()
+  if (row.runnerId === simGetRootRunnerId()) {
+    simSetRunnerDiagramId(row.runnerId, diagramId)
+  } else {
+    simSetSlotDiagramId(row.parentRunnerId, row.slotName, diagramId)
+  }
+  bumpDiagramSlots()
+}
 
 function onFireAnimEvent() {
   const value =

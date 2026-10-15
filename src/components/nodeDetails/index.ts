@@ -2,6 +2,7 @@ export {
   PropertyNumberSlider,
   PropertyNumberControl,
   PropertyBoolToggle,
+  PropertyEnumSelect,
   PropertyTextField,
   PropertyReadonlyRow,
   PropertyVecBlock,

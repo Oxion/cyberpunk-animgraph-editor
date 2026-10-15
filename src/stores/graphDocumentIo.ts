@@ -7,6 +7,7 @@ import {
   type AnimgraphProjectFile,
   type AnimgraphVisualizerData,
   type RenderData,
+  type SimRunnerSlotsConfigJson,
 } from '../utils/graph/diagramTypes'
 import type { DirectChildrenLayoutMode } from '../utils/graph/DirectChildrenLayout'
 import type { AnimClipSetupJson } from '../utils/sim/clipLibrary'
@@ -65,6 +66,7 @@ export type GraphDocumentIoHost = {
     rigLibrary?: import('../utils/sim/rigResource').RigLibraryJson
     clipPoseLibrary?: ClipPoseLibraryJson
     clipPoseRevision?: number
+    runnerSlots?: SimRunnerSlotsConfigJson
   } | null
   /** Compact clip-pose JSON for sidecar write (null if empty). */
   getCachedClipPoseCompactText?: () => string | null
@@ -76,6 +78,7 @@ export type GraphDocumentIoHost = {
       entityTags?: Record<string, boolean>
       rigLibrary?: import('../utils/sim/rigResource').RigLibraryJson
       clipPoseLibrary?: ClipPoseLibraryJson
+      runnerSlots?: SimRunnerSlotsConfigJson
     } | null
   ) => void
 }
@@ -229,6 +232,7 @@ export const loadProjectFile = async (data: AnimgraphProjectFile) => {
     entityTags: data.entityTags,
     rigLibrary: data.rigLibrary,
     clipPoseLibrary: data.clipPoseLibrary,
+    runnerSlots: data.runnerSlots,
   })
   presentReplacedProject(data.mainDiagramId)
   clearProjectDirty()
@@ -564,6 +568,9 @@ export const createProjectExportData = (opts?: {
   if (sim?.animDatabaseLibrary != null) out.animDatabaseLibrary = sim.animDatabaseLibrary
   if (sim?.entityTags != null && Object.keys(sim.entityTags).length > 0) {
     out.entityTags = sim.entityTags
+  }
+  if (sim?.runnerSlots != null) {
+    out.runnerSlots = sim.runnerSlots
   }
   if (sim?.rigLibrary != null && (sim.rigLibrary.entries?.length ?? 0) > 0) {
     out.rigLibrary = sim.rigLibrary

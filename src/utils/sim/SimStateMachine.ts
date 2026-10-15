@@ -433,6 +433,7 @@ export function findStateOutput(
 }
 
 /**
+ * TODO maybe there needs to be done at compile pass with context system introduced that can define in which SM node is
  * Engine AnimGraph TEMP_Bind: BlendFromPose inside a state → that SM's frozen pose.
  * Returns blendNodeHandleId → smHandleId.
  */

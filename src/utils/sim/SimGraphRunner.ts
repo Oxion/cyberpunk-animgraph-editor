@@ -818,12 +818,29 @@ export type SimStepOptions = {
   rawDt?: number
 }
 
-function isGraphSlotType(t: string | null | undefined): boolean {
+export function isGraphSlotType(t: string | null | undefined): boolean {
   return (
     t === 'animAnimNode_GraphSlot' ||
     t === 'animAnimNode_GraphSlot_Test' ||
     t === 'animAnimNode_GraphSlotConditions'
   )
+}
+
+/** Unique GraphSlot `name` values from a handles registry (for slot materialization). */
+export function collectGraphSlotNames(
+  handles: Map<string, AnimgraphNode> | null | undefined
+): string[] {
+  if (!handles?.size) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const node of handles.values()) {
+    if (!isGraphSlotType(handleType(node))) continue
+    const name = readCName(node.Data?.name).trim()
+    if (!name || name === 'None' || seen.has(name)) continue
+    seen.add(name)
+    out.push(name)
+  }
+  return out
 }
 
 /**
@@ -3769,8 +3786,27 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
 }
 
 export class SimGraphRunner {
-  /** Set by host when runner is created for a diagram. */
-  diagramId = ''
+  /** Host-assigned execution-slot id (not diagramId). Set once in constructor. */
+  readonly runnerId: string
+  /** Set only by `bind`; `undefined` after `dispose` / before first bind. */
+  private _diagramId: string | undefined = undefined
+  /**
+   * Diagram this runner executes (readonly outside; set only via `bind`).
+   * Nonempty string when bound; `undefined` when disposed / not bound.
+   */
+  get diagramId(): string | undefined {
+    return this._diagramId
+  }
+  /**
+   * GraphSlot names the host has configured (auto-default or user set, incl. None).
+   * Missing = fresh → may auto-default on materialize.
+   */
+  slotInitialized = new Set<string>()
+  /** GraphSlot name → nested diagram id (absent / missing = None). */
+  slotDiagramIds = new Map<string, string>()
+  /** GraphSlot name → child runner id. */
+  slotRunnerIds = new Map<string, string>()
+
   private runtimes = new Map<string, SimStateMachineRuntime>()
   private handles: Map<string, AnimgraphNode> = new Map()
   private originalAnimgraph: RenderData['originalAnimgraph'] | null = null
@@ -3894,6 +3930,94 @@ export class SimGraphRunner {
   /** StaticSwitch Init cache — recomputed when dirty (bind/reset/clipLibrary). */
   private staticSwitchResults = new Map<string, boolean>()
   private staticSwitchDirty = true
+
+  constructor(runnerId: string) {
+    const id = runnerId.trim()
+    if (!id) {
+      throw new Error('SimGraphRunner: runnerId is required (nonempty string)')
+    }
+    this.runnerId = id
+  }
+
+  isSlotInitialized(slotName: string): boolean {
+    const want = slotName.trim()
+    if (!want) return false
+    return (
+      this.slotInitialized.has(want) ||
+      this.slotInitialized.has(want.toLowerCase())
+    )
+  }
+
+  markSlotInitialized(slotName: string): void {
+    const want = slotName.trim()
+    if (!want || want === 'None') return
+    this.slotInitialized.add(want)
+  }
+
+  clearSlotInitialized(slotName: string): void {
+    const want = slotName.trim()
+    if (!want) return
+    this.slotInitialized.delete(want)
+    const lower = want.toLowerCase()
+    if (lower !== want) this.slotInitialized.delete(lower)
+  }
+
+  getSlotDiagramId(slotName: string): string | undefined {
+    const want = slotName.trim()
+    if (!want) return undefined
+    return (
+      this.slotDiagramIds.get(want) ??
+      this.slotDiagramIds.get(want.toLowerCase())
+    )
+  }
+
+  /**
+   * Bind slot → diagram. Empty / null = None (passthrough); marks initialized.
+   * Use `forgetSlotDiagram` when pruning a GraphSlot name from the parent graph.
+   */
+  setSlotDiagramId(slotName: string, diagramId: string | null): void {
+    const want = slotName.trim()
+    if (!want || want === 'None') return
+    this.slotInitialized.add(want)
+    const next = (diagramId ?? '').trim()
+    if (!next) {
+      this.slotDiagramIds.delete(want)
+      const lower = want.toLowerCase()
+      if (lower !== want) this.slotDiagramIds.delete(lower)
+      return
+    }
+    this.slotDiagramIds.set(want, next)
+  }
+
+  /** Remove slot config entirely (GraphSlot pruned from parent diagram). */
+  forgetSlotDiagram(slotName: string): void {
+    const want = slotName.trim()
+    if (!want) return
+    this.clearSlotInitialized(want)
+    this.slotDiagramIds.delete(want)
+    const lower = want.toLowerCase()
+    if (lower !== want) this.slotDiagramIds.delete(lower)
+  }
+
+  getSlotRunnerId(slotName: string): string | undefined {
+    const want = slotName.trim()
+    if (!want) return undefined
+    return (
+      this.slotRunnerIds.get(want) ?? this.slotRunnerIds.get(want.toLowerCase())
+    )
+  }
+
+  setSlotRunnerId(slotName: string, runnerId: string | null): void {
+    const want = slotName.trim()
+    if (!want || want === 'None') return
+    if (runnerId == null || runnerId === '') {
+      this.slotRunnerIds.delete(want)
+      const lower = want.toLowerCase()
+      if (lower !== want) this.slotRunnerIds.delete(lower)
+      return
+    }
+    this.slotRunnerIds.set(want, runnerId)
+  }
 
   setClipLibrary(library: ClipLibrary | null): void {
     this.clipLibrary = library
@@ -4030,9 +4154,11 @@ export class SimGraphRunner {
     this.animDbLibrary = library
   }
 
-  bind(graphData: RenderData | null, board: SimInputBoard): void {
-    this.handles = graphData?.handlesRegistry ?? new Map()
-    this.originalAnimgraph = graphData?.originalAnimgraph ?? null
+  /** Clear graph/dyn/sample state. Does not touch slot topology maps. */
+  private clearGraphState(): void {
+    this._diagramId = undefined
+    this.handles = new Map()
+    this.originalAnimgraph = null
     this.compiled = null
     this.runtimes.clear()
     this.floatDyn.clear()
@@ -4049,7 +4175,7 @@ export class SimGraphRunner {
     this.instanceStore.clear()
     this.serviceEvents.length = 0
     this.sharedVars.clear()
-    this.blendFromPoseSmBind = bindBlendFromPoseToStateMachines(this.handles)
+    this.blendFromPoseSmBind = new Map()
     this.smFrozenPoses.clear()
     clearInertializationRequest(this.inertializationRequest)
     clearBoneOpFrameCache(this.boneOpCache)
@@ -4067,6 +4193,44 @@ export class SimGraphRunner {
     this.prevNodes = null
     this.capturedPoses.clear()
     this.capturedPoseThisFrame.clear()
+    this.shrinkRemoveCountByHandleId.clear()
+    this.trackShrinkRemoveCountByHandleId.clear()
+    this.updateSucc.clear()
+    this.sampleOut = null
+    this.poseScratch = null
+    this.stackCaptureHandleIds.clear()
+  }
+
+  /**
+   * Full teardown before host removes this runner from the map.
+   * Clears slot topology as well as graph state.
+   */
+  dispose(): void {
+    this.clearGraphState()
+    this.activeRig = null
+    this.slotInitialized.clear()
+    this.slotDiagramIds.clear()
+    this.slotRunnerIds.clear()
+  }
+
+  /**
+   * Bind to a diagram. Only writer of `diagramId`.
+   * Requires nonempty diagramId and non-null graphData — never used as unbind.
+   * Preserves slot topology maps and host-synced libraries/rig across rebinds.
+   */
+  bind(diagramId: string, graphData: RenderData, board: SimInputBoard): void {
+    const id = diagramId.trim()
+    if (!id) {
+      throw new Error('SimGraphRunner.bind: diagramId is required')
+    }
+    if (!graphData?.handlesRegistry) {
+      throw new Error(`SimGraphRunner.bind: missing RenderData for diagramId="${id}"`)
+    }
+    this.clearGraphState()
+    this._diagramId = id
+    this.handles = graphData.handlesRegistry
+    this.originalAnimgraph = graphData.originalAnimgraph ?? null
+    this.blendFromPoseSmBind = bindBlendFromPoseToStateMachines(this.handles)
     const pairing = buildStackPairing(this.handles)
     this.shrinkRemoveCountByHandleId = pairing.shrinkRemoveCountByHandleId
     this.trackShrinkRemoveCountByHandleId = pairing.trackShrinkRemoveCountByHandleId
@@ -4182,7 +4346,7 @@ export class SimGraphRunner {
     const floatUpdated = new Set<string>()
     const signalUpdated = new Set<string>()
     const condCtx = { ...this.buildCondCtx(board), dt }
-    const sampleLog = createSimSampleLog(`diagram=${this.diagramId || '?'}`)
+    const sampleLog = createSimSampleLog(`diagram=${this.diagramId ?? '?'}`)
     const sampleVisitedAll = sampleLog ? new Set<string>() : undefined
     const sampleWarnings: SimSampleWarning[] | undefined = this.sampleWarningsEnabled
       ? []
@@ -4199,7 +4363,7 @@ export class SimGraphRunner {
       const known = caps.filter((id) => this.hasHandle(id))
       simSampleLogLine(
         sampleLog,
-        `begin diagram=${this.diagramId || '?'} captures=[${caps.join(',')}] knownInGraph=[${known.join(',')}] slotHost=${options?.slotHost ? 1 : 0}`
+        `begin diagram=${this.diagramId ?? '?'} captures=[${caps.join(',')}] knownInGraph=[${known.join(',')}] slotHost=${options?.slotHost ? 1 : 0}`
       )
     }
 

@@ -4,10 +4,33 @@
       diagramItems.length > 0 ||
       bodyItems.length > 0 ||
       windowItems.length > 0 ||
-      (pinnedItems?.length ?? 0) > 0
+      (pinnedItems?.length ?? 0) > 0 ||
+      showSimOverlaySelect
     "
     class="relative z-60 flex h-9 shrink-0 items-center gap-2 overflow-x-auto overflow-y-hidden border-t border-border bg-panel px-2 py-1"
   >
+    <div
+      v-if="showSimOverlaySelect"
+      class="flex shrink-0 items-center gap-1 pr-1"
+    >
+      <SimRunnerSelect
+        v-model="overlayRunnerId"
+        :diagram-id="overlayDiagramId"
+        trigger-class="h-6! w-[8.5rem]"
+        trigger-title="Runner whose sim overlay to paint on the active diagram"
+        placeholder="Runner"
+      >
+        <template #leading>
+          <Waypoints class="shrink-0 opacity-85" :size="12" aria-hidden="true" />
+        </template>
+      </SimRunnerSelect>
+      <div
+        v-if="diagramItems.length > 0"
+        class="my-1 h-4 w-px shrink-0 self-center bg-hairline"
+        aria-hidden="true"
+      />
+    </div>
+
     <div v-if="diagramItems.length > 0" class="flex shrink-0 items-center gap-1 pr-1">
       <Button
         v-for="item in diagramItems"
@@ -98,7 +121,10 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { Waypoints } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
+import SimRunnerSelect from './sim/SimRunnerSelect.vue'
 
 export interface TaskbarItem {
   id: string
@@ -109,19 +135,30 @@ export interface TaskbarItem {
   preview?: boolean
 }
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     diagramItems?: TaskbarItem[]
     pinnedItems?: TaskbarItem[]
     bodyItems?: TaskbarItem[]
     windowItems?: TaskbarItem[]
+    /** When sim is live, show runner overlay picker for the active diagram. */
+    simActive?: boolean
+    overlayDiagramId?: string | null
   }>(),
   {
     diagramItems: () => [],
     pinnedItems: () => [],
     bodyItems: () => [],
     windowItems: () => [],
+    simActive: false,
+    overlayDiagramId: null,
   }
+)
+
+const overlayRunnerId = defineModel<string>('overlayRunnerId', { default: '' })
+
+const showSimOverlaySelect = computed(
+  () => props.simActive === true && Boolean(props.overlayDiagramId?.trim())
 )
 
 const emit = defineEmits<{

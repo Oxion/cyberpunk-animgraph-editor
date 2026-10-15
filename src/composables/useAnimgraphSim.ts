@@ -7,6 +7,7 @@ import {
   mainDiagramId,
   projectRef,
 } from '../stores/graphProject'
+import type { SimRunnerSlotsConfigJson } from '../utils/graph/diagramTypes'
 import {
   ClipLibrary,
   DEFAULT_ANIM_SETUP_PRIORITY,
@@ -32,6 +33,7 @@ import {
 import { SimClock } from '../utils/sim/SimClock'
 import {
   SimGraphRunner,
+  collectGraphSlotNames,
   type SimGraphSlotHost,
 } from '../utils/sim/SimGraphRunner'
 import { SimInputBoard } from '../utils/sim/SimInputBoard'
@@ -71,12 +73,44 @@ function resolveRootDiagramId(ids: string[]): string | null {
 }
 
 /** Case-insensitive diagram id lookup (GraphSlot.name ↔ project diagram id). */
-function findDiagramIdBySlotName(ids: string[], slotName: string): string | null {
+function findDiagramIdBySlotName(ids: string[], slotName: string): string | undefined {
   const want = slotName.trim()
-  if (!want || want === 'None') return null
-  if (ids.includes(want)) return want
-  const lower = want.toLowerCase()
-  return ids.find((id) => id.toLowerCase() === lower) ?? null
+  if (!slotName || slotName === 'None') return undefined
+
+  if (ids.includes(slotName)) return want
+
+  const lower = slotName.toLowerCase()
+  return ids.find((id) => id.toLowerCase() === lower)
+}
+
+/** Fixed root execution-slot id. */
+export const ROOT_RUNNER_ID = 'root'
+
+export type { SimRunnerSlotsConfigJson }
+
+export type SimSlotRunnerInfo = {
+  slotName: string
+  runnerId: string
+  diagramId: string
+}
+
+/** Bound runner tree node for UI pickers (diagram set). */
+export type SimRunnerTreeNode = {
+  runnerId: string
+  diagramId: string
+  /** `root` or GraphSlot name. */
+  label: string
+  /** e.g. `root (main)` / `WORKSPOT (ws)`. */
+  title: string
+  children: SimRunnerTreeNode[]
+}
+
+/** Flat runner option with ancestry path label (at-node / overlay pickers). */
+export type SimRunnerPathOption = {
+  runnerId: string
+  diagramId: string
+  /** e.g. `root(main) -> ranged(ranged)`. */
+  title: string
 }
 
 type DerivedCacheEntry = DerivedPoseStats & {
@@ -89,8 +123,9 @@ type DerivedCacheEntry = DerivedPoseStats & {
 export function useAnimgraphSim() {
   const clock = shallowRef(new SimClock())
   const board = shallowRef(new SimInputBoard())
-  /** One runner per project diagram (HandleId-safe instance dyn). */
+  /** One runner per execution slot (arbitrary runnerId). */
   const runners = new Map<string, SimGraphRunner>()
+  let nextSlotRunnerSeq = 1
   const clipLibrary = shallowRef(new ClipLibrary())
   const animDbLibrary = shallowRef(new AnimDatabaseLibrary())
   const rigLibrary = shallowRef(new RigLibrary())
@@ -100,8 +135,16 @@ export function useAnimgraphSim() {
   const animDbRevision = ref(0)
   const rigRevision = ref(0)
   const clipPoseRevision = ref(0)
-  /** Per-diagram overlay snapshots from last publish (source of truth). */
-  const snapshotsByDiagram = shallowRef<Record<string, SimSnapshot>>({})
+  /** Per-runner snapshots from last publish. */
+  const snapshotsByRunner = shallowRef<Record<string, SimSnapshot>>({})
+  /**
+   * Bumped when runner Map / slot→diagram topology changes.
+   * `runners` is a plain Map — UI trees must depend on this, not only snapshots.
+   */
+  const runnersRev = ref(0)
+  const bumpRunners = () => {
+    runnersRev.value++
+  }
   /** Bumped each publish; stamped onto every diagram snapshot. */
   let poseGenCounter = 0
   /** Last stack-capture handle ids (selection); first is preferred HUD pose. */
@@ -111,6 +154,14 @@ export function useAnimgraphSim() {
   let derivedPoseCacheGen = -1
   const enabled = ref(false)
   const active = ref(false)
+  /**
+   * Mirror of `clock.playing` — SimClock mutates in place on a shallowRef,
+   * so UI must not read `clock.value.playing` without this (or snapshots).
+   */
+  const playing = ref(false)
+  const syncPlaying = () => {
+    playing.value = clock.value.playing
+  }
   const eventDraft = ref('')
   /** Valued timeline event payload for AnimNode_EventValue inject */
   const eventValueDraft = ref(0)
@@ -139,7 +190,7 @@ export function useAnimgraphSim() {
 
   let raf = 0
   let lastTs = 0
-  /** Diagrams currently stepping via GraphSlot nest — cycle guard. */
+  /** Runner ids currently stepping via GraphSlot nest — cycle guard. */
   const nestStack: string[] = []
 
   const bumpClips = () => {
@@ -200,41 +251,380 @@ export function useAnimgraphSim() {
     return board.value.isWrapperActive(name)
   }
 
-  const ensureRunner = (diagramId: string): SimGraphRunner => {
-    let r = runners.get(diagramId)
-    if (!r) {
-      r = new SimGraphRunner()
-      runners.set(diagramId, r)
-    }
-    r.diagramId = diagramId
+  const syncRunnerResources = (r: SimGraphRunner) => {
     r.setClipLibrary(clipLibrary.value)
     r.setAnimDatabaseLibrary(animDbLibrary.value)
     r.setClipPoseLibrary(clipPoseLibrary.value)
     r.setActiveRig(rigLibrary.value.getActive())
     r.sampleWarningsEnabled = sampleWarningsEnabled.value
     r.updateWarningsEnabled = updateWarningsEnabled.value
+  }
+
+  const allocSlotRunnerId = (): string => `s${nextSlotRunnerSeq++}`
+
+  /**
+   * Host mirror when root is destroyed (explicit None): Diagrams UI + persistence
+   * without a live unbound runner in the map.
+   */
+  /** Explicit root None — no live root; persisted as `rootDetached` (not empty diagramId). */
+  let rootDetached = false
+
+  /** Create/get runner shell (not yet bound). Prefer `setRunnerDiagramId` for bind. */
+  const ensureRunner = (runnerId: string): SimGraphRunner => {
+    let r = runners.get(runnerId)
+    if (!r) {
+      r = new SimGraphRunner(runnerId)
+      runners.set(r.runnerId, r)
+    }
     return r
   }
 
-  /** Active-diagram runner for drivers (LookAt / MixerSlot attach). */
-  const getPrimaryRunner = () => {
-    const id = activeDiagramId.value
-    if (!id) return null
-    return runners.get(id) ?? ensureRunner(id)
+  const getRootRunnerId = () => ROOT_RUNNER_ID
+
+  /** Prefer root if it runs this diagram; else first match. */
+  const findRunnerByDiagramId = (diagramId: string): SimGraphRunner | null => {
+    if (!diagramId) return null
+    const root = runners.get(ROOT_RUNNER_ID)
+    if (root?.diagramId === diagramId) return root
+    for (const r of runners.values()) {
+      if (r.diagramId === diagramId) return r
+    }
+    return null
+  }
+
+  const findRunnersByDiagramId = (diagramId: string): SimGraphRunner[] => {
+    if (!diagramId) return []
+    const out: SimGraphRunner[] = []
+    for (const r of runners.values()) {
+      if (r.diagramId === diagramId) out.push(r)
+    }
+    return out
+  }
+
+  /** Depth-first dispose + delete (including root). Unlinks from parent's slotRunnerIds. */
+  const destroyRunner = (runnerId: string) => {
+    const runner = runners.get(runnerId)
+    if (!runner) return
+
+    for (const childId of [...runner.slotRunnerIds.values()]) {
+      if (childId) destroyRunner(childId)
+    }
+
+    // Detach from parent slot map (stale ids otherwise survive serialize).
+    for (const parent of runners.values()) {
+      if (parent === runner) continue
+      for (const [slot, childId] of [...parent.slotRunnerIds.entries()]) {
+        if (childId === runnerId) parent.setSlotRunnerId(slot, null)
+      }
+    }
+
+    runner.dispose()
+    runners.delete(runnerId)
+
+    if (snapshotsByRunner.value[runnerId]) {
+      const next = { ...snapshotsByRunner.value }
+      delete next[runnerId]
+      snapshotsByRunner.value = next
+    }
   }
 
   /**
-   * Active-diagram view into `snapshotsByDiagram` (not a separate store).
-   * Falls back to clock-only empty snap when this diagram was not stepped.
+   * Bind runner to a diagram, or destroy when empty (None).
+   * `diagramId` is only written inside `runner.bind`.
+   */
+  const setRunnerDiagramId = (
+    runnerId: string,
+    diagramId?: string | null,
+    opts?: { skipMaterialize?: boolean }
+  ): SimGraphRunner | null => {
+    const nextDiagramId = (diagramId ?? '').trim()
+
+    if (!nextDiagramId) {
+      if (runnerId === ROOT_RUNNER_ID) rootDetached = true
+      destroyRunner(runnerId)
+      bumpRunners()
+      return null
+    }
+
+    const nextDiagramData = getRenderData(nextDiagramId)
+    if (!nextDiagramData) {
+      console.warn(
+        `[sim] setRunnerDiagramId: no RenderData for diagramId="${nextDiagramId}" (runner="${runnerId}")`
+      )
+      if (runnerId === ROOT_RUNNER_ID) rootDetached = true
+      destroyRunner(runnerId)
+      bumpRunners()
+      return null
+    }
+
+    if (runnerId === ROOT_RUNNER_ID) rootDetached = false
+    const simGraphRunner = ensureRunner(runnerId)
+    // Libraries/rig before bind so compile / StaticSwitch see them.
+    syncRunnerResources(simGraphRunner)
+    simGraphRunner.bind(nextDiagramId, nextDiagramData, board.value)
+    if (!opts?.skipMaterialize) {
+      materializeSlotTree(runnerId)
+    }
+    bumpRunners()
+    return simGraphRunner
+  }
+
+  /**
+   * Ensure a child runner exists for a GraphSlot when it has a diagram.
+   * Initialized None → destroy child, clear slotRunnerId, return null.
+   */
+  const ensureSlotRunner = (
+    parentSimGraphRunner: SimGraphRunner,
+    slotName: string
+  ): string | null => {
+    if (!slotName || slotName === 'None') return null
+
+    let diagramId = parentSimGraphRunner.getSlotDiagramId(slotName) ?? ''
+    if (!diagramId && !parentSimGraphRunner.isSlotInitialized(slotName)) {
+      const matched = findDiagramIdBySlotName(listDiagramIds.value, slotName)
+      if (matched) {
+        diagramId = matched
+        parentSimGraphRunner.setSlotDiagramId(slotName, matched)
+      }
+    }
+
+    // Explicit / resolved None — no live child.
+    if (!diagramId) {
+      if (parentSimGraphRunner.isSlotInitialized(slotName)) {
+        const slotSimGraphRunner = parentSimGraphRunner.getSlotRunnerId(slotName)
+        if (slotSimGraphRunner) {
+          destroyRunner(slotSimGraphRunner)
+          parentSimGraphRunner.setSlotRunnerId(slotName, null)
+        }
+      }
+      return null
+    }
+
+    let slotSimGraphRunnerId = parentSimGraphRunner.getSlotRunnerId(slotName)
+    if (!slotSimGraphRunnerId) {
+      slotSimGraphRunnerId = allocSlotRunnerId()
+      parentSimGraphRunner.setSlotRunnerId(slotName, slotSimGraphRunnerId)
+    }
+
+    const child = runners.get(slotSimGraphRunnerId)
+    if (!child || child.diagramId !== diagramId) {
+      // Never cascade materialize here — rebind/BFS or materializeSlotTree owns that.
+      setRunnerDiagramId(slotSimGraphRunnerId, diagramId, { skipMaterialize: true })
+    }
+    return runners.has(slotSimGraphRunnerId) ? slotSimGraphRunnerId : null
+  }
+
+  /** Eagerly create child runners for GraphSlot names on parent's bound diagram (one level). */
+  const materializeSlotRunners = (parentId: string) => {
+    const parentSimGraphRunner = runners.get(parentId)
+    if (!parentSimGraphRunner?.diagramId) return
+
+    const diagramData = getRenderData(parentSimGraphRunner.diagramId)
+    const diagramGraphSlotNames = collectGraphSlotNames(diagramData?.handlesRegistry)
+    const known = new Set(diagramGraphSlotNames)
+
+    for (const name of diagramGraphSlotNames) {
+      ensureSlotRunner(parentSimGraphRunner, name)
+    }
+
+    let pruned = false
+    for (const [slotName, childId] of [...parentSimGraphRunner.slotRunnerIds.entries()]) {
+      if (known.has(slotName)) continue
+      if (childId) destroyRunner(childId)
+      parentSimGraphRunner.setSlotRunnerId(slotName, null)
+      parentSimGraphRunner.forgetSlotDiagram(slotName)
+      pruned = true
+    }
+    if (pruned || diagramGraphSlotNames.length) bumpRunners()
+  }
+
+  /** BFS materialize from a runner (cycle-safe). */
+  const materializeSlotTree = (startId: string) => {
+    const visited = new Set<string>()
+    const queue = [startId]
+    while (queue.length) {
+      const id = queue.shift()!
+      if (visited.has(id)) continue
+      visited.add(id)
+      materializeSlotRunners(id)
+      const r = runners.get(id)
+      if (!r) continue
+      for (const childId of r.slotRunnerIds.values()) {
+        if (childId && !visited.has(childId)) queue.push(childId)
+      }
+    }
+  }
+
+  /**
+   * Slots on a bound parent: GraphSlot names + initialized Nones.
+   * None slots may have empty runnerId (no live child).
+   */
+  const listSlotRunners = (parentId: string): SimSlotRunnerInfo[] => {
+    const parent = runners.get(parentId)
+    if (!parent?.diagramId) return []
+    const data = getRenderData(parent.diagramId)
+    const names = new Set<string>(collectGraphSlotNames(data?.handlesRegistry))
+    for (const s of parent.slotInitialized) names.add(s)
+    for (const s of parent.slotRunnerIds.keys()) names.add(s)
+    const out: SimSlotRunnerInfo[] = []
+    for (const slotName of names) {
+      if (!slotName || slotName === 'None') continue
+      const runnerId = parent.getSlotRunnerId(slotName) ?? ''
+      const child = runnerId ? runners.get(runnerId) : undefined
+      out.push({
+        slotName,
+        runnerId,
+        diagramId: child?.diagramId ?? parent.getSlotDiagramId(slotName) ?? '',
+      })
+    }
+    return out
+  }
+
+  const setSlotDiagramId = (
+    parentRunnerId: string,
+    slotName: string,
+    diagramId: string
+  ) => {
+    const parentSimGraphRunner = runners.get(parentRunnerId)
+    if (!parentSimGraphRunner) {
+      console.warn(
+        `[sim] setSlotDiagramId: missing parent runner "${parentRunnerId}"`
+      )
+      return
+    }
+    const want = slotName.trim()
+    if (!want || want === 'None') return
+
+    const next = diagramId.trim()
+    // Marks initialized; empty next = explicit None (passthrough, no auto-default).
+    parentSimGraphRunner.setSlotDiagramId(want, next || null)
+    if (!next) {
+      const existing = parentSimGraphRunner.getSlotRunnerId(want)
+      if (existing) destroyRunner(existing)
+      parentSimGraphRunner.setSlotRunnerId(want, null)
+      bumpRunners()
+      return
+    }
+    const childId = ensureSlotRunner(parentSimGraphRunner, want)
+    if (childId) setRunnerDiagramId(childId, next)
+    else bumpRunners()
+  }
+
+  /** Bound runners only (diagram set) — for Skeleton / Status pickers. */
+  const listBoundRunnerTree = (): SimRunnerTreeNode | null => {
+    const rootId = ROOT_RUNNER_ID
+    const root = runners.get(rootId)
+    if (!root?.diagramId) return null
+
+    const build = (
+      runnerId: string,
+      label: string,
+      visited: Set<string>
+    ): SimRunnerTreeNode | null => {
+      if (visited.has(runnerId)) return null
+      visited.add(runnerId)
+      const r = runners.get(runnerId)
+      if (!r?.diagramId) return null
+      const children: SimRunnerTreeNode[] = []
+      for (const slot of listSlotRunners(runnerId)) {
+        if (!slot.diagramId) continue
+        const child = build(slot.runnerId, slot.slotName, visited)
+        if (child) children.push(child)
+      }
+      return {
+        runnerId,
+        diagramId: r.diagramId,
+        label,
+        title: `${label} (${r.diagramId})`,
+        children,
+      }
+    }
+
+    return build(rootId, 'root', new Set())
+  }
+
+  /**
+   * Bound runner tree pruned to runners executing `diagramId` (at-node picker).
+   * Non-matching ancestors are dropped; their matching descendants are promoted.
+   * Multiple top-level matches are wrapped under a synthetic group node.
+   */
+  const listBoundRunnerTreeForDiagram = (
+    diagramId: string
+  ): SimRunnerTreeNode | null => {
+    const want = diagramId.trim()
+    if (!want) return null
+    const tree = listBoundRunnerTree()
+    if (!tree) return null
+
+    const prune = (node: SimRunnerTreeNode): SimRunnerTreeNode[] => {
+      const kids = node.children.flatMap(prune)
+      if (node.diagramId === want) {
+        return [{ ...node, children: kids }]
+      }
+      return kids
+    }
+
+    const roots = prune(tree)
+    if (!roots.length) return null
+    if (roots.length === 1) return roots[0]!
+    return {
+      runnerId: `__diagram:${want}`,
+      diagramId: want,
+      label: want,
+      title: want,
+      children: roots,
+    }
+  }
+
+  /**
+   * Flat list of bound runners with full ancestry path titles.
+   * When `diagramId` is set, only runners executing that diagram are included
+   * (path still shows ancestors).
+   */
+  const listBoundRunnerPaths = (
+    diagramId?: string | null
+  ): SimRunnerPathOption[] => {
+    const tree = listBoundRunnerTree()
+    if (!tree) return []
+    const want = diagramId?.trim() || ''
+    const out: SimRunnerPathOption[] = []
+    const walk = (node: SimRunnerTreeNode, pathPrefix: string) => {
+      const seg = `${node.label}(${node.diagramId})`
+      const path = pathPrefix ? `${pathPrefix} -> ${seg}` : seg
+      if (!want || node.diagramId === want) {
+        out.push({
+          runnerId: node.runnerId,
+          diagramId: node.diagramId,
+          title: path,
+        })
+      }
+      for (const child of node.children) walk(child, path)
+    }
+    walk(tree, '')
+    return out
+  }
+
+  const getSlotDiagramId = (parentRunnerId: string, slotName: string) =>
+    runners.get(parentRunnerId)?.getSlotDiagramId(slotName)
+
+  const getSlotRunnerId = (parentRunnerId: string, slotName: string) =>
+    runners.get(parentRunnerId)?.getSlotRunnerId(slotName)
+
+  /** Root runner for drivers (LookAt / MixerSlot attach). */
+  /** Live root only (null when destroyed / explicit None). */
+  const getPrimaryRunner = () => runners.get(ROOT_RUNNER_ID) ?? null
+
+  /**
+   * Host / SimPanel view: always root runner snap + live clock fields.
+   * Diagram-scoped UI must use `snapshotForRunner` / `snapshotForDiagram`
+   * (do not guess via activeDiagramId here).
    */
   const snapshot = computed((): SimSnapshot => {
-    const id = activeDiagramId.value
-    const hit = id ? snapshotsByDiagram.value[id] : undefined
-    if (hit) return hit
+    const rootSnap = snapshotsByRunner.value[ROOT_RUNNER_ID]
     return {
-      ...emptySimSnapshot(),
+      ...(rootSnap ?? emptySimSnapshot()),
       time: clock.value.time,
-      playing: clock.value.playing,
+      playing: playing.value,
       speed: clock.value.speed,
     }
   })
@@ -510,29 +900,38 @@ export function useAnimgraphSim() {
   let lastNestedPoseBySlot = new Map<string, Pose>()
 
   const makeSlotHost = (
-    snaps: Record<string, SimSnapshot>,
-    stepped: Set<string>,
+    parentRunnerId: string,
+    snapsByRunner: Record<string, SimSnapshot>,
     dt: number,
     nestedPoseBySlot: Map<string, Pose>,
     poseGen: number,
     rawDt = dt
   ): SimGraphSlotHost => ({
     stepNested(slotName, parentPoseUpdate, parentPoseSample) {
-      const ids = listDiagramIds.value
-      const diagramId = findDiagramIdBySlotName(ids, slotName)
-      if (!diagramId) return null
-      if (nestStack.includes(diagramId)) return null
-      if (!getRenderData(diagramId)) return null
-      const runner = ensureRunner(diagramId)
-      // Share LookAt sample-context fields with parent (engine one AnimNodeSampleContext).
-      const parentId = nestStack[nestStack.length - 1]
-      const parent = parentId ? runners.get(parentId) : undefined
-      if (parent) {
-        runner.eyesLookAtEnabled = parent.eyesLookAtEnabled
-        runner.entityLocalToWorld = parent.entityLocalToWorld
-        runner.parentObjectLocalToWorld = parent.parentObjectLocalToWorld
+      const parentSimGraphRunner = runners.get(parentRunnerId)
+      if (!parentSimGraphRunner) {
+        console.warn(
+          `[sim] stepNested: missing parent runner "${parentRunnerId}" (slot="${slotName}")`
+        )
+        return null
       }
-      nestStack.push(diagramId)
+      
+      const parentSimGraphRunnerSlotDiagramId = parentSimGraphRunner.getSlotDiagramId(slotName)
+      if (parentSimGraphRunner.isSlotInitialized(slotName) && !parentSimGraphRunnerSlotDiagramId) {
+        // Uninitialized / explicit None → passthrough (do not step a child graph).
+        return null
+      }
+
+      const childId = ensureSlotRunner(parentSimGraphRunner, slotName)
+      if (!childId) return null
+      if (nestStack.includes(childId)) return null
+      const runner = runners.get(childId)
+      if (!runner?.diagramId || !getRenderData(runner.diagramId)) return null
+      // Share LookAt sample-context fields with parent (engine one AnimNodeSampleContext).
+      runner.eyesLookAtEnabled = parentSimGraphRunner.eyesLookAtEnabled
+      runner.entityLocalToWorld = parentSimGraphRunner.entityLocalToWorld
+      runner.parentObjectLocalToWorld = parentSimGraphRunner.parentObjectLocalToWorld
+      nestStack.push(childId)
       try {
         const snap = runner.step(
           dt,
@@ -543,8 +942,8 @@ export function useAnimgraphSim() {
           {
             endBoardFrame: false,
             slotHost: makeSlotHost(
-              snaps,
-              stepped,
+              childId,
+              snapsByRunner,
               dt,
               nestedPoseBySlot,
               poseGen,
@@ -556,9 +955,8 @@ export function useAnimgraphSim() {
             rawDt,
           }
         )
-        if (parent) parent.eyesLookAtEnabled = runner.eyesLookAtEnabled
-        snaps[diagramId] = snap
-        stepped.add(diagramId)
+        parentSimGraphRunner.eyesLookAtEnabled = runner.eyesLookAtEnabled
+        snapsByRunner[childId] = snap
         const pose = runner.getSampledPose()
         if (pose) {
           nestedPoseBySlot.set(slotName, pose)
@@ -566,7 +964,7 @@ export function useAnimgraphSim() {
           if (lower && lower !== slotName) nestedPoseBySlot.set(lower, pose)
         }
         return {
-          diagramId,
+          diagramId: runner.diagramId,
           snap,
           inertialization: {
             isInertializationRequested:
@@ -583,26 +981,28 @@ export function useAnimgraphSim() {
     getNestedPose(slotName) {
       const want = slotName.trim()
       if (!want || want === 'None') return null
-      const cached =
-        nestedPoseBySlot.get(want) ?? nestedPoseBySlot.get(want.toLowerCase())
-      if (cached) return cached
-      const ids = listDiagramIds.value
-      const diagramId = findDiagramIdBySlotName(ids, want)
-      if (!diagramId) return null
-      return runners.get(diagramId)?.getSampledPose() ?? null
+      // Only poses written by stepNested this frame (never stale unbound sampleOut).
+      return (
+        nestedPoseBySlot.get(want) ??
+        nestedPoseBySlot.get(want.toLowerCase()) ??
+        null
+      )
     },
   })
 
-  const stepDiagram = (
-    diagramId: string,
+  const stepRunner = (
+    runnerId: string,
     dt: number,
     slotHost: SimGraphSlotHost,
     endBoardFrame: boolean,
     poseGen: number,
     rawDt: number
   ): SimSnapshot => {
-    const runner = ensureRunner(diagramId)
-    nestStack.push(diagramId)
+    const runner = runners.get(runnerId)
+    if (!runner?.diagramId) {
+      throw new Error(`[sim] stepRunner: missing bound runner "${runnerId}"`)
+    }
+    nestStack.push(runnerId)
     try {
       return runner.step(dt, board.value, clock.value.time, clock.value.playing, clock.value.speed, {
         endBoardFrame,
@@ -616,33 +1016,50 @@ export function useAnimgraphSim() {
   }
 
   const publish = (dt: number, rawDt = dt) => {
-    // Overlay applies undefined when inactive — skip step so callers (drafts, capture,
-    // resource loads) do not force a full diagram walk via snapshot watch.
     if (!active.value) return
+
     applyDraftsToBoard()
+    
     poseGenCounter += 1
     const poseGen = poseGenCounter
-    const snaps: Record<string, SimSnapshot> = {}
-    const stepped = new Set<string>()
+
+    const simGraphRunnerIdToSimSnapshot: Record<string, SimSnapshot> = {}
+
     lastNestedPoseBySlot = new Map()
+    let root = runners.get(ROOT_RUNNER_ID)
+    if (!root && !rootDetached) {
+      const rootDiagram = resolveRootDiagramId(listDiagramIds.value)
+      if (rootDiagram) root = setRunnerDiagramId(ROOT_RUNNER_ID, rootDiagram) ?? undefined
+    }
+    if (!root?.diagramId) {
+      board.value.endFrame()
+      snapshotsByRunner.value = simGraphRunnerIdToSimSnapshot
+      return
+    }
+
     const slotHost = makeSlotHost(
-      snaps,
-      stepped,
+      ROOT_RUNNER_ID,
+      simGraphRunnerIdToSimSnapshot,
       dt,
       lastNestedPoseBySlot,
       poseGen,
       rawDt
     )
-    const rootId = resolveRootDiagramId(listDiagramIds.value)
 
     // Only root Update; slotted diagrams tick solely when GraphSlot is on the active path.
-    if (rootId) {
-      snaps[rootId] = stepDiagram(rootId, dt, slotHost, false, poseGen, rawDt)
-      stepped.add(rootId)
+    if (getRenderData(root.diagramId)) {
+      simGraphRunnerIdToSimSnapshot[ROOT_RUNNER_ID] = stepRunner(
+        ROOT_RUNNER_ID,
+        dt,
+        slotHost,
+        false,
+        poseGen,
+        rawDt
+      )
     }
 
     board.value.endFrame()
-    snapshotsByDiagram.value = snaps
+    snapshotsByRunner.value = simGraphRunnerIdToSimSnapshot
   }
 
   const stopLoop = () => {
@@ -668,6 +1085,7 @@ export function useAnimgraphSim() {
   }
 
   const syncLoop = () => {
+    syncPlaying()
     const want = active.value && clock.value.playing
     enabled.value = want
     if (!want) {
@@ -682,22 +1100,31 @@ export function useAnimgraphSim() {
 
   const rebind = () => {
     const ids = listDiagramIds.value
-    const keep = new Set(ids)
-    for (const id of [...runners.keys()]) {
-      if (!keep.has(id)) runners.delete(id)
-    }
-    // Clear then bind: compile seeds board defaults from nodes.
+    const idSet = new Set(ids)
+    // Snapshot topology before teardown (preserves rootDetached via serialize).
+    const saved = serializeRunnerSlots()
+
     board.value.clearAll()
-    for (const id of ids) {
-      const data = getRenderData(id)
-      const runner = ensureRunner(id)
-      runner.bind(data, board.value)
-      runner.setClipLibrary(clipLibrary.value)
-      runner.setAnimDatabaseLibrary(animDbLibrary.value)
-      runner.setClipPoseLibrary(clipPoseLibrary.value)
-      runner.setActiveRig(rigLibrary.value.getActive())
+    applyRunnerSlotsConfig(saved)
+
+    // Invalidate slot→diagram bindings whose diagrams left the project.
+    for (const r of [...runners.values()]) {
+      if (r.diagramId && !idSet.has(r.diagramId)) {
+        destroyRunner(r.runnerId)
+        continue
+      }
+      for (const [slot, diag] of [...r.slotDiagramIds.entries()]) {
+        if (diag && !idSet.has(diag)) {
+          r.setSlotDiagramId(slot, null)
+          const childId = r.getSlotRunnerId(slot)
+          if (childId) destroyRunner(childId)
+          r.setSlotRunnerId(slot, null)
+        }
+      }
     }
+
     clock.value.reset()
+    syncPlaying()
     // Drafts mirror board (incl. compile-time feature seeds).
     const drafts: Record<string, number> = {}
     for (const f of discovered.value.features) {
@@ -739,7 +1166,8 @@ export function useAnimgraphSim() {
     tagValueDrafts.value = {}
     // entityTagDrafts are project resources — kept across rebind (like clip/anim DB).
     wrapperWeightDrafts.value = {}
-    snapshotsByDiagram.value = {}
+    snapshotsByRunner.value = {}
+    bumpRunners()
     publish(0)
     syncLoop()
   }
@@ -759,16 +1187,19 @@ export function useAnimgraphSim() {
 
   const play = () => {
     clock.value.play()
+    syncPlaying()
     publish(0)
     syncLoop()
   }
   const pause = () => {
     clock.value.pause()
+    syncPlaying()
     publish(0)
     syncLoop()
   }
   const toggle = () => {
     clock.value.toggle()
+    syncPlaying()
     publish(0)
     syncLoop()
   }
@@ -778,6 +1209,7 @@ export function useAnimgraphSim() {
   }
   const reset = () => {
     clock.value.reset()
+    syncPlaying()
     board.value.resetDynamics()
     for (const runner of runners.values()) runner.reset()
     publish(0)
@@ -792,6 +1224,7 @@ export function useAnimgraphSim() {
   const deactivate = () => {
     active.value = false
     clock.value.pause()
+    syncPlaying()
     syncLoop()
   }
   const toggleActive = () => {
@@ -801,7 +1234,7 @@ export function useAnimgraphSim() {
 
   const setSpeed = (s: number) => {
     clock.value.setSpeed(s)
-    const nextSnaps: Record<string, SimSnapshot> = { ...snapshotsByDiagram.value }
+    const nextSnaps: Record<string, SimSnapshot> = { ...snapshotsByRunner.value }
     for (const [id, snap] of Object.entries(nextSnaps)) {
       nextSnaps[id] = {
         ...snap,
@@ -809,7 +1242,7 @@ export function useAnimgraphSim() {
         nodeDelta: snap.nodeDelta ? { changes: {}, removed: [] } : null,
       }
     }
-    snapshotsByDiagram.value = nextSnaps
+    snapshotsByRunner.value = nextSnaps
   }
 
   const fireExternal = (name?: string) => {
@@ -1354,10 +1787,11 @@ export function useAnimgraphSim() {
   }
 
   const resolveRunnerPose = (
-    diagramId: string,
+    runnerId: string,
     poseRef: DerivedPoseRef
   ): { pose: Pose | null; rig: RigEntry | null } => {
-    const runner = runners.get(diagramId) ?? ensureRunner(diagramId)
+    const runner = runners.get(runnerId)
+    if (!runner) return { pose: null, rig: null }
     const rig = runner.getActiveRig()
     if (poseRef === 'sample') {
       return { pose: runner.getSampledPose(), rig }
@@ -1370,12 +1804,12 @@ export function useAnimgraphSim() {
 
   /**
    * Pose-derived HUD stats (stack / tracks / rig bones).
-   * Pass the diagram snapshot so `poseGen` drives cache + Vue ticks.
+   * Pass the runner snapshot so `poseGen` drives cache + Vue ticks.
    * Pose is resolved once per cache key; builders only read that pose.
    */
   const getDerivedPoseStats = (
     snap: SimSnapshot,
-    diagramId: string,
+    runnerId: string,
     opts: {
       pose?: DerivedPoseRef
       need: DerivedPoseStatsNeed
@@ -1387,7 +1821,7 @@ export function useAnimgraphSim() {
       derivedPoseCache.clear()
       derivedPoseCacheGen = poseGen
     }
-    const key = `${poseGen}|${diagramId}|${poseRefKey(poseRef)}`
+    const key = `${poseGen}|${runnerId}|${poseRefKey(poseRef)}`
     let entry = derivedPoseCache.get(key)
     if (!entry) {
       entry = {}
@@ -1403,7 +1837,7 @@ export function useAnimgraphSim() {
     if (!wantsAny) return entry
 
     if (!entry.resolved) {
-      const resolved = resolveRunnerPose(diagramId, poseRef)
+      const resolved = resolveRunnerPose(runnerId, poseRef)
       entry.pose = resolved.pose
       entry.rig = resolved.rig
       entry.resolved = true
@@ -1508,6 +1942,156 @@ export function useAnimgraphSim() {
   const exportCompactAnimDatabaseLibrary = () =>
     animDatabaseLibraryToCompactJson(animDbLibrary.value)
 
+  // function decls so rebind()'s immediate project watch can call them (hoisted).
+  function serializeRunnerSlots(): SimRunnerSlotsConfigJson | undefined {
+    if (rootDetached) {
+      return {
+        rootRunnerId: ROOT_RUNNER_ID,
+        rootDetached,
+        runners: {},
+      }
+    }
+
+    const rootRunner = runners.get(ROOT_RUNNER_ID)
+    if (!rootRunner || !rootRunner.diagramId) {
+      return undefined
+    }
+
+    const onlyRootDefault =
+      runners.size <= 1 &&
+      rootRunner.slotInitialized.size === 0 &&
+      rootRunner.slotDiagramIds.size === 0 &&
+      rootRunner.slotRunnerIds.size === 0 &&
+      rootRunner.diagramId === resolveRootDiagramId(listDiagramIds.value)
+    if (onlyRootDefault) return undefined
+
+    // Map holds only live bound runners — no reachability walk needed.
+    const runnersJson: SimRunnerSlotsConfigJson['runners'] = {}
+    for (const [runnerId, runner] of runners) {
+      if (!runner.diagramId) continue
+      
+      runnersJson[runnerId] = {
+        diagramId: runner.diagramId,
+        slotInitialized: [...runner.slotInitialized],
+        slotDiagramIds: Object.fromEntries(runner.slotDiagramIds),
+        slotRunnerIds: Object.fromEntries(runner.slotRunnerIds),
+      }
+    }
+    return { rootRunnerId: ROOT_RUNNER_ID, runners: runnersJson }
+  }
+
+  function applyRunnerSlotsConfig(cfg: SimRunnerSlotsConfigJson | null | undefined) {
+    for (const id of [...runners.keys()]) destroyRunner(id)
+    nextSlotRunnerSeq = 1
+    rootDetached = false
+    const ids = listDiagramIds.value
+    const idSet = new Set(ids)
+
+    if (cfg?.rootDetached === true) {
+      rootDetached = true
+      bumpRunners()
+      return
+    }
+
+    // Legacy: empty diagramId on root entry → rootDetached.
+    const legacyRootEntry =
+      cfg?.runners && typeof cfg.runners === 'object'
+        ? cfg.runners[ROOT_RUNNER_ID] ??
+          (typeof cfg.rootRunnerId === 'string'
+            ? cfg.runners[cfg.rootRunnerId.trim()]
+            : undefined)
+        : undefined
+    if (
+      legacyRootEntry &&
+      typeof legacyRootEntry.diagramId === 'string' &&
+      !legacyRootEntry.diagramId.trim()
+    ) {
+      rootDetached = true
+      bumpRunners()
+      return
+    }
+
+    if (!cfg?.runners || typeof cfg.runners !== 'object') {
+      const rootDiag = resolveRootDiagramId(ids)
+      if (rootDiag) setRunnerDiagramId(ROOT_RUNNER_ID, rootDiag)
+      bumpRunners()
+      return
+    }
+
+    const rootEntry =
+      cfg.runners[ROOT_RUNNER_ID] ??
+      (typeof cfg.rootRunnerId === 'string' && cfg.runners[cfg.rootRunnerId.trim()]
+        ? cfg.runners[cfg.rootRunnerId.trim()]
+        : undefined)
+
+    const rootDiagRaw =
+      typeof rootEntry?.diagramId === 'string' ? rootEntry.diagramId.trim() : ''
+    const rootDiag =
+      rootDiagRaw && idSet.has(rootDiagRaw)
+        ? rootDiagRaw
+        : resolveRootDiagramId(ids) ?? ''
+    if (!rootDiag) {
+      rootDetached = true
+      bumpRunners()
+      return
+    }
+
+    setRunnerDiagramId(ROOT_RUNNER_ID, rootDiag, { skipMaterialize: true })
+    const root = runners.get(ROOT_RUNNER_ID)
+    if (!root) {
+      bumpRunners()
+      return
+    }
+
+    // Apply slot topology onto bound runners (BFS by saved entries).
+    const applySlotsToRunner = (
+      runnerId: string,
+      entry: NonNullable<SimRunnerSlotsConfigJson['runners']>[string]
+    ) => {
+      const r = runners.get(runnerId)
+      if (!r || !entry) return
+      if (entry.slotDiagramIds && typeof entry.slotDiagramIds === 'object') {
+        for (const [slot, diag] of Object.entries(entry.slotDiagramIds)) {
+          const s = slot.trim()
+          if (!s) continue
+          const d = typeof diag === 'string' ? diag.trim() : ''
+          if (!d || !idSet.has(d)) continue
+          r.setSlotDiagramId(s, d)
+        }
+      }
+      if (Array.isArray(entry.slotInitialized)) {
+        for (const slot of entry.slotInitialized) {
+          const s = typeof slot === 'string' ? slot.trim() : ''
+          if (!s) continue
+          if (!r.isSlotInitialized(s)) r.setSlotDiagramId(s, null)
+        }
+      }
+      if (entry.slotRunnerIds && typeof entry.slotRunnerIds === 'object') {
+        for (const [slot, childId] of Object.entries(entry.slotRunnerIds)) {
+          const s = slot.trim()
+          const c = typeof childId === 'string' ? childId.trim() : ''
+          if (!s || !c) continue
+          const childEntry = cfg!.runners![c]
+          const childDiag =
+            typeof childEntry?.diagramId === 'string' ? childEntry.diagramId.trim() : ''
+          if (!childDiag || !idSet.has(childDiag)) continue
+          r.setSlotRunnerId(s, c)
+          const m = /^s(\d+)$/.exec(c)
+          if (m) {
+            const n = Number(m[1])
+            if (Number.isFinite(n) && n >= nextSlotRunnerSeq) nextSlotRunnerSeq = n + 1
+          }
+          setRunnerDiagramId(c, childDiag, { skipMaterialize: true })
+          if (childEntry) applySlotsToRunner(c, childEntry)
+        }
+      }
+    }
+
+    if (rootEntry) applySlotsToRunner(ROOT_RUNNER_ID, rootEntry)
+    materializeSlotTree(ROOT_RUNNER_ID)
+    bumpRunners()
+  }
+
   /** Project IO: omit empty libraries so old/small projects stay lean. */
   const getProjectSimResources = (opts?: { includeClipPoses?: boolean }) => {
     const includeClipPoses = opts?.includeClipPoses === true
@@ -1527,12 +2111,14 @@ export function useAnimgraphSim() {
       ? getCachedClipPoseLibraryJson()
       : undefined
     const hasPoses = clipPoseLibrary.value.size > 0
+    const runnerSlots = serializeRunnerSlots()
     if (
       clipSetup == null &&
       animDatabaseLibrary == null &&
       entityTags == null &&
       (rigLibraryJson == null || !(rigLibraryJson.entries?.length > 0)) &&
-      !hasPoses
+      !hasPoses &&
+      runnerSlots == null
     ) {
       return null
     }
@@ -1543,6 +2129,7 @@ export function useAnimgraphSim() {
       rigLibrary: rigLibraryJson,
       clipPoseLibrary: clipPoseLibraryJson,
       clipPoseRevision: clipPoseRevision.value,
+      runnerSlots,
     }
   }
 
@@ -1553,6 +2140,7 @@ export function useAnimgraphSim() {
       entityTags?: Record<string, boolean>
       rigLibrary?: RigLibraryJson
       clipPoseLibrary?: ClipPoseLibraryJson
+      runnerSlots?: SimRunnerSlotsConfigJson
     } | null
   ) => {
     clipLibrary.value.clear()
@@ -1601,29 +2189,32 @@ export function useAnimgraphSim() {
         console.warn('Failed to restore project clipPoseLibrary', err)
       }
     }
+    applyRunnerSlotsConfig(resources?.runnerSlots)
     bumpClips()
     bumpAnimDb()
     bumpRigs()
     bumpClipPose()
-    for (const runner of runners.values()) {
-      runner.setClipLibrary(clipLibrary.value)
-      runner.setAnimDatabaseLibrary(animDbLibrary.value)
-      runner.setClipPoseLibrary(clipPoseLibrary.value)
-      runner.setActiveRig(rigLibrary.value.getActive())
-      runner.invalidateStaticSwitches()
-    }
-    publish(0)
+    // Rebind reachable runners to restored topology + libraries.
+    rebind()
   }
 
+  /** Overlay helper: one runner for a diagram (root preferred). Prefer `snapshotForRunner`. */
   const snapshotForDiagram = (diagramId: string | null | undefined): SimSnapshot | undefined => {
     if (!diagramId) return undefined
-    return snapshotsByDiagram.value[diagramId]
+    const runner = findRunnerByDiagramId(diagramId)
+    if (!runner) return undefined
+    return snapshotsByRunner.value[runner.runnerId]
+  }
+
+  const snapshotForRunner = (runnerId: string | null | undefined): SimSnapshot | undefined => {
+    if (!runnerId) return undefined
+    return snapshotsByRunner.value[runnerId]
   }
 
   /**
    * Pooled pose + rig for skeleton viewport (not reactive — call each frame).
-   * - full: root diagram sampleOut
-   * - selected: chosen diagram sampleOut (`selectedDiagramId`)
+   * - full: root runner sampleOut
+   * - selected: chosen runner sampleOut (`selectedRunnerId`)
    * - atNode: Sample capture at selected handle (fallback → open/selected/full)
    */
   const getSkeletonViewPose = (
@@ -1631,68 +2222,117 @@ export function useAnimgraphSim() {
     options?: {
       /** Prefer open diagram for atNode capture search / fallback. */
       activeDiagramId?: string | null
-      /** Diagram Sample out when source is `selected`. */
+      /** Runner Sample out when source is `selected`. */
+      selectedRunnerId?: string | null
+      /** @deprecated use selectedRunnerId */
       selectedDiagramId?: string | null
       captureHandleId?: string | null
     }
   ): { pose: Pose; rig: RigEntry } | null => {
-    const rootId = resolveRootDiagramId(listDiagramIds.value)
-    const openId = options?.activeDiagramId ?? activeDiagramId.value ?? rootId
-    const selectedId = options?.selectedDiagramId ?? openId
-    const pick = (diagramId: string | null | undefined) => {
-      if (!diagramId) return null
-      const runner = runners.get(diagramId) ?? ensureRunner(diagramId)
+    const pickRunner = (runnerId: string | null | undefined) => {
+      if (!runnerId) return null
+      const runner = runners.get(runnerId)
+      if (!runner) return null
       const rig = runner.getActiveRig() ?? rigLibrary.value.getActive()
       const pose = runner.getSampledPose()
       if (!rig || !pose) return null
       return { pose, rig }
     }
+    const pickByDiagram = (diagramId: string | null | undefined) => {
+      if (!diagramId) return null
+      const runner = findRunnerByDiagramId(diagramId)
+      return runner ? pickRunner(runner.runnerId) : null
+    }
 
-    if (source === 'full') return pick(rootId)
+    const rootId = ROOT_RUNNER_ID
+    const openDiagramId =
+      options?.activeDiagramId ?? activeDiagramId.value ?? runners.get(rootId)?.diagramId
+    const selectedRunnerId =
+      options?.selectedRunnerId ||
+      (options?.selectedDiagramId
+        ? findRunnerByDiagramId(options.selectedDiagramId)?.runnerId
+        : null) ||
+      rootId
 
-    if (source === 'selected') return pick(selectedId)
+    if (source === 'full') return pickRunner(rootId)
 
-    // atNode
+    if (source === 'selected') return pickRunner(selectedRunnerId)
+
+    // atNode — prefer explicit runner (filtered to node’s diagram in UI).
+    const atRunnerId = options?.selectedRunnerId?.trim() || null
     const hid = options?.captureHandleId?.trim()
     if (hid) {
-      const tryCapture = (diagramId: string | null | undefined) => {
-        if (!diagramId) return null
-        const runner = runners.get(diagramId)
+      const tryCaptureOnRunner = (runner: SimGraphRunner | null | undefined) => {
         if (!runner) return null
         const pose = runner.getCapturedPose(hid)
         const rig = runner.getActiveRig() ?? rigLibrary.value.getActive()
         if (!pose || !rig) return null
         return { pose, rig }
       }
-      const fromOpen = tryCapture(openId)
+      if (atRunnerId) {
+        const hit = tryCaptureOnRunner(runners.get(atRunnerId))
+        if (hit) {
+          if (isSimSampleLogEnabled()) {
+            console.log(
+              `[sim-sample] viewport atNode=${hid} source=capture runner=${atRunnerId}`
+            )
+          }
+          return hit
+        }
+      }
+      const fromOpen = tryCaptureOnRunner(
+        openDiagramId ? findRunnerByDiagramId(openDiagramId) : runners.get(rootId)
+      )
       if (fromOpen) {
         if (isSimSampleLogEnabled()) {
-          console.log(`[sim-sample] viewport atNode=${hid} source=capture diagram=${openId}`)
+          console.log(`[sim-sample] viewport atNode=${hid} source=capture diagram=${openDiagramId}`)
         }
         return fromOpen
       }
-      for (const id of runners.keys()) {
-        const hit = tryCapture(id)
+      for (const runner of runners.values()) {
+        const hit = tryCaptureOnRunner(runner)
         if (hit) {
           if (isSimSampleLogEnabled()) {
-            console.log(`[sim-sample] viewport atNode=${hid} source=capture diagram=${id}`)
+            console.log(
+              `[sim-sample] viewport atNode=${hid} source=capture diagram=${runner.diagramId} runner=${runner.runnerId}`
+            )
           }
           return hit
         }
       }
       if (isSimSampleLogEnabled()) {
         console.log(
-          `[sim-sample] viewport atNode=${hid} source=FALLBACK-sampleOut open=${openId} root=${rootId}`
+          `[sim-sample] viewport atNode=${hid} source=FALLBACK-sampleOut open=${openDiagramId} root=${rootId}`
         )
       }
     }
-    return pick(openId) ?? pick(rootId)
+    return (
+      pickRunner(atRunnerId) ?? pickByDiagram(openDiagramId) ?? pickRunner(rootId)
+    )
   }
 
   return {
     enabled,
     active,
+    playing,
     getPrimaryRunner,
+    getRootRunnerId,
+    ensureRunner,
+    ensureSlotRunner: (parentId: string, slotName: string) => {
+      const parent = runners.get(parentId)
+      if (!parent) return null
+      return ensureSlotRunner(parent, slotName)
+    },
+    listSlotRunners,
+    listBoundRunnerTree,
+    listBoundRunnerTreeForDiagram,
+    listBoundRunnerPaths,
+    setSlotDiagramId,
+    getSlotDiagramId,
+    getSlotRunnerId,
+    setRunnerDiagramId,
+    findRunnerByDiagramId,
+    findRunnersByDiagramId,
     withFeatureBatch,
     getFeature,
     getBoolFeature,
@@ -1700,8 +2340,10 @@ export function useAnimgraphSim() {
     getVectorFeature,
     getQuatFeature,
     snapshot,
-    snapshotsByDiagram,
+    snapshotsByRunner,
+    runnersRev,
     snapshotForDiagram,
+    snapshotForRunner,
     getSkeletonViewPose,
     discovered,
     eventDraft,

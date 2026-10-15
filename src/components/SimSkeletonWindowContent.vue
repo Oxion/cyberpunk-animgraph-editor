@@ -2,9 +2,10 @@
   <div class="flex h-full min-h-0 flex-col gap-1.5 p-2">
     <SkeletonViewportHeader
       v-model:pose-source="poseSource"
-      v-model:selected-diagram-id="selectedDiagramId"
+      v-model:selected-runner-id="selectedRunnerId"
+      v-model:at-node-runner-id="atNodeRunnerId"
       v-model:show-labels="showLabels"
-      :diagram-options="diagramOptions"
+      :node-diagram-id="nodeDiagramId"
     />
 
     <Tabs v-model="mainTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
@@ -210,15 +211,13 @@ import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import {
-  activeDiagramId,
-  listDiagramIds,
-  mainDiagramId,
-} from '../stores/graphProject'
+import { activeDiagramId } from '../stores/graphProject'
 import {
   simGetDerivedPoseStats,
-  simSnapshotsByDiagram,
+  simGetRootRunnerId,
+  simSnapshotsByRunner,
   simStackCaptureHandleIds,
+  simFindRunnerByDiagramId,
 } from '../stores/animgraphSim'
 import { emptySimSnapshot } from '../utils/sim/simSnapshot'
 import {
@@ -272,13 +271,14 @@ const props = defineProps<{
   minimized?: boolean
   getPose: (
     source: SkeletonPoseSource,
-    selectedDiagramId?: string | null
+    selectedRunnerId?: string | null
   ) => { pose: Pose; rig: RigEntry } | null
 }>()
 
 const mainTab = ref<'viewport' | 'bones'>('viewport')
 const poseSource = ref<SkeletonPoseSource>('full')
-const selectedDiagramId = ref(props.diagramId)
+const selectedRunnerId = ref(simGetRootRunnerId())
+const atNodeRunnerId = ref('')
 const showLabels = ref(false)
 const nameFilter = ref('')
 type TrsParts = Record<TrsPart, boolean>
@@ -301,7 +301,10 @@ const rigBoneRowH = computed(
   () => RIG_BONE_ROW_BASE_H + rigTrsLineCount.value * RIG_BONE_TRS_LINE_H
 )
 
-const diagramOptions = computed(() => listDiagramIds.value)
+/** Diagram owning the selected node (window / active diagram). */
+const nodeDiagramId = computed(
+  () => activeDiagramId.value || props.diagramId || null
+)
 
 const sourceLabel = (s: SkeletonPoseSource) => {
   if (s === 'full') return 'full'
@@ -309,35 +312,26 @@ const sourceLabel = (s: SkeletonPoseSource) => {
   return 'at node'
 }
 
-const syncSelectedDiagram = () => {
-  const ids = diagramOptions.value
-  if (ids.length === 0) {
-    selectedDiagramId.value = props.diagramId
-    return
-  }
-  if (!ids.includes(selectedDiagramId.value)) {
-    selectedDiagramId.value =
-      (ids.includes(props.diagramId) ? props.diagramId : null) ?? ids[0]!
-  }
-}
-
 watch(
   () => props.diagramId,
   (id) => {
-    if (diagramOptions.value.includes(id)) selectedDiagramId.value = id
+    const hit = simFindRunnerByDiagramId(id)
+    if (hit) selectedRunnerId.value = hit.runnerId
   }
 )
 
-watch(diagramOptions, () => syncSelectedDiagram(), { immediate: true })
-
-const fetchPose = () =>
-  props.getPose(
-    poseSource.value,
-    poseSource.value === 'selected' ? selectedDiagramId.value : null
-  )
+const fetchPose = () => {
+  if (poseSource.value === 'selected') {
+    return props.getPose(poseSource.value, selectedRunnerId.value)
+  }
+  if (poseSource.value === 'atNode') {
+    return props.getPose(poseSource.value, atNodeRunnerId.value || null)
+  }
+  return props.getPose(poseSource.value, null)
+}
 
 type DerivedPoseQuery = {
-  diagramId: string
+  runnerId: string
   pose: DerivedPoseRef
   need: DerivedPoseStatsNeed
 }
@@ -349,20 +343,19 @@ const BONES_TAB_NEED: DerivedPoseStatsNeed = {
 }
 
 const derivedPoseQuery = computed((): DerivedPoseQuery | null => {
-  let diagramId: string | null = null
+  let runnerId: string | null = null
   let pose: DerivedPoseRef = 'sample'
   if (poseSource.value === 'selected') {
-    diagramId = selectedDiagramId.value || null
+    runnerId = selectedRunnerId.value || null
   } else if (poseSource.value === 'atNode') {
-    diagramId =
-      activeDiagramId.value ?? selectedDiagramId.value ?? props.diagramId
+    runnerId = atNodeRunnerId.value || null
     const capture = simStackCaptureHandleIds.value[0]
     pose = capture ? { capture } : 'sample'
   } else {
-    diagramId = mainDiagramId.value || props.diagramId || null
+    runnerId = simGetRootRunnerId()
   }
-  if (!diagramId) return null
-  return { diagramId, pose, need: BONES_TAB_NEED }
+  if (!runnerId) return null
+  return { runnerId, pose, need: BONES_TAB_NEED }
 })
 
 /** Single derived-stats fetch while Bones tab is open. */
@@ -370,8 +363,8 @@ const derivedPoseStats = computed(() => {
   if (mainTab.value !== 'bones') return null
   const query = derivedPoseQuery.value
   if (!query) return null
-  const snap = simSnapshotsByDiagram.value[query.diagramId] ?? emptySimSnapshot()
-  return simGetDerivedPoseStats(snap, query.diagramId, {
+  const snap = simSnapshotsByRunner.value[query.runnerId] ?? emptySimSnapshot()
+  return simGetDerivedPoseStats(snap, query.runnerId, {
     pose: query.pose,
     need: query.need,
   })

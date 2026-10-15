@@ -510,6 +510,9 @@
       :diagram-items="diagramTaskbarItems"
       :body-items="bodyViewTaskbarItems"
       :window-items="taskbarItems"
+      :sim-active="simActive"
+      :overlay-diagram-id="activeDiagramId"
+      v-model:overlay-runner-id="simOverlayRunnerId"
       @select="onTaskbarSelect"
       @select-diagram="onTaskbarSelectDiagram"
     />
@@ -714,7 +717,8 @@ import {
   simSetWrapperWeight,
   simSnapshot as simSnapshotRef,
   simSnapshotForDiagram,
-  simSnapshotsByDiagram,
+  simSnapshotForRunner,
+  simSnapshotsByRunner,
   simStep,
   simTagValueDrafts,
   simToggle,
@@ -1380,12 +1384,12 @@ const openRenderStatsForActive = () => {
 
 const getSimSkeletonPose = (
   source: 'full' | 'selected' | 'atNode',
-  selectedDiagramId?: string | null
+  selectedRunnerId?: string | null
 ) => {
   const handleId = (selectedNodeRef.value?.data?.originalNodeId as string | undefined) ?? null
   return simGetSkeletonViewPose(source, {
     activeDiagramId: requireActiveDiagramIdSafe(),
-    selectedDiagramId,
+    selectedRunnerId,
     captureHandleId: handleId,
   })
 }
@@ -1414,19 +1418,35 @@ const showGraphInfoCard = ref(false)
 const showSimCard = ref(false)
 const showAboutDialog = ref(false)
 
+/** Taskbar picker: which runner paints overlay on the active diagram. */
+const simOverlayRunnerId = ref('')
+
+const simOverlaySnapForDiagram = (diagramId: string) => {
+  if (
+    diagramId === activeDiagramId.value &&
+    simOverlayRunnerId.value.trim()
+  ) {
+    return (
+      simSnapshotForRunner(simOverlayRunnerId.value) ??
+      simSnapshotForDiagram(diagramId)
+    )
+  }
+  return simSnapshotForDiagram(diagramId)
+}
+
 const applySimOverlayToAllRenderers = () => {
   const live = simActive.value
 
   // Soft-suspended Main canvases keep their own diagram snapshot.
   forEachMainDiagramRenderer((renderer, diagramId) => {
-    renderer.applySimOverlay(live ? simSnapshotForDiagram(diagramId) : undefined)
+    renderer.applySimOverlay(live ? simOverlaySnapForDiagram(diagramId) : undefined)
   })
 
   forEachDiagramViewRenderer((renderer, viewId) => {
     // Active Main already painted above via forEachMainDiagramRenderer.
     if (viewId === MAIN_RENDERER_ID) return
     const diagramId = diagramIdForViewId(viewId)
-    renderer.applySimOverlay(live ? simSnapshotForDiagram(diagramId) : undefined)
+    renderer.applySimOverlay(live ? simOverlaySnapForDiagram(diagramId) : undefined)
   })
 }
 
@@ -1437,7 +1457,14 @@ const bindWindowDiagramRef = (viewId: string, el: unknown) => {
 
 watch(
   () =>
-    [simSnapshotRef.value, simSnapshotsByDiagram.value, showSimCard.value, simActive.value] as const,
+    [
+      simSnapshotRef.value,
+      simSnapshotsByRunner.value,
+      showSimCard.value,
+      simActive.value,
+      simOverlayRunnerId.value,
+      activeDiagramId.value,
+    ] as const,
   () => {
     // Sync: Play publishes from rAF; deferred overlay raced and skipped frames.
     // Empty nodeDelta early-return then left badges stuck until Step.
@@ -1740,7 +1767,11 @@ const simRingHighlightFor = (smNodeId: string | undefined | null) => {
   const handleId =
     (node?.data?.originalNodeId as string | undefined) ??
     smNodeId
-  const st = simSnapshotRef.value.sms[handleId]
+  const snap =
+    (simOverlayRunnerId.value.trim()
+      ? simSnapshotForRunner(simOverlayRunnerId.value)
+      : undefined) ?? simSnapshotRef.value
+  const st = snap.sms[handleId]
   if (!st) return null
   const handles = data.handlesRegistry
   const eligibleEdges = new Set<string>()

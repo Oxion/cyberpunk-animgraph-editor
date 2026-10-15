@@ -11,6 +11,28 @@ import type { AnimDatabaseLibraryJson } from '../sim/animDatabase'
 import type { RigLibraryJson } from '../sim/rigResource'
 import type { ClipPoseLibraryJson } from '../sim/clipPoseLibrary'
 
+/** Persisted sim runner topology (no live dyn). */
+export type SimRunnerSlotsConfigJson = {
+  rootRunnerId: string
+  /**
+   * Root was explicitly set to None — no live root runner.
+   * When true, `runners` must not contain a root entry with empty diagramId.
+   */
+  rootDetached?: boolean
+  runners: Record<
+    string,
+    {
+      /** Nonempty diagram id (bound runner only). */
+      diagramId: string
+      /** Slots the host has configured (incl. explicit None). */
+      slotInitialized?: string[]
+      /** Only slots with a assigned diagram (None omitted). */
+      slotDiagramIds: Record<string, string>
+      slotRunnerIds: Record<string, string>
+    }
+  >
+}
+
 /** Roots: world/stage; children: local offset to parent. */
 export interface RenderNode {
   id: string
@@ -190,6 +212,8 @@ export interface AnimgraphProjectFile {
    * FS save uses sibling `*.clipposes.json` instead.
    */
   clipPoseLibrary?: ClipPoseLibraryJson
+  /** Sim GraphSlot execution topology (runner ids + slot→diagram / slot→child maps). */
+  runnerSlots?: SimRunnerSlotsConfigJson
 }
 
 /** Default id suggestion for the first diagram; not a hard requirement. */
