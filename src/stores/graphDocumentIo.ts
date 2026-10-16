@@ -48,8 +48,19 @@ import {
 import { toolManager } from './toolManager'
 import { currentLoadedPath } from './loadedProjectPath'
 import { diagramViewReadyRef } from '../composables/useMainDiagramMount'
+import { rewriteRunnerSlotsDiagramIds } from '../composables/useAnimgraphSim'
 
 export { currentLoadedPath }
+
+/** Draft edits applied via export → rewrite → loadProjectFile. */
+export type ProjectDiagramEdits = {
+  /** Surviving diagrams: old id → new id (identity ok). */
+  idMap: Record<string, string>
+  /** Old diagram ids to drop. */
+  removedIds: string[]
+  /** Main diagram id after rename (must be a new id of a survivor). */
+  mainDiagramId: string
+}
 
 export type GraphDocumentIoHost = {
   directChildrenLayoutMode: Ref<DirectChildrenLayoutMode>
@@ -591,6 +602,109 @@ export const createProjectExportData = (opts?: {
   return out
 }
 
+/**
+ * Drop / rename diagrams on a project export blob; scrub runnerSlots diagram ids.
+ */
+export function rewriteProjectFileDiagrams(
+  file: AnimgraphProjectFile,
+  edits: ProjectDiagramEdits
+): AnimgraphProjectFile {
+  const removed = new Set(
+    edits.removedIds.map((id) => id.trim()).filter(Boolean)
+  )
+  const idMap: Record<string, string> = {}
+  for (const [oldId, newId] of Object.entries(edits.idMap)) {
+    const from = oldId.trim()
+    const to = newId.trim()
+    if (!from || !to) continue
+    if (removed.has(from)) continue
+    idMap[from] = to
+  }
+
+  const diagrams = []
+  const seenNew = new Set<string>()
+  for (const entry of file.diagrams ?? []) {
+    const oldId = entry.id?.trim() ?? ''
+    if (!oldId || removed.has(oldId)) continue
+    const nextId = idMap[oldId] ?? oldId
+    if (!nextId.trim()) {
+      throw new Error('Diagram id must be non-empty')
+    }
+    if (seenNew.has(nextId)) {
+      throw new Error(`Duplicate diagram id: "${nextId}"`)
+    }
+    seenNew.add(nextId)
+    diagrams.push({ ...entry, id: nextId })
+  }
+
+  if (diagrams.length === 0) {
+    throw new Error('Project must keep at least one diagram')
+  }
+
+  const mainDiagramId = edits.mainDiagramId.trim()
+  if (!mainDiagramId) {
+    throw new Error('mainDiagramId is required')
+  }
+  if (!seenNew.has(mainDiagramId)) {
+    throw new Error(`mainDiagramId "${mainDiagramId}" is not in diagrams`)
+  }
+
+  const survivingIds = new Set(seenNew)
+  const out: AnimgraphProjectFile = {
+    ...file,
+    mainDiagramId,
+    diagrams,
+  }
+
+  if (file.runnerSlots != null) {
+    out.runnerSlots = rewriteRunnerSlotsDiagramIds(
+      file.runnerSlots,
+      idMap,
+      survivingIds
+    )
+  }
+
+  return out
+}
+
+/**
+ * Dirty-warn, export current project, apply diagram id/remove edits, full reload.
+ * Preserves currentLoadedPath.
+ */
+export async function applyProjectDiagramEdits(
+  edits: ProjectDiagramEdits
+): Promise<boolean> {
+  if (!hasProject.value) return false
+  if (!confirmDiscardUnsavedChanges()) return false
+
+  const exported = createProjectExportData({ includeClipPoses: true })
+  if (!exported) {
+    alert('Nothing to export')
+    return false
+  }
+
+  let rewritten: AnimgraphProjectFile
+  try {
+    rewritten = rewriteProjectFileDiagrams(exported, edits)
+  } catch (error) {
+    alert(error instanceof Error ? error.message : 'Invalid project diagram edits')
+    return false
+  }
+
+  const keptPath = currentLoadedPath.value
+  try {
+    await loadProjectFile(rewritten)
+    currentLoadedPath.value = keptPath
+    return true
+  } catch (error) {
+    console.error('applyProjectDiagramEdits failed:', error)
+    alert(
+      `Failed to reload project: ${error instanceof Error ? error.message : 'Unknown error'}`
+    )
+    return false
+  }
+}
+
 export const exportProject = () => {
   const projectData = createProjectExportData({ includeClipPoses: true })
   if (!projectData) return
@@ -857,11 +971,13 @@ export const createMinimalExportData = (renderData: RenderData): AnimgraphVisual
 export const showSaveAsDialog = ref(false)
 export const showWelcomeOpen = ref(false)
 export const showAddAnimgraphDialog = ref(false)
+export const showProjectDialog = ref(false)
 export const loadingFromServer = ref(false)
 
 export const openWelcomePanel = () => {
   if (hasProject.value) showWelcomeOpen.value = true
   showAddAnimgraphDialog.value = false
+  showProjectDialog.value = false
   cancelPendingDiagramLoad()
 }
 
@@ -873,6 +989,7 @@ export const closeWelcomePanel = () => {
 export const openAddAnimgraphDialog = () => {
   if (!hasProject.value) return
   showWelcomeOpen.value = false
+  showProjectDialog.value = false
   showAddAnimgraphDialog.value = true
   cancelPendingDiagramLoad()
 }
@@ -882,9 +999,24 @@ export const closeAddAnimgraphDialog = () => {
   cancelPendingDiagramLoad()
 }
 
+export const openProjectDialog = () => {
+  if (!hasProject.value) return
+  showWelcomeOpen.value = false
+  showAddAnimgraphDialog.value = false
+  showProjectDialog.value = true
+  cancelPendingDiagramLoad()
+}
+
+export const closeProjectDialog = () => {
+  showProjectDialog.value = false
+}
+
 watch(hasProject, (value) => {
   if (value) showWelcomeOpen.value = false
-  else showAddAnimgraphDialog.value = false
+  else {
+    showAddAnimgraphDialog.value = false
+    showProjectDialog.value = false
+  }
 })
 
 export const saveGraphToServer = async (filePath: string) => {

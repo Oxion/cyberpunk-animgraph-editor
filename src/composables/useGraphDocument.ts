@@ -47,8 +47,10 @@ import {
 } from '../stores/projectViewSession'
 
 export {
+  applyProjectDiagramEdits,
   closeWelcomePanel,
   closeAddAnimgraphDialog,
+  closeProjectDialog,
   createCleanExportData,
   createCleanNode,
   createMinimalExportData,
@@ -73,14 +75,17 @@ export {
   loadSampleData,
   openWelcomePanel,
   openAddAnimgraphDialog,
+  openProjectDialog,
   pendingDiagramLoad,
   processFile,
   processParsedData,
+  rewriteProjectFileDiagrams,
   saveCurrentGraph,
   saveGraphToServer,
   showSaveAsDialog,
   showAddAnimgraphDialog,
   showExportDialog,
+  showProjectDialog,
   showWelcomeOpen,
   suggestedExportFileName,
 } from '../stores/graphDocumentIo'

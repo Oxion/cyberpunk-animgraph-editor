@@ -88,6 +88,90 @@ export const ROOT_RUNNER_ID = 'root'
 
 export type { SimRunnerSlotsConfigJson }
 
+/**
+ * Remap / scrub diagram ids inside persisted runnerSlots (pairs with serializeRunnerSlots).
+ * - Remaps `diagramId` and `slotDiagramIds` values via idMap
+ * - Drops runner entries whose diagramId is not in survivingIds
+ * - Omits slotDiagramIds values that do not survive
+ * - Drops slotRunnerIds pointing at removed runner entries
+ */
+export function rewriteRunnerSlotsDiagramIds(
+  cfg: SimRunnerSlotsConfigJson,
+  idMap: ReadonlyMap<string, string> | Record<string, string>,
+  survivingIds: ReadonlySet<string>
+): SimRunnerSlotsConfigJson {
+  const mapGet = (oldId: string): string | undefined => {
+    if (idMap instanceof Map) return idMap.get(oldId)
+    return (idMap as Record<string, string>)[oldId]
+  }
+
+  const mapDiagramId = (raw: string): string | null => {
+    const trimmed = raw.trim()
+    if (!trimmed) return null
+    const next = mapGet(trimmed) ?? trimmed
+    return survivingIds.has(next) ? next : null
+  }
+
+  if (cfg.rootDetached === true) {
+    return {
+      rootRunnerId: cfg.rootRunnerId ?? ROOT_RUNNER_ID,
+      rootDetached: true,
+      runners: {},
+    }
+  }
+
+  const srcRunners = cfg.runners && typeof cfg.runners === 'object' ? cfg.runners : {}
+  const runnersOut: SimRunnerSlotsConfigJson['runners'] = {}
+
+  for (const [runnerId, entry] of Object.entries(srcRunners)) {
+    if (!entry || typeof entry !== 'object') continue
+    const diagRaw = typeof entry.diagramId === 'string' ? entry.diagramId : ''
+    const diagramId = mapDiagramId(diagRaw)
+    if (!diagramId) continue
+
+    const slotDiagramIds: Record<string, string> = {}
+    if (entry.slotDiagramIds && typeof entry.slotDiagramIds === 'object') {
+      for (const [slot, diag] of Object.entries(entry.slotDiagramIds)) {
+        const s = slot.trim()
+        if (!s || typeof diag !== 'string') continue
+        const mapped = mapDiagramId(diag)
+        if (mapped) slotDiagramIds[s] = mapped
+      }
+    }
+
+    runnersOut[runnerId] = {
+      diagramId,
+      ...(Array.isArray(entry.slotInitialized)
+        ? { slotInitialized: [...entry.slotInitialized] }
+        : {}),
+      slotDiagramIds,
+      slotRunnerIds:
+        entry.slotRunnerIds && typeof entry.slotRunnerIds === 'object'
+          ? { ...entry.slotRunnerIds }
+          : {},
+    }
+  }
+
+  // Drop slot→child links whose child runner was removed.
+  const keptRunnerIds = new Set(Object.keys(runnersOut))
+  for (const entry of Object.values(runnersOut)) {
+    if (!entry.slotRunnerIds) continue
+    const next: Record<string, string> = {}
+    for (const [slot, childId] of Object.entries(entry.slotRunnerIds)) {
+      const s = slot.trim()
+      const c = typeof childId === 'string' ? childId.trim() : ''
+      if (!s || !c || !keptRunnerIds.has(c)) continue
+      next[s] = c
+    }
+    entry.slotRunnerIds = next
+  }
+
+  return {
+    rootRunnerId: cfg.rootRunnerId ?? ROOT_RUNNER_ID,
+    runners: runnersOut,
+  }
+}
+
 export type SimSlotRunnerInfo = {
   slotName: string
   runnerId: string
@@ -1946,6 +2030,7 @@ export function useAnimgraphSim() {
     animDatabaseLibraryToCompactJson(animDbLibrary.value)
 
   // function decls so rebind()'s immediate project watch can call them (hoisted).
+  // Pair: rewriteRunnerSlotsDiagramIds (module export) rewrites this JSON shape.
   function serializeRunnerSlots(): SimRunnerSlotsConfigJson | undefined {
     if (rootDetached) {
       return {

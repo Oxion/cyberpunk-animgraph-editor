@@ -24,6 +24,7 @@
             @load-sample="loadSampleData"
             @open="openWelcomePanel"
             @add-animgraph="openAddAnimgraphDialog"
+            @edit-project="openProjectDialog"
             @save="saveCurrentGraph"
             @save-as="showSaveAsDialog = true"
             @export="showExportDialog = true"
@@ -554,6 +555,8 @@
       :initial-path="saveAsInitialPath"
     />
 
+    <AppProjectDialog :busy="loadingFromServer || loadingRef" />
+
     <AppAboutDialog v-model:open="showAboutDialog" />
 
     <Dialog
@@ -617,6 +620,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import AppMenubar from './components/AppMenubar.vue'
 import AppAboutDialog from './components/AppAboutDialog.vue'
 import AppExportDialog from './components/AppExportDialog.vue'
+import AppProjectDialog from './components/AppProjectDialog.vue'
 import ElectronWindowControls from './components/ElectronWindowControls.vue'
 import AppSidebar from './components/AppSidebar.vue'
 import AppTaskbar from './components/AppTaskbar.vue'
@@ -758,6 +762,7 @@ import {
   loadSampleData,
   openWelcomePanel,
   openAddAnimgraphDialog,
+  openProjectDialog,
   bindDiagramCanvasEl,
   saveCurrentGraph,
   showSaveAsDialog,

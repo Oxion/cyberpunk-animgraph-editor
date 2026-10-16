@@ -67,6 +67,7 @@ const emit = defineEmits<{
   'load-sample': []
   open: []
   'add-animgraph': []
+  'edit-project': []
   save: []
   'save-as': []
   export: []
@@ -134,6 +135,14 @@ async function onQuit() {
         >
           <Workflow class="size-3.5" />
           Add Animgraph...
+        </MenubarItem>
+        <MenubarItem
+          v-if="hasProject"
+          class="header-menu-item"
+          @select="emit('edit-project')"
+        >
+          <LayoutGrid class="size-3.5" />
+          Project...
         </MenubarItem>
         <MenubarSeparator />
         <MenubarItem
