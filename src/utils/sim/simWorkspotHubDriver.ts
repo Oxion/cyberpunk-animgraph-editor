@@ -5,6 +5,7 @@
 
 import { calcSlotNameHash } from '../cnameHash'
 import type { SimAnimFeatureApi } from './simAnimFeatureApi'
+import type { SimDriver, SimDriverAttachCtx } from './simDriver'
 import {
   UPDATE_WORKSPOT_FEATURE as GROUP,
   UpdateWorkspotProp as P,
@@ -35,18 +36,10 @@ export type WorkspotHubPlayParams = {
   bump?: boolean
 }
 
-export type SimWorkspotHubDriver = {
-  play: (params: WorkspotHubPlayParams) => void
-  /** Partial field update; bumps updateCounter by default. */
-  set: (params: Partial<WorkspotHubPlayParams> & { bump?: boolean }) => void
-  /** Clear anim (isAnimValid=false, animName empty); bumps counter. */
-  clear: () => void
-  /** isActive=false + clear. */
-  stop: () => void
-  bump: () => void
-  /** Read current updateCounter from board (via getFeature). */
-  counter: () => number
-  hash: (slotName?: string) => number
+/** Persistable play snapshot (board is not in project JSON). */
+export type WorkspotHubSnapshot = WorkspotHubPlayParams & {
+  /** When false, restore as stopped/cleared. Default true if animName set. */
+  hasAnim?: boolean
 }
 
 function nextCounter(api: SimAnimFeatureApi): number {
@@ -117,11 +110,19 @@ function writePlayFields(
   api.setStringFeature(GROUP, P.animName, anim)
 }
 
-export function createSimWorkspotHubDriver(
-  getApi: () => SimAnimFeatureApi | null | undefined
-): SimWorkspotHubDriver {
-  const requireApi = (): SimAnimFeatureApi | null => {
-    const api = getApi()
+export class SimWorkspotHubDriver implements SimDriver {
+  private last: WorkspotHubSnapshot | null = null
+
+  constructor(
+    private readonly getApi: () => SimAnimFeatureApi | null | undefined
+  ) {}
+
+  attach(_ctx: SimDriverAttachCtx): void {}
+
+  detach(): void {}
+
+  private requireApi(): SimAnimFeatureApi | null {
+    const api = this.getApi()
     if (!api) {
       console.warn('[__simWorkspotHub] no animFeatureApi')
       return null
@@ -129,124 +130,206 @@ export function createSimWorkspotHubDriver(
     return api
   }
 
-  return {
-    play(params) {
-      const api = requireApi()
-      if (!api) return
-      const slot = params.slotName?.trim() || WORKSPOT_SLOT_NAME
-      const anim = params.animName ?? ''
-      api.withBatch(() => writePlayFields(api, params, slot, anim))
-      console.log(
-        `[__simWorkspotHub] play animName=${anim} slot=${slot} hash=${calcSlotNameHash(slot)}`
-      )
-    },
-    set(params) {
-      const api = requireApi()
-      if (!api) return
-      api.withBatch(() => {
-        if (params.slotName !== undefined) {
-          applySlot(api, params.slotName.trim() || WORKSPOT_SLOT_NAME)
-        }
-        if (params.recordID !== undefined) {
-          api.setFeature(GROUP, P.recordID, params.recordID)
-        }
-        if (params.isLooped !== undefined) {
-          api.setBoolFeature(GROUP, P.isLooped, !!params.isLooped)
-        }
-        if (params.isPaused !== undefined) {
-          api.setBoolFeature(GROUP, P.isPaused, !!params.isPaused)
-        }
-        if (params.isExitAnim !== undefined) {
-          api.setBoolFeature(GROUP, P.isExitAnim, !!params.isExitAnim)
-        }
-        if (params.enableMotion !== undefined) {
-          api.setBoolFeature(GROUP, P.enableMotion, !!params.enableMotion)
-        }
-        if (params.isActive !== undefined) {
-          api.setBoolFeature(GROUP, P.isActive, !!params.isActive)
-        }
-        if (params.animBlendTime !== undefined) {
-          api.setFeature(GROUP, P.animBlendTime, params.animBlendTime)
-        }
-        if (params.forcedBlendIn !== undefined) {
-          api.setFeature(GROUP, P.forcedBlendIn, params.forcedBlendIn)
-        }
-        if (params.forceAnimTime !== undefined) {
-          api.setFeature(GROUP, P.forceAnimTime, params.forceAnimTime)
-        }
-        if (params.timeScale !== undefined) {
-          api.setFeature(GROUP, P.timeScale, params.timeScale)
-        }
-        if (params.animationStartTime !== undefined) {
-          api.setFeature(GROUP, P.animationStartTime, params.animationStartTime)
-        }
-        if (params.facialKeyWeight !== undefined) {
-          api.setFeature(GROUP, P.facialKeyWeight, params.facialKeyWeight)
-        }
-        if (params.globalBlendDuration !== undefined) {
-          api.setFeature(GROUP, P.globalBlendDuration, params.globalBlendDuration)
-        }
-        if (params.globalBlendIn !== undefined) {
-          api.setBoolFeature(GROUP, P.globalBlendIn, !!params.globalBlendIn)
-        }
-        if (params.facialIdleAnimation !== undefined) {
-          api.setStringFeature(GROUP, P.facialIdleAnimation, params.facialIdleAnimation)
-        }
-        if (params.facialIdleKeyAnimation !== undefined) {
-          api.setStringFeature(
-            GROUP,
-            P.facialIdleKeyAnimation,
-            params.facialIdleKeyAnimation
-          )
-        }
-        if (params.animName !== undefined) {
-          const anim = params.animName
-          api.setBoolFeature(GROUP, P.isAnimValid, !!anim && anim !== 'None')
-          api.setStringFeature(GROUP, P.animName, anim)
-        }
-        if (params.bump !== false) bumpCounter(api)
-      })
-    },
-    clear() {
-      const api = requireApi()
-      if (!api) return
-      api.withBatch(() => {
-        api.setStringFeature(GROUP, P.animName, '')
-        api.setBoolFeature(GROUP, P.isAnimValid, false)
-        bumpCounter(api)
-      })
-      console.log('[__simWorkspotHub] clear')
-    },
-    stop() {
-      const api = requireApi()
-      if (!api) return
+  private mergeLast(
+    patch: Partial<WorkspotHubPlayParams>,
+    hasAnim?: boolean
+  ): void {
+    this.last = {
+      ...(this.last ?? { animName: '' }),
+      ...patch,
+      hasAnim: hasAnim ?? this.last?.hasAnim ?? !!patch.animName,
+    }
+  }
+
+  play(params: WorkspotHubPlayParams): void {
+    const api = this.requireApi()
+    if (!api) return
+    const slot = params.slotName?.trim() || WORKSPOT_SLOT_NAME
+    const anim = params.animName ?? ''
+    api.withBatch(() => writePlayFields(api, params, slot, anim))
+    this.mergeLast(
+      { ...params, slotName: slot, animName: anim, isActive: true },
+      !!anim && anim !== 'None'
+    )
+    console.log(
+      `[__simWorkspotHub] play animName=${anim} slot=${slot} hash=${calcSlotNameHash(slot)}`
+    )
+  }
+
+  set(params: Partial<WorkspotHubPlayParams> & { bump?: boolean }): void {
+    const api = this.requireApi()
+    if (!api) return
+    api.withBatch(() => {
+      if (params.slotName !== undefined) {
+        applySlot(api, params.slotName.trim() || WORKSPOT_SLOT_NAME)
+      }
+      if (params.recordID !== undefined) {
+        api.setFeature(GROUP, P.recordID, params.recordID)
+      }
+      if (params.isLooped !== undefined) {
+        api.setBoolFeature(GROUP, P.isLooped, !!params.isLooped)
+      }
+      if (params.isPaused !== undefined) {
+        api.setBoolFeature(GROUP, P.isPaused, !!params.isPaused)
+      }
+      if (params.isExitAnim !== undefined) {
+        api.setBoolFeature(GROUP, P.isExitAnim, !!params.isExitAnim)
+      }
+      if (params.enableMotion !== undefined) {
+        api.setBoolFeature(GROUP, P.enableMotion, !!params.enableMotion)
+      }
+      if (params.isActive !== undefined) {
+        api.setBoolFeature(GROUP, P.isActive, !!params.isActive)
+      }
+      if (params.animBlendTime !== undefined) {
+        api.setFeature(GROUP, P.animBlendTime, params.animBlendTime)
+      }
+      if (params.forcedBlendIn !== undefined) {
+        api.setFeature(GROUP, P.forcedBlendIn, params.forcedBlendIn)
+      }
+      if (params.forceAnimTime !== undefined) {
+        api.setFeature(GROUP, P.forceAnimTime, params.forceAnimTime)
+      }
+      if (params.timeScale !== undefined) {
+        api.setFeature(GROUP, P.timeScale, params.timeScale)
+      }
+      if (params.animationStartTime !== undefined) {
+        api.setFeature(GROUP, P.animationStartTime, params.animationStartTime)
+      }
+      if (params.facialKeyWeight !== undefined) {
+        api.setFeature(GROUP, P.facialKeyWeight, params.facialKeyWeight)
+      }
+      if (params.globalBlendDuration !== undefined) {
+        api.setFeature(GROUP, P.globalBlendDuration, params.globalBlendDuration)
+      }
+      if (params.globalBlendIn !== undefined) {
+        api.setBoolFeature(GROUP, P.globalBlendIn, !!params.globalBlendIn)
+      }
+      if (params.facialIdleAnimation !== undefined) {
+        api.setStringFeature(GROUP, P.facialIdleAnimation, params.facialIdleAnimation)
+      }
+      if (params.facialIdleKeyAnimation !== undefined) {
+        api.setStringFeature(
+          GROUP,
+          P.facialIdleKeyAnimation,
+          params.facialIdleKeyAnimation
+        )
+      }
+      if (params.animName !== undefined) {
+        const anim = params.animName
+        api.setBoolFeature(GROUP, P.isAnimValid, !!anim && anim !== 'None')
+        api.setStringFeature(GROUP, P.animName, anim)
+      }
+      if (params.bump !== false) bumpCounter(api)
+    })
+    const { bump: _b, ...rest } = params
+    if (params.animName !== undefined) {
+      this.mergeLast(rest, !!params.animName && params.animName !== 'None')
+    } else {
+      this.mergeLast(rest)
+    }
+  }
+
+  clear(): void {
+    const api = this.requireApi()
+    if (!api) return
+    api.withBatch(() => {
+      api.setStringFeature(GROUP, P.animName, '')
+      api.setBoolFeature(GROUP, P.isAnimValid, false)
+      bumpCounter(api)
+    })
+    this.mergeLast({ animName: '' }, false)
+    console.log('[__simWorkspotHub] clear')
+  }
+
+  stop(): void {
+    const api = this.requireApi()
+    if (!api) return
+    api.withBatch(() => {
+      api.setBoolFeature(GROUP, P.isActive, false)
+      api.setStringFeature(GROUP, P.animName, '')
+      api.setBoolFeature(GROUP, P.isAnimValid, false)
+      bumpCounter(api)
+    })
+    this.mergeLast({ animName: '', isActive: false }, false)
+    console.log('[__simWorkspotHub] stop')
+  }
+
+  bump(): void {
+    const api = this.requireApi()
+    if (!api) return
+    api.withBatch(() => bumpCounter(api))
+  }
+
+  counter(): number {
+    const api = this.getApi()
+    const cur = api?.getFeature(GROUP, P.updateCounter)
+    return typeof cur === 'number' && Number.isFinite(cur) ? Math.round(cur) : 0
+  }
+
+  /** Driver-session active flag (board seeds isActive=true; badge must not follow that). */
+  isActive(): boolean {
+    return this.last?.isActive === true
+  }
+
+  hash(slotName?: string): number {
+    return calcSlotNameHash(slotName?.trim() || WORKSPOT_SLOT_NAME)
+  }
+
+  getSnapshot(): WorkspotHubSnapshot | null {
+    if (!this.last) return null
+    return { ...this.last }
+  }
+
+  applySnapshot(snap: WorkspotHubSnapshot | null | undefined): void {
+    if (!snap || snap.hasAnim === false || !snap.animName) {
+      const api = this.requireApi()
+      if (!api) {
+        this.last = snap ? { ...snap, hasAnim: false } : null
+        return
+      }
       api.withBatch(() => {
         api.setBoolFeature(GROUP, P.isActive, false)
         api.setStringFeature(GROUP, P.animName, '')
         api.setBoolFeature(GROUP, P.isAnimValid, false)
         bumpCounter(api)
       })
-      console.log('[__simWorkspotHub] stop')
-    },
-    bump() {
-      const api = requireApi()
-      if (!api) return
-      api.withBatch(() => bumpCounter(api))
-    },
-    counter() {
-      const api = getApi()
-      const cur = api?.getFeature(GROUP, P.updateCounter)
-      return typeof cur === 'number' && Number.isFinite(cur) ? Math.round(cur) : 0
-    },
-    hash(slotName) {
-      return calcSlotNameHash(slotName?.trim() || WORKSPOT_SLOT_NAME)
-    },
+      this.last = snap ? { ...snap, animName: '', hasAnim: false } : null
+      return
+    }
+    const { hasAnim: _h, bump: _b, ...play } = snap
+    const api = this.requireApi()
+    if (!api) {
+      this.last = { ...snap }
+      return
+    }
+    const slot = play.slotName?.trim() || WORKSPOT_SLOT_NAME
+    const anim = play.animName ?? ''
+    api.withBatch(() => writePlayFields(api, play, slot, anim))
+    this.last = { ...play, slotName: slot, animName: anim, hasAnim: true }
   }
 }
 
-export type SimWorkspotHubConsoleApi = SimWorkspotHubDriver & {
+export function createSimWorkspotHubDriver(
+  getApi: () => SimAnimFeatureApi | null | undefined
+): SimWorkspotHubDriver {
+  return new SimWorkspotHubDriver(getApi)
+}
+
+export type SimWorkspotHubConsoleApi = {
   driver: SimWorkspotHubDriver
+  play: SimWorkspotHubDriver['play']
+  set: SimWorkspotHubDriver['set']
+  clear: SimWorkspotHubDriver['clear']
+  stop: SimWorkspotHubDriver['stop']
+  bump: SimWorkspotHubDriver['bump']
+  counter: SimWorkspotHubDriver['counter']
+  hash: SimWorkspotHubDriver['hash']
   playWorkspot: (animName: string, opts?: Omit<WorkspotHubPlayParams, 'animName'>) => void
+}
+
+export type SimWorkspotHubConsoleHost = {
+  getDriver: () => SimWorkspotHubDriver
 }
 
 /**
@@ -254,19 +337,21 @@ export type SimWorkspotHubConsoleApi = SimWorkspotHubDriver & {
  *   __simWorkspotHub.play({ animName: 'foo', isLooped: true })
  */
 export function installSimWorkspotHubConsole(
-  driver: SimWorkspotHubDriver
+  host: SimWorkspotHubConsoleHost
 ): SimWorkspotHubConsoleApi {
   const api: SimWorkspotHubConsoleApi = {
-    driver,
-    play: (p) => driver.play(p),
-    set: (p) => driver.set(p),
-    clear: () => driver.clear(),
-    stop: () => driver.stop(),
-    bump: () => driver.bump(),
-    counter: () => driver.counter(),
-    hash: (s) => driver.hash(s),
+    get driver() {
+      return host.getDriver()
+    },
+    play: (p) => host.getDriver().play(p),
+    set: (p) => host.getDriver().set(p),
+    clear: () => host.getDriver().clear(),
+    stop: () => host.getDriver().stop(),
+    bump: () => host.getDriver().bump(),
+    counter: () => host.getDriver().counter(),
+    hash: (s) => host.getDriver().hash(s),
     playWorkspot(animName, opts) {
-      driver.play({ animName, slotName: WORKSPOT_SLOT_NAME, ...opts })
+      host.getDriver().play({ animName, slotName: WORKSPOT_SLOT_NAME, ...opts })
     },
   }
   ;(globalThis as unknown as { __simWorkspotHub: SimWorkspotHubConsoleApi }).__simWorkspotHub =

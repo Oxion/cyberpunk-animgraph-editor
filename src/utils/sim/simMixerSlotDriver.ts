@@ -3,48 +3,32 @@
  * (array clip times are driven externally in engine).
  */
 
+import type { SimDriver, SimDriverAttachCtx } from './simDriver'
+import type { SimGraphRunner } from './SimGraphRunner'
 import type {
   MixerSlotIdleParams,
   SimMixerSlotAnimParams,
   SimPreSampleHook,
   SimServiceEvent,
 } from './simServiceEvents'
-import type { SimGraphRunner } from './SimGraphRunner'
 
-type DrivenEntry = SimMixerSlotAnimParams & {
+export type DrivenMixerSlotEntry = SimMixerSlotAnimParams & {
   /** When true, driver advances currentTime by dt each frame. */
   autoAdvance?: boolean
   /** Cached duration for wrap (0 = unknown / no wrap). */
   duration?: number
 }
 
-export type SimMixerSlotDriver = {
-  /** Discrete idle set (one-shot push). */
-  setIdle: (
-    params: Omit<MixerSlotIdleParams, 'kind'> & { weight?: number }
-  ) => void
-  setAddIdleWeight: (weight: number) => void
-  /** Replace normal/additive/override lists; hook re-pushes every frame. */
-  setParams: (params: {
-    enableInertiaBlend?: boolean
-    normal?: DrivenEntry[]
-    additive?: DrivenEntry[]
-    override?: DrivenEntry[]
-  }) => void
-  /** Clear array slots (empty MixerSlotParams). */
-  clearParams: () => void
-  clearIdle: () => void
-  /**
-   * Scene gatherer parity: when false, 1 frame without setParams → empty clear.
-   * When true (scrubbing), sticky until clearParams.
-   */
-  setCacheParams: (cache: boolean) => void
-  readonly cacheParams: boolean
-  readonly hook: SimPreSampleHook
-  attach: (runner: SimGraphRunner) => () => void
+export type SimMixerSlotParamsState = {
+  cacheParams: boolean
+  paramsActive: boolean
+  enableInertiaBlend?: boolean
+  normal: DrivenMixerSlotEntry[]
+  additive: DrivenMixerSlotEntry[]
+  override: DrivenMixerSlotEntry[]
 }
 
-function cloneEntry(e: DrivenEntry): DrivenEntry {
+function cloneEntry(e: DrivenMixerSlotEntry): DrivenMixerSlotEntry {
   return {
     animationName: e.animationName,
     previousTime: e.previousTime ?? 0,
@@ -61,7 +45,7 @@ function cloneEntry(e: DrivenEntry): DrivenEntry {
   }
 }
 
-function advanceEntry(e: DrivenEntry, dt: number): void {
+function advanceEntry(e: DrivenMixerSlotEntry, dt: number): void {
   if (!e.autoAdvance) return
   const prev = e.currentTime ?? 0
   e.previousTime = prev
@@ -74,7 +58,7 @@ function advanceEntry(e: DrivenEntry, dt: number): void {
   e.currentTime = next
 }
 
-function toAnimParams(e: DrivenEntry): SimMixerSlotAnimParams {
+function toAnimParams(e: DrivenMixerSlotEntry): SimMixerSlotAnimParams {
   return {
     animationName: e.animationName,
     previousTime: e.previousTime,
@@ -98,116 +82,169 @@ function emptyParamsEvent(): SimServiceEvent {
   }
 }
 
-export function createSimMixerSlotDriver(): SimMixerSlotDriver {
-  const pending: SimServiceEvent[] = []
-  let normals: DrivenEntry[] = []
-  let additives: DrivenEntry[] = []
-  let overrides: DrivenEntry[] = []
-  let enableInertiaBlend = false
-  let paramsActive = false
-  let cacheParams = false
-  let paramsTouched = false
-  let missFrames = 0
+export class SimMixerSlotDriver implements SimDriver {
+  private readonly pending: SimServiceEvent[] = []
+  private normals: DrivenMixerSlotEntry[] = []
+  private additives: DrivenMixerSlotEntry[] = []
+  private overrides: DrivenMixerSlotEntry[] = []
+  private enableInertiaBlend = false
+  private paramsActive = false
+  private _cacheParams = false
+  private paramsTouched = false
+  private missFrames = 0
+  private unsub: (() => void) | null = null
 
-  const hook: SimPreSampleHook = (ctx) => {
-    for (let i = 0; i < pending.length; i++) ctx.push(pending[i]!)
-    pending.length = 0
+  readonly hook: SimPreSampleHook = (ctx) => {
+    for (let i = 0; i < this.pending.length; i++) ctx.push(this.pending[i]!)
+    this.pending.length = 0
 
-    if (!paramsActive) {
-      paramsTouched = false
+    if (!this.paramsActive) {
+      this.paramsTouched = false
       return
     }
 
-    if (!cacheParams) {
-      if (!paramsTouched) {
-        missFrames++
-        if (missFrames > 1) {
-          normals = []
-          additives = []
-          overrides = []
-          paramsActive = false
-          missFrames = 0
-          paramsTouched = false
+    if (!this._cacheParams) {
+      if (!this.paramsTouched) {
+        this.missFrames++
+        if (this.missFrames > 1) {
+          this.normals = []
+          this.additives = []
+          this.overrides = []
+          this.paramsActive = false
+          this.missFrames = 0
+          this.paramsTouched = false
           ctx.push(emptyParamsEvent())
           return
         }
       } else {
-        missFrames = 0
+        this.missFrames = 0
       }
     }
 
-    for (const e of normals) advanceEntry(e, ctx.dt)
-    for (const e of additives) advanceEntry(e, ctx.dt)
-    for (const e of overrides) advanceEntry(e, ctx.dt)
+    for (const e of this.normals) advanceEntry(e, ctx.dt)
+    for (const e of this.additives) advanceEntry(e, ctx.dt)
+    for (const e of this.overrides) advanceEntry(e, ctx.dt)
     ctx.push({
       kind: 'MixerSlotParams',
-      enableInertiaBlend,
-      normalAnimParamsList: normals.map(toAnimParams),
-      additiveAnimParamsList: additives.map(toAnimParams),
-      overrideAnimParamsList: overrides.map(toAnimParams),
+      enableInertiaBlend: this.enableInertiaBlend,
+      normalAnimParamsList: this.normals.map(toAnimParams),
+      additiveAnimParamsList: this.additives.map(toAnimParams),
+      overrideAnimParamsList: this.overrides.map(toAnimParams),
     })
-    enableInertiaBlend = false
-    paramsTouched = false
+    this.enableInertiaBlend = false
+    this.paramsTouched = false
   }
 
-  return {
-    hook,
-    get cacheParams() {
-      return cacheParams
-    },
-    setCacheParams(cache) {
-      cacheParams = !!cache
-      if (cache) missFrames = 0
-    },
-    setIdle(params) {
-      pending.push({
-        kind: 'MixerSlotIdleParams',
-        isFacial: params.isFacial,
-        blendWeight: params.blendWeight ?? params.weight ?? 1,
-        firstWeight: params.firstWeight ?? 1,
-        secondWeight: params.secondWeight ?? 1,
-        firstAnimation: params.firstAnimation,
-        secondAnimation: params.secondAnimation,
-        firstAddAnimation: params.firstAddAnimation,
-        secondAddAnimation: params.secondAddAnimation,
-        muteAnimEvents: params.muteAnimEvents,
-      })
-    },
-    setAddIdleWeight(weight) {
-      pending.push({ kind: 'MixerSlotAddIdleParams', weight })
-    },
-    setParams(params) {
-      normals = (params.normal ?? []).map(cloneEntry)
-      additives = (params.additive ?? []).map(cloneEntry)
-      overrides = (params.override ?? []).map(cloneEntry)
-      enableInertiaBlend = !!params.enableInertiaBlend
-      paramsActive = true
-      paramsTouched = true
-      missFrames = 0
-    },
-    clearParams() {
-      normals = []
-      additives = []
-      overrides = []
-      paramsActive = false
-      paramsTouched = false
-      missFrames = 0
-      pending.push(emptyParamsEvent())
-    },
-    clearIdle() {
-      pending.push({
-        kind: 'MixerSlotIdleParams',
-        blendWeight: 0,
-        firstWeight: 0,
-        secondWeight: 0,
-        firstAnimation: '',
-        secondAnimation: '',
-      })
-    },
-    attach(runner) {
-      return runner.addPreSampleHook(hook)
-    },
+  get cacheParams(): boolean {
+    return this._cacheParams
   }
+
+  setCacheParams(cache: boolean): void {
+    this._cacheParams = !!cache
+    if (cache) this.missFrames = 0
+  }
+
+  setIdle(params: Omit<MixerSlotIdleParams, 'kind'> & { weight?: number }): void {
+    this.pending.push({
+      kind: 'MixerSlotIdleParams',
+      isFacial: params.isFacial,
+      blendWeight: params.blendWeight ?? params.weight ?? 1,
+      firstWeight: params.firstWeight ?? 1,
+      secondWeight: params.secondWeight ?? 1,
+      firstAnimation: params.firstAnimation,
+      secondAnimation: params.secondAnimation,
+      firstAddAnimation: params.firstAddAnimation,
+      secondAddAnimation: params.secondAddAnimation,
+      muteAnimEvents: params.muteAnimEvents,
+    })
+  }
+
+  setAddIdleWeight(weight: number): void {
+    this.pending.push({ kind: 'MixerSlotAddIdleParams', weight })
+  }
+
+  setParams(params: {
+    enableInertiaBlend?: boolean
+    normal?: DrivenMixerSlotEntry[]
+    additive?: DrivenMixerSlotEntry[]
+    override?: DrivenMixerSlotEntry[]
+  }): void {
+    this.normals = (params.normal ?? []).map(cloneEntry)
+    this.additives = (params.additive ?? []).map(cloneEntry)
+    this.overrides = (params.override ?? []).map(cloneEntry)
+    this.enableInertiaBlend = !!params.enableInertiaBlend
+    this.paramsActive = true
+    this.paramsTouched = true
+    this.missFrames = 0
+  }
+
+  clearParams(): void {
+    this.normals = []
+    this.additives = []
+    this.overrides = []
+    this.paramsActive = false
+    this.paramsTouched = false
+    this.missFrames = 0
+    this.pending.push(emptyParamsEvent())
+  }
+
+  clearIdle(): void {
+    this.pending.push({
+      kind: 'MixerSlotIdleParams',
+      blendWeight: 0,
+      firstWeight: 0,
+      secondWeight: 0,
+      firstAnimation: '',
+      secondAnimation: '',
+    })
+  }
+
+  getParams(): SimMixerSlotParamsState {
+    return {
+      cacheParams: this._cacheParams,
+      paramsActive: this.paramsActive,
+      enableInertiaBlend: this.enableInertiaBlend,
+      normal: this.normals.map(cloneEntry),
+      additive: this.additives.map(cloneEntry),
+      override: this.overrides.map(cloneEntry),
+    }
+  }
+
+  applyParams(state: SimMixerSlotParamsState): void {
+    this._cacheParams = !!state.cacheParams
+    if (this._cacheParams) this.missFrames = 0
+    if (!state.paramsActive) {
+      this.normals = []
+      this.additives = []
+      this.overrides = []
+      this.paramsActive = false
+      this.paramsTouched = false
+      this.missFrames = 0
+      this.pending.push(emptyParamsEvent())
+      return
+    }
+    this.normals = (state.normal ?? []).map(cloneEntry)
+    this.additives = (state.additive ?? []).map(cloneEntry)
+    this.overrides = (state.override ?? []).map(cloneEntry)
+    this.enableInertiaBlend = !!state.enableInertiaBlend
+    this.paramsActive = true
+    this.paramsTouched = true
+    this.missFrames = 0
+  }
+
+  attach(ctx: SimDriverAttachCtx): void {
+    if (!ctx.runner) return
+    this.unsub = ctx.runner.addPreSampleHook(this.hook)
+  }
+
+  detach(): void {
+    this.unsub?.()
+    this.unsub = null
+  }
+}
+
+export function createSimMixerSlotDriver(): SimMixerSlotDriver {
+  return new SimMixerSlotDriver()
 }
 
 export type SimMixerSlotConsoleApi = {
@@ -222,6 +259,12 @@ export type SimMixerSlotConsoleApi = {
   setCacheParams: SimMixerSlotDriver['setCacheParams']
 }
 
+export type SimMixerSlotConsoleHost = {
+  getDriver: () => SimMixerSlotDriver
+  attach: (runner?: SimGraphRunner) => void
+  detach: () => void
+}
+
 /**
  * Browser console:
  *   __simMixerSlot.attach()
@@ -231,35 +274,26 @@ export type SimMixerSlotConsoleApi = {
  *   __simMixerSlot.clearParams()
  */
 export function installSimMixerSlotConsole(
-  getPrimaryRunner: () => SimGraphRunner | undefined | null
+  host: SimMixerSlotConsoleHost
 ): SimMixerSlotConsoleApi {
-  const driver = createSimMixerSlotDriver()
-  let unsub: (() => void) | null = null
-
   const api: SimMixerSlotConsoleApi = {
-    driver,
+    get driver() {
+      return host.getDriver()
+    },
     attach(runner) {
-      unsub?.()
-      unsub = null
-      const r = runner ?? getPrimaryRunner() ?? undefined
-      if (!r) {
-        console.warn('[__simMixerSlot] no runner — open/play a sim diagram first')
-        return
-      }
-      unsub = driver.attach(r)
-      console.log(`[__simMixerSlot] attached diagramId=${r.diagramId || '?'}`)
+      host.attach(runner)
+      console.log('[__simMixerSlot] attached')
     },
     detach() {
-      unsub?.()
-      unsub = null
+      host.detach()
       console.log('[__simMixerSlot] detached')
     },
-    setIdle: (p) => driver.setIdle(p),
-    setAddIdleWeight: (w) => driver.setAddIdleWeight(w),
-    setParams: (p) => driver.setParams(p),
-    clearParams: () => driver.clearParams(),
-    clearIdle: () => driver.clearIdle(),
-    setCacheParams: (c) => driver.setCacheParams(c),
+    setIdle: (p) => host.getDriver().setIdle(p),
+    setAddIdleWeight: (w) => host.getDriver().setAddIdleWeight(w),
+    setParams: (p) => host.getDriver().setParams(p),
+    clearParams: () => host.getDriver().clearParams(),
+    clearIdle: () => host.getDriver().clearIdle(),
+    setCacheParams: (c) => host.getDriver().setCacheParams(c),
   }
 
   ;(globalThis as unknown as { __simMixerSlot: SimMixerSlotConsoleApi }).__simMixerSlot =

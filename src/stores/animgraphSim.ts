@@ -1,15 +1,25 @@
 /**
  * Singleton animgraph simulation runtime (clock, runners, board, libraries).
  * Created once for the app; UI (SimPanel, windows) imports from here.
- * Drivers / console attach here — not inside useAnimgraphSim.
+ * Do not import concrete HandleDef instances here (circular with their resolvers).
  */
+import { ref, watch } from 'vue'
 import { useAnimgraphSim } from '../composables/useAnimgraphSim'
-import { installSimLookAtConsole } from '../utils/sim/simLookAtDriver'
-import { installSimMixerSlotConsole } from '../utils/sim/simMixerSlotDriver'
+import { InstanceStore } from '../utils/InstanceStore'
 import {
-  createSimWorkspotHubDriver,
-  installSimWorkspotHubConsole,
-} from '../utils/sim/simWorkspotHubDriver'
+  SIM_DRIVER_DEFAULT_ID,
+  type SimDriver,
+  type SimDriverHandle,
+  type SimDriverHandleCreateProps,
+  type SimDriversProjectJson,
+} from '../utils/sim/simDriver'
+import type { SimDriverHandleDef } from '../utils/sim/simDriverHandleDef'
+import {
+  getSimDriverHandleDef,
+  listSimDriverHandleDefs,
+} from '../utils/sim/simDriverHandleRegistry'
+import { bindWorkspotHubFeatureApi } from '../utils/sim/simWorkspotHubDriverDef'
+import { markProjectDirty } from './projectDirty'
 
 export const animgraphSim = useAnimgraphSim()
 
@@ -18,6 +28,7 @@ export const {
   active: simActive,
   playing: simPlaying,
   getPrimaryRunner: simGetPrimaryRunner,
+  getRunner: simGetRunner,
   getRootRunnerId: simGetRootRunnerId,
   ensureRunner: simEnsureRunner,
   ensureSlotRunner: simEnsureSlotRunner,
@@ -105,9 +116,7 @@ export const {
   removeSetupEntry: simRemoveSetupEntry,
   exportCompactClipLibrary: simExportCompactClipLibrary,
   exportCompactAnimDatabaseLibrary: simExportCompactAnimDatabaseLibrary,
-  getProjectSimResources: simGetProjectSimResources,
   getCachedClipPoseCompactText: simGetCachedClipPoseCompactText,
-  applyProjectSimResources: simApplyProjectSimResources,
   play: simPlay,
   pause: simPause,
   toggle: simToggle,
@@ -141,11 +150,12 @@ export const {
   setQuatFeature: simSetQuatFeature,
   setQuatFeatureAxis: simSetQuatFeatureAxis,
   rebind: simRebind,
-  dispose: disposeAnimgraphSim,
+  dispose: disposeAnimgraphSimInner,
+  getProjectSimResources: getProjectSimResourcesInner,
+  applyProjectSimResources: applyProjectSimResourcesInner,
 } = animgraphSim
 
-/** WorkspotHub driver — UI and `__simWorkspotHub` share this instance. */
-export const simWorkspotHub = createSimWorkspotHubDriver(() => ({
+bindWorkspotHubFeatureApi(() => ({
   setFeature: simSetFeature,
   setBoolFeature: simSetBoolFeature,
   setStringFeature: simSetStringFeature,
@@ -159,6 +169,186 @@ export const simWorkspotHub = createSimWorkspotHubDriver(() => ({
   withBatch: simWithFeatureBatch,
 }))
 
-installSimLookAtConsole(simGetPrimaryRunner)
-installSimMixerSlotConsole(simGetPrimaryRunner)
-installSimWorkspotHubConsole(simWorkspotHub)
+// ── Driver store (InstanceStore keyed by SimDriverHandleDef) ─────────────────
+
+const simDriverHandlesStore = new InstanceStore()
+export const simDriversRev = ref(0)
+
+function bumpDriversStructural(dirty = true) {
+  simDriversRev.value++
+  if (dirty) markProjectDirty()
+}
+
+function bumpDriverUi(dirty = true) {
+  if (dirty) markProjectDirty()
+}
+
+function handleCreateProps<TProps>(
+  id: string,
+  props?: TProps
+): SimDriverHandleCreateProps<TProps> {
+  return {
+    id,
+    onTouch: () => bumpDriverUi(true),
+    driverProps: props as TProps,
+  }
+}
+
+export function ensureSimDriver<TDriver extends SimDriver, TProps>(
+  handleDef: SimDriverHandleDef<TDriver, TProps>,
+  id: string,
+  props?: TProps,
+  opts?: { silent?: boolean }
+): SimDriverHandle<TDriver> {
+  const existingHandle = simDriverHandlesStore.get(handleDef, id)
+  if (existingHandle) return existingHandle
+
+  const handle = handleDef.create(handleCreateProps(id, props))
+  simDriverHandlesStore.set(handleDef, id, handle)
+  if (handleDef.resolveAttachCtx) handleDef.attach(handle)
+  bumpDriversStructural(!opts?.silent)
+
+  return handle
+}
+
+export function ensureDefaultSimDriver<TDriver extends SimDriver, TProps>(
+  handleDef: SimDriverHandleDef<TDriver, TProps>,
+  props?: TProps,
+  opts?: { silent?: boolean }
+): SimDriverHandle<TDriver> {
+  return ensureSimDriver(handleDef, SIM_DRIVER_DEFAULT_ID, props, opts)
+}
+
+export function getSimDriverHandle<TDriver extends SimDriver, TProps>(
+  handleDef: SimDriverHandleDef<TDriver, TProps>,
+  id: string = SIM_DRIVER_DEFAULT_ID
+): SimDriverHandle<TDriver> | undefined {
+  return simDriverHandlesStore.get(handleDef, id)
+}
+
+export function deleteSimDriverHandle<TDriver extends SimDriver, TProps>(
+  handleDef: SimDriverHandleDef<TDriver, TProps>,
+  id: string
+): void {
+  const h = simDriverHandlesStore.get(handleDef, id)
+  if (!h) return
+  h.dispose()
+  simDriverHandlesStore.delete(handleDef, id)
+  bumpDriversStructural(true)
+}
+
+export function listSimDriverHandles<TDriver extends SimDriver, TProps>(
+  handleDef: SimDriverHandleDef<TDriver, TProps>
+): SimDriverHandle<TDriver>[] {
+  const bucket = simDriverHandlesStore.bucket(handleDef)
+  if (!bucket) return []
+  return [...bucket.values()]
+}
+
+/** Re-resolve attach ctx for every handleDef that has a resolver (runners change). */
+export function syncSimDriverAttachments(): void {
+  for (const handleDef of listSimDriverHandleDefs()) {
+    if (!handleDef.resolveAttachCtx) continue
+    const bucket = simDriverHandlesStore.bucket(handleDef)
+    if (!bucket) continue
+    for (const handle of bucket.values()) {
+      handleDef.attach(handle)
+    }
+  }
+}
+
+function disposeAllSimDrivers(): void {
+  for (const handleDef of listSimDriverHandleDefs()) {
+    const bucket = simDriverHandlesStore.bucket(handleDef)
+    if (!bucket) continue
+    for (const handle of bucket.values()) handle.dispose()
+  }
+  simDriverHandlesStore.clear()
+  bumpDriversStructural(false)
+}
+
+export function exportSimDrivers(): SimDriversProjectJson | undefined {
+  const instances: SimDriversProjectJson['instances'] = []
+  for (const handleDef of listSimDriverHandleDefs()) {
+    const bucket = simDriverHandlesStore.bucket(handleDef)
+    if (!bucket) continue
+    const { driverDef } = handleDef
+    for (const handle of bucket.values()) {
+      instances.push({
+        driverDefId: driverDef.id,
+        id: handle.id,
+        runnerId: handle.runnerId,
+        attached: !!handle.runnerId || handle.attached,
+        state: driverDef.serialize(handle.driver),
+      })
+    }
+  }
+  if (instances.length === 0) return undefined
+  return { version: 1, instances }
+}
+
+export function applySimDrivers(
+  json: SimDriversProjectJson | null | undefined
+): void {
+  disposeAllSimDrivers()
+
+  if (!json?.instances?.length) {
+    bumpDriversStructural(false)
+    return
+  }
+
+  for (const inst of json.instances) {
+    const handleDef = getSimDriverHandleDef(inst.driverDefId)
+    if (!handleDef) {
+      console.warn(`[simDrivers] unknown driverDefId=${inst.driverDefId}`)
+      continue
+    }
+
+    let handle: SimDriverHandle
+    try {
+      handle = handleDef.restore(handleCreateProps(inst.id), inst.state)
+    } catch (err) {
+      console.warn(`[simDrivers] restore failed driverDefId=${inst.driverDefId}`, err)
+      continue
+    }
+    simDriverHandlesStore.set(handleDef, inst.id, handle)
+
+    handleDef.attach(handle)
+  }
+  syncSimDriverAttachments()
+  bumpDriversStructural(false)
+  bumpDriverUi(false)
+}
+
+watch(simRunnersRev, () => {
+  syncSimDriverAttachments()
+})
+
+export function simGetProjectSimResources(opts?: { includeClipPoses?: boolean }) {
+  const base = getProjectSimResourcesInner(opts)
+  const simDriversJson = exportSimDrivers()
+  if (base == null && simDriversJson == null) return null
+  return {
+    ...(base ?? {}),
+    simDrivers: simDriversJson,
+  }
+}
+
+export function simApplyProjectSimResources(
+  resources: Parameters<typeof applyProjectSimResourcesInner>[0] & {
+    simDrivers?: SimDriversProjectJson | null
+  } | null
+) {
+  applyProjectSimResourcesInner(resources)
+  applySimDrivers(resources?.simDrivers)
+}
+
+export function disposeAnimgraphSim() {
+  disposeAllSimDrivers()
+  disposeAnimgraphSimInner()
+}
+
+/** Bump structural rev when a concrete HandleDef user mutates attach state. */
+export function bumpSimDriversStructural(dirty = true): void {
+  bumpDriversStructural(dirty)
+}

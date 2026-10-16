@@ -156,13 +156,13 @@
             <span v-if="!mainTabsIconOnly" class="truncate">Diagrams</span>
           </TabsTrigger>
           <TabsTrigger
-            value="events"
+            value="control"
             class="h-7 gap-1 rounded-sm px-1 text-[11px]"
-            title="Events"
-            aria-label="Events"
+            title="Control"
+            aria-label="Control"
           >
-            <Zap class="size-3.5 shrink-0" :size="14" />
-            <span v-if="!mainTabsIconOnly" class="truncate">Events</span>
+            <Gamepad2 class="size-3.5 shrink-0" :size="14" />
+            <span v-if="!mainTabsIconOnly" class="truncate">Control</span>
           </TabsTrigger>
           <TabsTrigger
             value="values"
@@ -233,70 +233,136 @@
         </div>
       </TabsContent>
 
-      <TabsContent value="events" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
-        <div class="flex shrink-0 flex-wrap items-center gap-1.5">
-          <Button
-            type="button"
-            size="sm"
-            :variant="eventValueEnabled ? 'default' : 'secondary'"
-            class="h-7 w-7 shrink-0 rounded-sm px-0"
-            title="Toggle anim event value"
-            aria-label="Toggle anim event value"
-            :aria-pressed="eventValueEnabled"
-            @click="eventValueEnabled = !eventValueEnabled"
+      <TabsContent
+        value="control"
+        class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden"
+      >
+        <Tabs v-model="controlSubTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
+          <div ref="controlTabsRowEl">
+            <TabsList class="grid h-8 w-full shrink-0 grid-cols-2 rounded-sm bg-muted/60 p-0.5">
+              <TabsTrigger
+                value="events"
+                class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+                title="Events"
+                aria-label="Events"
+              >
+                <Zap class="size-3.5 shrink-0" :size="14" />
+                <span v-if="!controlTabsIconOnly" class="truncate">Events</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="drivers"
+                class="h-7 gap-1 rounded-sm px-1 text-[11px]"
+                title="Drivers"
+                aria-label="Drivers"
+              >
+                <Cpu class="size-3.5 shrink-0" :size="14" />
+                <span v-if="!controlTabsIconOnly" class="truncate">Drivers</span>
+              </TabsTrigger>
+            </TabsList>
+          </div>
+
+          <TabsContent
+            value="events"
+            class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden"
           >
-            <SlidersHorizontal class="size-3.5" :size="14" />
-          </Button>
-          <Input
-            class="h-7 min-w-[80px] flex-1 rounded-sm text-xs"
-            placeholder="event name"
-            :model-value="eventDraft"
-            @update:model-value="(v) => emit('update:eventDraft', String(v ?? ''))"
-          />
-          <ButtonGroup class="shrink-0">
-            <Button type="button" size="sm" variant="secondary" class="h-7 rounded-sm px-2 text-xs" @click="emit('fireExternal')">
-              Ext
-            </Button>
-            <Button type="button" size="sm" variant="secondary" class="h-7 rounded-sm px-2 text-xs" @click="onFireAnimEvent">
-              Anim
-            </Button>
-            <Button type="button" size="sm" variant="secondary" class="h-7 rounded-sm px-2 text-xs" @click="emit('fireAnimEnd')">
-              AnimEnd
-            </Button>
-          </ButtonGroup>
-        </div>
-        <PropertyNumberSlider
-          v-if="eventValueEnabled"
-          class="w-full shrink-0"
-          label="Anim value"
-          :model-value="eventValueDraft"
-          :slider-min="0"
-          :slider-max="1"
-          :step="0.01"
-          :decimals="3"
-          @update:model-value="(v) => emit('update:eventValueDraft', v)"
-        />
-        <Input
-          v-if="discovered.events.length"
-          class="h-7 shrink-0 rounded-sm text-xs"
-          placeholder="Filter events"
-          v-model="eventsFilter"
-        />
-        <div v-if="filteredEvents.length" class="flex min-h-0 flex-1 flex-wrap content-start gap-1 overflow-y-auto">
-          <Button
-            v-for="ev in filteredEvents"
-            :key="ev"
-            type="button"
-            size="xs"
-            :variant="eventDraft === ev ? 'default' : 'outline'"
-            class="h-6 rounded-sm px-2 text-[11px]"
-            @click="emit('update:eventDraft', ev)"
+            <div class="flex shrink-0 flex-wrap items-center gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                :variant="eventValueEnabled ? 'default' : 'secondary'"
+                class="h-7 w-7 shrink-0 rounded-sm px-0"
+                title="Toggle anim event value"
+                aria-label="Toggle anim event value"
+                :aria-pressed="eventValueEnabled"
+                @click="eventValueEnabled = !eventValueEnabled"
+              >
+                <SlidersHorizontal class="size-3.5" :size="14" />
+              </Button>
+              <Input
+                class="h-7 min-w-[80px] flex-1 rounded-sm text-xs"
+                placeholder="event name"
+                :model-value="eventDraft"
+                @update:model-value="(v) => emit('update:eventDraft', String(v ?? ''))"
+              />
+              <ButtonGroup class="shrink-0">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  class="h-7 rounded-sm px-2 text-xs"
+                  @click="emit('fireExternal')"
+                >
+                  Ext
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  class="h-7 rounded-sm px-2 text-xs"
+                  @click="onFireAnimEvent"
+                >
+                  Anim
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  class="h-7 rounded-sm px-2 text-xs"
+                  @click="emit('fireAnimEnd')"
+                >
+                  AnimEnd
+                </Button>
+              </ButtonGroup>
+            </div>
+            <PropertyNumberSlider
+              v-if="eventValueEnabled"
+              class="w-full shrink-0"
+              label="Anim value"
+              :model-value="eventValueDraft"
+              :slider-min="0"
+              :slider-max="1"
+              :step="0.01"
+              :decimals="3"
+              @update:model-value="(v) => emit('update:eventValueDraft', v)"
+            />
+            <Input
+              v-if="discovered.events.length"
+              class="h-7 shrink-0 rounded-sm text-xs"
+              placeholder="Filter events"
+              v-model="eventsFilter"
+            />
+            <div
+              v-if="filteredEvents.length"
+              class="flex min-h-0 flex-1 flex-wrap content-start gap-1 overflow-y-auto"
+            >
+              <Button
+                v-for="ev in filteredEvents"
+                :key="ev"
+                type="button"
+                size="xs"
+                :variant="eventDraft === ev ? 'default' : 'outline'"
+                class="h-6 rounded-sm px-2 text-[11px]"
+                @click="emit('update:eventDraft', ev)"
+              >
+                {{ ev }}
+              </Button>
+            </div>
+            <p
+              v-else-if="discovered.events.length"
+              class="m-0 text-[11px] text-muted-foreground"
+            >
+              No matching events
+            </p>
+            <p v-else class="m-0 text-[11px] text-muted-foreground">No discovered events</p>
+          </TabsContent>
+
+          <TabsContent
+            value="drivers"
+            class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden"
           >
-            {{ ev }}
-          </Button>
-        </div>
-        <p v-else-if="discovered.events.length" class="m-0 text-[11px] text-muted-foreground">No matching events</p>
-        <p v-else class="m-0 text-[11px] text-muted-foreground">No discovered events</p>
+            <SimDriversPanel />
+          </TabsContent>
+        </Tabs>
       </TabsContent>
 
       <TabsContent value="values" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
@@ -1082,8 +1148,10 @@ import {
   Activity,
   Bone,
   Box,
+  Cpu,
   Database,
   Film,
+  Gamepad2,
   Info,
   Layers,
   Network,
@@ -1117,6 +1185,7 @@ import {
   type AppWindowUiState,
 } from '../stores/appWindows'
 import AnimSetupEntryCard from '@/components/sim/AnimSetupEntryCard.vue'
+import SimDriversPanel from '@/components/sim/drivers/SimDriversPanel.vue'
 import {
   PropertyBoolToggle,
   PropertyEnumSelect,
@@ -1276,7 +1345,8 @@ const emit = defineEmits<{
   fireAnimEnd: []
 }>()
 
-const activeTab = ref<'diagrams' | 'events' | 'values' | 'resources'>('diagrams')
+const activeTab = ref<'diagrams' | 'control' | 'values' | 'resources'>('diagrams')
+const controlSubTab = ref<'events' | 'drivers'>('events')
 const valuesSubTab = ref<'features' | 'vars' | 'wrappers' | 'tags'>('features')
 const resourcesSubTab = ref<'sets' | 'db' | 'rig' | 'entity'>('sets')
 const eventValueEnabled = ref(false)
@@ -1392,6 +1462,10 @@ function observeTabsIconOnly(
 const mainTabsRowEl = ref<HTMLElement | null>(null)
 const mainTabsIconOnly = ref(false)
 observeTabsIconOnly(mainTabsRowEl, mainTabsIconOnly)
+
+const controlTabsRowEl = ref<HTMLElement | null>(null)
+const controlTabsIconOnly = ref(false)
+observeTabsIconOnly(controlTabsRowEl, controlTabsIconOnly)
 
 const valuesTabsRowEl = ref<HTMLElement | null>(null)
 const valuesTabsIconOnly = ref(false)

@@ -729,6 +729,7 @@ import {
   simVectorVarDrafts,
   simWrapperWeightDrafts,
 } from './stores/animgraphSim'
+import './stores/simDriverConsoles'
 import {
   flushPendingHandleFieldEditImpl,
   notifySelectedHandleDataChanged,

@@ -2,7 +2,7 @@
  * RED CName / slot hash helpers (engine red::CalculateHash64 + anim::CalcSlotNameHash).
  */
 
-/** FNV-1a 64-bit offset basis / prime (redSystem hash.h). */
+/** FNV-1a 64-bit offset basis / prime (redSystem hash). */
 const FNV_OFFSET_BASIS64 = 14695981039346656037n
 const FNV_PRIME64 = 1099511628211n
 const U64_MASK = 0xffffffffffffffffn

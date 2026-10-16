@@ -614,6 +614,9 @@ export function useAnimgraphSim() {
   /** Live root only (null when destroyed / explicit None). */
   const getPrimaryRunner = () => runners.get(ROOT_RUNNER_ID) ?? null
 
+  const getRunner = (runnerId: string | null | undefined) =>
+    runnerId ? runners.get(runnerId) ?? null : null
+
   /**
    * Host / SimPanel view: always root runner snap + live clock fields.
    * Diagram-scoped UI must use `snapshotForRunner` / `snapshotForDiagram`
@@ -2316,6 +2319,7 @@ export function useAnimgraphSim() {
     active,
     playing,
     getPrimaryRunner,
+    getRunner,
     getRootRunnerId,
     ensureRunner,
     ensureSlotRunner: (parentId: string, slotName: string) => {

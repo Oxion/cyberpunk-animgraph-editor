@@ -12,8 +12,11 @@
 import { StateKey, TypedStore } from "./TypedStore"
 
 export class InstanceStateDef<T, P = void> extends StateKey<Map<string, T>> {
-  constructor(id: string, public readonly create: (props: P) => T) {
+  public readonly create: (props: P) => T
+
+  constructor(id: string, create: (props: P) => T) {
     super(id)
+    this.create = create
   }
 }
 

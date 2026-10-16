@@ -67,6 +67,7 @@ export type GraphDocumentIoHost = {
     clipPoseLibrary?: ClipPoseLibraryJson
     clipPoseRevision?: number
     runnerSlots?: SimRunnerSlotsConfigJson
+    simDrivers?: import('../utils/sim/simDriver').SimDriversProjectJson
   } | null
   /** Compact clip-pose JSON for sidecar write (null if empty). */
   getCachedClipPoseCompactText?: () => string | null
@@ -79,6 +80,7 @@ export type GraphDocumentIoHost = {
       rigLibrary?: import('../utils/sim/rigResource').RigLibraryJson
       clipPoseLibrary?: ClipPoseLibraryJson
       runnerSlots?: SimRunnerSlotsConfigJson
+      simDrivers?: import('../utils/sim/simDriver').SimDriversProjectJson
     } | null
   ) => void
 }
@@ -233,6 +235,7 @@ export const loadProjectFile = async (data: AnimgraphProjectFile) => {
     rigLibrary: data.rigLibrary,
     clipPoseLibrary: data.clipPoseLibrary,
     runnerSlots: data.runnerSlots,
+    simDrivers: data.simDrivers,
   })
   presentReplacedProject(data.mainDiagramId)
   clearProjectDirty()
@@ -571,6 +574,9 @@ export const createProjectExportData = (opts?: {
   }
   if (sim?.runnerSlots != null) {
     out.runnerSlots = sim.runnerSlots
+  }
+  if (sim?.simDrivers != null) {
+    out.simDrivers = sim.simDrivers
   }
   if (sim?.rigLibrary != null && (sim.rigLibrary.entries?.length ?? 0) > 0) {
     out.rigLibrary = sim.rigLibrary

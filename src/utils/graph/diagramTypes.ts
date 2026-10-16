@@ -10,6 +10,7 @@ import type { AnimClipSetupJson } from '../sim/clipLibrary'
 import type { AnimDatabaseLibraryJson } from '../sim/animDatabase'
 import type { RigLibraryJson } from '../sim/rigResource'
 import type { ClipPoseLibraryJson } from '../sim/clipPoseLibrary'
+import type { SimDriversProjectJson } from '../sim/simDriver'
 
 /** Persisted sim runner topology (no live dyn). */
 export type SimRunnerSlotsConfigJson = {
@@ -214,6 +215,8 @@ export interface AnimgraphProjectFile {
   clipPoseLibrary?: ClipPoseLibraryJson
   /** Sim GraphSlot execution topology (runner ids + slot→diagram / slot→child maps). */
   runnerSlots?: SimRunnerSlotsConfigJson
+  /** Offline sim drivers (LookAt / MixerSlot / WorkspotHub, …). */
+  simDrivers?: SimDriversProjectJson
 }
 
 /** Default id suggestion for the first diagram; not a hard requirement. */
