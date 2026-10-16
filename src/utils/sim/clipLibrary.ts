@@ -199,6 +199,35 @@ export class ClipLibrary {
     return this.resolveClipEntry(name, isWrapperActive)?.clip
   }
 
+  /**
+   * Clip for SkPhase CacheClipping: prefer resolve winner, but if it has no
+   * usable phase event, borrow events from any other entry of the same name.
+   */
+  resolveClipForPhase(
+    name: string,
+    phase: string,
+    isWrapperActive: (name: string) => boolean
+  ): ClipMeta | undefined {
+    const primary = this.resolveClip(name, isWrapperActive)
+    if (!primary) return undefined
+    if (!phase || phase === 'None') return primary
+    const key = phase.toLowerCase()
+    const hasPhase = (c: ClipMeta) =>
+      c.events.some((e) => e.name.toLowerCase() === key)
+    if (hasPhase(primary)) return primary
+    for (const entry of this.entries) {
+      const clip = findClipInMap(entry.clips, name)
+      if (!clip || !hasPhase(clip)) continue
+      return {
+        ...primary,
+        events: clip.events,
+        duration: primary.duration > 0 ? primary.duration : clip.duration,
+        numFrames: primary.numFrames ?? clip.numFrames,
+      }
+    }
+    return primary
+  }
+
   /** Winning setup entry id + clip (same order as resolveClip). */
   resolveClipEntry(
     name: string,
@@ -282,6 +311,14 @@ export class ClipLibrary {
       if (clip) return clip
     }
     return undefined
+  }
+
+  /** Clip meta for a specific AnimSetupEntry (per-set events / duration). */
+  getClipInEntry(name: string, entryId: string): ClipMeta | undefined {
+    if (!name || name === 'None' || !entryId) return undefined
+    const entry = this.entries.find((e) => e.id === entryId)
+    if (!entry) return undefined
+    return findClipInMap(entry.clips, name)
   }
 
   get(name: string): ClipMeta | undefined {

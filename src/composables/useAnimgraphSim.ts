@@ -2016,6 +2016,11 @@ export function useAnimgraphSim() {
     return clipLibrary.value.lookup(name)
   }
 
+  const getClipInEntry = (name: string, entryId: string): ClipMeta | undefined => {
+    void clipLibraryRevision.value
+    return clipLibrary.value.getClipInEntry(name, entryId)
+  }
+
   const isClipActive = (name: string): boolean => getClip(name) !== undefined
 
   const listClipSets = (name: string): ClipSetMembership[] => {
@@ -2468,6 +2473,7 @@ export function useAnimgraphSim() {
     draftStringFeatureValue,
     getClip,
     lookupClip,
+    getClipInEntry,
     isClipActive,
     listClipSets,
     loadAnimsetJson,

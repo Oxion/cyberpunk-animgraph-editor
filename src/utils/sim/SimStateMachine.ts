@@ -105,6 +105,11 @@ export class SimStateMachineRuntime {
   eligibleTransitionIds: string[] = []
   instantChainLength = 0
   checkEntryConditions = true
+  /**
+   * Engine i_transitionsOneFrameDelay — skip CheckTransitions the frame a state
+   * is entered when that state has preventTransitionsInActivationFrame.
+   */
+  transitionsOneFrameDelay = false
   /** State index whose Timed conditions were last reset (enter). */
   timedArmedStateIndex: number | null = null
 
@@ -125,6 +130,7 @@ export class SimStateMachineRuntime {
     this.eligibleTransitionIds = []
     this.instantChainLength = 0
     this.checkEntryConditions = true
+    this.transitionsOneFrameDelay = false
     this.timedArmedStateIndex = null
   }
 
@@ -200,9 +206,79 @@ function resetTimedForState(
 }
 
 /**
- * Offline SM update mirroring AnimNode_StateMachine transition logic.
+ * Engine CheckConditionalEntryTransitions — runs before state Update / CheckTransitions.
  */
-export function updateStateMachine(
+export function applySmEntryConditions(
+  sm: AnimgraphNode,
+  runtime: SimStateMachineRuntime,
+  board: SimInputBoard,
+  handles: Map<string, AnimgraphNode>,
+  nodeTruth: Record<string, SimNodeState>,
+  condCtx: CheckConditionCtx = {}
+): void {
+  if (!runtime.checkEntryConditions) return
+  runtime.checkEntryConditions = false
+
+  const data = sm.Data ?? {}
+  const states = listHandles(handles, data.states)
+  const entries = listHandles(handles, data.conditionalEntries)
+  const ctx: CheckConditionCtx = { ...condCtx }
+
+  let bestEntry: AnimgraphNode | null = null
+  let bestMeta: ReturnType<typeof readTransitionMeta> | null = null
+  for (const entry of entries) {
+    const d = entry.Data ?? {}
+    const enabled = d.isEnabled === undefined ? true : readBool(d.isEnabled)
+    if (!enabled) continue
+    const meta = {
+      priority: readNumber(d.priority, 0),
+      isForcedToTrue: readBool(d.isForcedToTrue),
+      targetStateIndex: readNumber(d.targetStateIndex, -1),
+      duration: 0,
+      inertializationDuration: 0,
+      canRequestInertialization: false,
+    }
+    const cond = resolveHandle(handles, d.condition)
+    const pass = recordConditionOverlay(
+      nodeTruth,
+      entry.HandleId,
+      cond,
+      board,
+      handles,
+      ctx,
+      meta.isForcedToTrue
+    )
+    if (pass !== true) continue
+    if (
+      transitionHasHigherPriority(
+        bestMeta
+          ? { priority: bestMeta.priority, isForcedToTrue: bestMeta.isForcedToTrue }
+          : null,
+        meta
+      )
+    ) {
+      bestEntry = entry
+      bestMeta = meta
+    }
+  }
+  if (bestEntry && bestMeta && bestMeta.targetStateIndex >= 0) {
+    runtime.activeStateIndex = bestMeta.targetStateIndex
+    runtime.lastFiredTransitionId = bestEntry.HandleId
+  } else {
+    runtime.activeStateIndex = readNumber(data.defaultStateIndex, 0)
+  }
+  runtime.timedArmedStateIndex = null
+  // GoToStateInstant: one-frame delay from entered state's prevent flag
+  const entered = states[runtime.activeStateIndex]
+  runtime.transitionsOneFrameDelay = readBool(
+    entered?.Data?.preventTransitionsInActivationFrame
+  )
+}
+
+/**
+ * Engine CheckTransitions (+ progress) — call after current-state Update/clock tick.
+ */
+export function updateStateMachineTransitions(
   sm: AnimgraphNode,
   runtime: SimStateMachineRuntime,
   dt: number,
@@ -216,58 +292,21 @@ export function updateStateMachine(
   const transitions = listHandles(handles, data.transitions)
   const globals = listHandles(handles, data.globalTransitions)
   const states = listHandles(handles, data.states)
-  const entries = listHandles(handles, data.conditionalEntries)
   const ctx: CheckConditionCtx = { ...condCtx, dt }
 
-  if (runtime.checkEntryConditions) {
-    runtime.checkEntryConditions = false
-    let bestEntry: AnimgraphNode | null = null
-    let bestMeta: ReturnType<typeof readTransitionMeta> | null = null
-    for (const entry of entries) {
-      const d = entry.Data ?? {}
-      const enabled = d.isEnabled === undefined ? true : readBool(d.isEnabled)
-      if (!enabled) continue
-      const meta = {
-        priority: readNumber(d.priority, 0),
-        isForcedToTrue: readBool(d.isForcedToTrue),
-        targetStateIndex: readNumber(d.targetStateIndex, -1),
-        duration: 0,
-        inertializationDuration: 0,
-        canRequestInertialization: false,
-      }
-      const cond = resolveHandle(handles, d.condition)
-      const pass = recordConditionOverlay(
-        nodeTruth,
-        entry.HandleId,
-        cond,
-        board,
-        handles,
-        ctx,
-        meta.isForcedToTrue
-      )
-      if (pass !== true) continue
-      if (
-        transitionHasHigherPriority(
-          bestMeta
-            ? { priority: bestMeta.priority, isForcedToTrue: bestMeta.isForcedToTrue }
-            : null,
-          meta
-        )
-      ) {
-        bestEntry = entry
-        bestMeta = meta
-      }
-    }
-    if (bestEntry && bestMeta && bestMeta.targetStateIndex >= 0) {
-      runtime.activeStateIndex = bestMeta.targetStateIndex
-      runtime.lastFiredTransitionId = bestEntry.HandleId
-    } else {
-      runtime.activeStateIndex = readNumber(data.defaultStateIndex, 0)
-    }
-    runtime.timedArmedStateIndex = null
-  }
-
   runtime.instantChainLength = 0
+
+  // Engine: skip CheckTransitions this frame, then clear delay.
+  if (runtime.transitionsOneFrameDelay) {
+    runtime.transitionsOneFrameDelay = false
+    const currentState = states[runtime.activeStateIndex]
+    if (currentState && runtime.timedArmedStateIndex !== runtime.activeStateIndex) {
+      resetTimedForState(currentState, transitions, handles, ctx.conditionDyn)
+      runtime.timedArmedStateIndex = runtime.activeStateIndex
+    }
+    runtime.eligibleTransitionIds = []
+    return
+  }
 
   for (let chain = 0; chain < MAX_INSTANT_TRANSITION_SEQUENCE_LENGTH; chain++) {
     if (runtime.isInTransition) {
@@ -397,10 +436,43 @@ export function updateStateMachine(
       runtime.firingTransitionHandleId = null
       runtime.targetStateIndex = null
       runtime.timedArmedStateIndex = null
+      const landed = states[runtime.activeStateIndex]
+      if (readBool(landed?.Data?.preventTransitionsInActivationFrame)) {
+        // Defer further CheckTransitions to next frame (engine GoToStateInstant).
+        runtime.transitionsOneFrameDelay = true
+        break
+      }
       continue
     }
     break
   }
+}
+
+/**
+ * Full SM step (tests / legacy): entry → transitions.
+ * Live Update path uses applySmEntryConditions + clock tick + updateStateMachineTransitions.
+ */
+export function updateStateMachine(
+  sm: AnimgraphNode,
+  runtime: SimStateMachineRuntime,
+  dt: number,
+  board: SimInputBoard,
+  handles: Map<string, AnimgraphNode>,
+  nodeTruth: Record<string, SimNodeState>,
+  condCtx: CheckConditionCtx = {},
+  inertialization?: InertializationRequestSink
+): void {
+  applySmEntryConditions(sm, runtime, board, handles, nodeTruth, condCtx)
+  updateStateMachineTransitions(
+    sm,
+    runtime,
+    dt,
+    board,
+    handles,
+    nodeTruth,
+    condCtx,
+    inertialization
+  )
 }
 
 export function findStateMachineHandles(

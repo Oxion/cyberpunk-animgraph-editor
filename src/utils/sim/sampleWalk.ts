@@ -622,6 +622,7 @@ function sampleNodeDispatch(
     case 'animAnimNode_SkPhaseWithDurationAnim':
     case 'animAnimNode_SkPhaseWithSpeedAnim':
     case 'animAnimNode_SkPhaseSlotWithDurationAnim':
+    case 'animAnimNode_AnimDatabase':
       return sampleSkAnim(node, ctx, out)
 
     case 'animAnimNode_SkOneShotAnim':

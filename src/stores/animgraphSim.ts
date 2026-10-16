@@ -89,6 +89,7 @@ export const {
   draftStringFeatureValue: simDraftStringFeatureValue,
   getClip: simGetClip,
   lookupClip: simLookupClip,
+  getClipInEntry: simGetClipInEntry,
   isClipActive: simIsClipActive,
   listClipSets: simListClipSets,
   loadAnimsetJson: simLoadAnimsetJson,

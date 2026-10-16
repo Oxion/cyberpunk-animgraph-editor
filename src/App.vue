@@ -249,6 +249,7 @@
                 :list-glb-anim-names="simListGlbAnimNames"
                 :resolve-clip="simGetClip"
                 :lookup-clip="simLookupClip"
+                :get-clip-in-entry="simGetClipInEntry"
                 :is-clip-active="simIsClipActive"
                 :list-clip-sets="simListClipSets"
                 :load-animset-json="simLoadAnimsetJson"
@@ -690,6 +691,7 @@ import {
   simLoadAnimsetGlb,
   simLoadAnimsetJson,
   simLoadRigJson,
+  simGetClipInEntry,
   simLookupClip,
   simQuatFeatureDrafts,
   simQuatVarDrafts,

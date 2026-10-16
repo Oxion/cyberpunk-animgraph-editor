@@ -775,7 +775,12 @@
               >
                 <p class="font-data m-0 mb-1 text-foreground">
                   {{ expandedClipDetail.name }} · {{ expandedClipDetail.duration.toFixed(3) }}s
-                  · {{ expandedClipDetail.events.length }} evt
+                  <template v-if="expandedClipSets.length > 1">
+                    · {{ expandedClipSets.length }} sets
+                  </template>
+                  <template v-else>
+                    · {{ expandedClipDetail.events.length }} evt
+                  </template>
                   <span
                     class="ml-1 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase"
                     :class="
@@ -799,59 +804,82 @@
                     no glb
                   </span>
                 </p>
-                <div v-if="expandedClipSets.length" class="mb-1.5 flex flex-col gap-0.5">
+                <div v-if="expandedClipSets.length" class="mb-1.5 flex flex-col gap-1.5">
                   <p class="m-0 text-[9px] uppercase tracking-wide text-muted-foreground/80">
                     In sets
                   </p>
                   <div
                     v-for="s in expandedClipSets"
                     :key="s.entryId"
-                    class="flex min-w-0 items-center gap-1.5"
-                    :title="`${s.entryId} · pri ${s.priority}`"
+                    class="flex min-w-0 flex-col gap-0.5"
                   >
-                    <span
-                      class="shrink-0 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase"
-                      :class="
-                        s.resolves
-                          ? 'bg-emerald-500/20 text-emerald-400'
-                          : s.active
-                            ? 'bg-sky-500/15 text-sky-400'
+                    <div
+                      class="flex min-w-0 items-center gap-1.5"
+                      :title="`${s.entryId} · pri ${s.priority}`"
+                    >
+                      <span
+                        class="shrink-0 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase"
+                        :class="
+                          s.resolves
+                            ? 'bg-emerald-500/20 text-emerald-400'
+                            : s.active
+                              ? 'bg-sky-500/15 text-sky-400'
+                              : 'bg-muted text-muted-foreground'
+                        "
+                      >
+                        {{ s.resolves ? 'win' : s.active ? 'on' : 'off' }}
+                      </span>
+                      <span class="min-w-0 flex-1 truncate text-[10px] text-foreground">
+                        {{ s.sourceLabel }}
+                      </span>
+                      <span
+                        class="shrink-0 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase"
+                        :class="
+                          getClipGlbInfo(name, s.entryId)
+                            ? 'bg-violet-500/20 text-violet-300'
                             : 'bg-muted text-muted-foreground'
-                      "
-                    >
-                      {{ s.resolves ? 'win' : s.active ? 'on' : 'off' }}
-                    </span>
-                    <span class="min-w-0 flex-1 truncate text-[10px] text-foreground">
-                      {{ s.sourceLabel }}
-                    </span>
-                    <span
-                      class="shrink-0 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase"
-                      :class="
-                        getClipGlbInfo(name, s.entryId)
-                          ? 'bg-violet-500/20 text-violet-300'
-                          : 'bg-muted text-muted-foreground'
-                      "
-                    >
-                      <template v-if="getClipGlbInfo(name, s.entryId)">
-                        glb {{ getClipGlbInfo(name, s.entryId)!.duration.toFixed(2) }}s
-                      </template>
-                      <template v-else>no glb</template>
-                    </span>
-                    <span class="font-data shrink-0 text-[9px]">
-                      pri {{ s.priority }} · {{ s.duration.toFixed(2) }}s · {{ s.eventCount }}e
-                    </span>
+                        "
+                      >
+                        <template v-if="getClipGlbInfo(name, s.entryId)">
+                          glb {{ getClipGlbInfo(name, s.entryId)!.duration.toFixed(2) }}s
+                        </template>
+                        <template v-else>no glb</template>
+                      </span>
+                      <span class="font-data shrink-0 text-[9px]">
+                        pri {{ s.priority }} · {{ s.duration.toFixed(2) }}s · {{ s.eventCount }}e
+                      </span>
+                    </div>
+                    <div class="ml-1 border-l border-border/60 pl-1.5">
+                      <p
+                        v-for="(ev, i) in clipEventsForEntry(name, s.entryId)"
+                        :key="`${s.entryId}-${ev.name}-${ev.time}-${i}`"
+                        class="font-data m-0 truncate"
+                        :title="ev.type"
+                      >
+                        t={{ ev.time.toFixed(3) }} {{ ev.name }}
+                        <span v-if="ev.value != null">={{ ev.value }}</span>
+                      </p>
+                      <p
+                        v-if="!clipEventsForEntry(name, s.entryId).length"
+                        class="m-0 text-muted-foreground/80"
+                      >
+                        No events
+                      </p>
+                    </div>
                   </div>
                 </div>
-                <p
-                  v-for="(ev, i) in expandedClipDetail.events"
-                  :key="`${ev.name}-${ev.time}-${i}`"
-                  class="font-data m-0 truncate"
-                  :title="ev.type"
-                >
-                  t={{ ev.time.toFixed(3) }} {{ ev.name }}
-                  <span v-if="ev.value != null">={{ ev.value }}</span>
-                </p>
-                <p v-if="!expandedClipDetail.events.length" class="m-0">No events</p>
+                <template v-else>
+                  <p
+                    v-for="(ev, i) in expandedClipDetail.events"
+                    :key="`${ev.name}-${ev.time}-${i}`"
+                    class="font-data m-0 truncate"
+                    :title="ev.type"
+                  >
+                    t={{ ev.time.toFixed(3) }} {{ ev.name }}
+                    <span v-if="ev.value != null">={{ ev.value }}</span>
+                  </p>
+                  <p v-if="!expandedClipDetail.events.length" class="m-0">No events</p>
+                </template>
               </div>
             </div>
           </div>
@@ -1266,6 +1294,7 @@ const props = defineProps<{
   listGlbAnimNames: (setupEntryId: string) => string[]
   resolveClip: (name: string) => ClipMeta | undefined
   lookupClip: (name: string) => ClipMeta | undefined
+  getClipInEntry: (name: string, entryId: string) => ClipMeta | undefined
   isClipActive: (name: string) => boolean
   listClipSets: (name: string) => ClipSetMembership[]
   loadAnimsetJson: (
@@ -1823,6 +1852,9 @@ const formatClipDur = (name: string) => {
   const c = props.lookupClip(name)
   return c ? `${c.duration.toFixed(2)}s` : '—'
 }
+
+const clipEventsForEntry = (name: string, entryId: string) =>
+  props.getClipInEntry(name, entryId)?.events ?? []
 
 const onFeatureValue = (feature: string, property: string, raw: string | number) => {
   const value = Number(raw)

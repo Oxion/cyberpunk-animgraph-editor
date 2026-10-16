@@ -7,7 +7,6 @@ import { readCName, readNumber } from './simDataUtils'
 import { normalizeFootPhase } from './footPhase'
 import {
   ClipLibrary,
-  DEFAULT_ANIM_FPS,
   DEFAULT_ANIM_SETUP_PRIORITY,
   type AddAnimSetOptions,
   type AnimClipSetupJson,
@@ -51,19 +50,13 @@ function findAnimSetRoot(json: unknown): Record<string, unknown> | null {
   return null
 }
 
-function inferFps(duration: number, numFrames: number | undefined): number {
-  if (
-    typeof numFrames === 'number' &&
-    numFrames > 0 &&
-    Number.isFinite(duration) &&
-    duration > 1e-6
-  ) {
-    return numFrames / duration
-  }
-  return DEFAULT_ANIM_FPS
-}
+/**
+ * Engine anim::FRAMES_PER_SECOND / EVENTS_FRAMES_PER_SECOND — event frames are
+ * always 30fps, independent of anim buffer numFrames.
+ */
+const EVENTS_FRAMES_PER_SECOND = 30
 
-function parseEvents(eventsContainer: unknown, fps: number): ClipEvent[] {
+function parseEvents(eventsContainer: unknown): ClipEvent[] {
   const cont = unwrap(eventsContainer)
   const list = cont?.events
   if (!Array.isArray(list)) return []
@@ -71,12 +64,17 @@ function parseEvents(eventsContainer: unknown, fps: number): ClipEvent[] {
   for (const raw of list) {
     const e = unwrap(raw)
     if (!e) continue
-    const name = readCName(e.eventName)
+    // WolvenKit: eventName; some exports use name
+    const name = readCName(e.eventName) || readCName(e.name)
     if (!name || name === 'None') continue
-    const startFrame = readNumber(e.startFrame, 0)
-    const durationInFrames = readNumber(e.durationInFrames, 0)
-    const time = startFrame / fps
-    const duration = durationInFrames > 0 ? durationInFrames / fps : 0
+    const startFrame = readNumber(e.startFrame ?? e.StartFrame, 0)
+    const durationInFrames = readNumber(
+      e.durationInFrames ?? e.DurationInFrames,
+      0
+    )
+    const time = startFrame / EVENTS_FRAMES_PER_SECOND
+    const duration =
+      durationInFrames > 0 ? durationInFrames / EVENTS_FRAMES_PER_SECOND : 0
     const type = typeof e.$type === 'string' ? e.$type : undefined
     const valueRaw = e.value
     const value =
@@ -105,10 +103,11 @@ function parseEntry(entryRaw: unknown, setTags: string[], source?: string): Clip
     typeof numFramesRaw === 'number' && Number.isFinite(numFramesRaw)
       ? numFramesRaw
       : undefined
-  const fps = inferFps(duration, numFrames)
   const animTags = readCNameList(anim.tags)
   const tags = [...new Set([...setTags, ...animTags])]
-  const events = parseEvents(entry.events, fps)
+  // Prefer entry.events; some exports nest under animation.events
+  let events = parseEvents(entry.events)
+  if (!events.length) events = parseEvents(anim.events)
   const animationTypeRaw = anim.animationType
   const animationType =
     typeof animationTypeRaw === 'string' && animationTypeRaw.trim()

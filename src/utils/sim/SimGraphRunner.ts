@@ -185,12 +185,13 @@ import { InertializationDynDef } from './inertializationDyn'
 import { updateInertialization } from './inertializationSim'
 import type { SimPreSampleHook, SimServiceEvent } from './simServiceEvents'
 import {
+  applySmEntryConditions,
   bindBlendFromPoseToStateMachines,
   evaluateSmTransitionBlendAlpha,
   findStateMachineHandles,
   findStateOutput,
   SimStateMachineRuntime,
-  updateStateMachine,
+  updateStateMachineTransitions,
 } from './SimStateMachine'
 import type {
   SimNodeState,
@@ -329,7 +330,7 @@ function runSkPhaseAnimClipClock(
   const animName = fields.animation || 'None'
   const clip =
     ctx.clipLibrary && ctx.clipLibrary.entryCount > 0
-      ? ctx.clipLibrary.resolveClip(animName, isWrap)
+      ? ctx.clipLibrary.resolveClipForPhase(animName, phase, isWrap)
       : undefined
   const phaseFields = applyPhaseToClockFields(fields, clip, phase)
 
@@ -561,25 +562,58 @@ function runAnimDatabaseClipClock(node: AnimgraphNode, ctx: WalkCtx) {
     }
   }
 
+  // Parent SkPhaseWithDurationAnim: phase pads + durationLink timeScale.
+  const durationH = resolveHandle(ctx.handles, d.durationLink)
+  if (durationH) updateFromNode(durationH, ctx)
+  let targetPlaybackDuration: number | undefined
+  if (durationH) {
+    const raw = readFloatSource(durationH, ctx, 0)
+    targetPlaybackDuration = Number.isFinite(raw) ? Math.max(0, raw) : 0
+  }
+
   const fields = {
     ...readSkAnimClockFields(d),
     animation: animName,
   }
+  const phase = readCName(d.phase)
+  const clip =
+    ctx.clipLibrary && ctx.clipLibrary.entryCount > 0
+      ? ctx.clipLibrary.resolveClipForPhase(animName, phase, isWrap)
+      : undefined
+  const phaseFields = applyPhaseToClockFields(fields, clip, phase)
+  const phasePads =
+    phase && phase !== 'None' && clip
+      ? resolvePhaseClipPads(clip, phase)
+      : null
+
   // Reset playback when database picks a different clip (sim: re-query each frame)
   if (clock.wasActive && clock.animName && clock.animName !== animName) {
+    clock.wasActive = false
+  }
+  // Phase window just resolved — seek to clipFront (engine CacheClipping on acquire)
+  if (
+    phasePads &&
+    clock.wasActive &&
+    (clock.currTime < phasePads.clipFront - 1e-4 ||
+      (clip &&
+        clock.currTime >
+          Math.max(clip.duration - phasePads.clipEnd, 0) + 1e-4))
+  ) {
     clock.wasActive = false
   }
   if (ctx.clipLibrary && ctx.clipLibrary.entryCount > 0) {
     const result = advanceClipClock(
       clock,
-      fields,
+      phaseFields,
       ctx.dt,
       ctx.clipLibrary,
       ctx.board,
-      isWrap
+      isWrap,
+      { targetPlaybackDuration }
     )
     noteAnimSetSwapInertialization(node, ctx, result.animSetSwapped)
     if (animName === 'None') clock.resolveHint = 'missing'
+    else if (phase && phase !== 'None' && !phasePads) clock.resolveHint = 'missing'
     return
   }
   if (clock.stepped) return
@@ -975,208 +1009,6 @@ function readSkAnimClockFields(data: Record<string, unknown>) {
     clipFront: readNumber(data.clipFront, 0),
     clipEnd: readNumber(data.clipEnd, 0),
   }
-}
-
-/**
- * Advance SkAnim clocks along a pose path without touching overlay visited.
- * Used before SM CheckTransitions so AnimEnd is visible same frame (engine order).
- */
-function tickClipClocksAlongPose(
-  node: AnimgraphNode | null,
-  ctx: WalkCtx,
-  clockVisited: Set<string>
-): void {
-  if (!node) return
-  if (clockVisited.has(node.HandleId)) return
-  clockVisited.add(node.HandleId)
-
-  const t = handleType(node)
-  const d = (node.Data ?? {}) as Record<string, unknown>
-  const { handles } = ctx
-
-  if (t === 'animAnimNode_Output') {
-    tickClipClocksAlongPose(
-      resolveHandle(handles, d.inputNode ?? d.input ?? d.node),
-      ctx,
-      clockVisited
-    )
-    return
-  }
-
-  if (
-    t === 'animAnimNode_State' ||
-    t === 'animAnimNode_StateFrozen' ||
-    t === 'animAnimNode_Stage'
-  ) {
-    tickClipClocksAlongPose(findStateOutput(node, handles), ctx, clockVisited)
-    return
-  }
-
-  if (t === 'animAnimNode_StagePoseEntry') {
-    tickClipClocksAlongPose(
-      resolveHandle(handles, d.parentInput ?? d.inputLink ?? d.input),
-      ctx,
-      clockVisited
-    )
-    return
-  }
-
-  if (isAnimDatabaseType(t)) {
-    runAnimDatabaseClipClock(node, ctx)
-    return
-  }
-
-  if (isSkOneShotAnimType(t)) {
-    runSkOneShotAnimClipClock(node, ctx)
-    return
-  }
-
-  if (isSkPhaseWithDurationType(t)) {
-    runSkPhaseAnimClipClock(node, ctx, 'duration')
-    return
-  }
-
-  if (isSkPhaseWithSpeedType(t)) {
-    runSkPhaseAnimClipClock(node, ctx, 'speed')
-    return
-  }
-
-  if (isSkPhaseAnimType(t)) {
-    runSkPhaseAnimClipClock(node, ctx, 'phase')
-    return
-  }
-
-  if (isSkSpeedAnimType(t)) {
-    runSkSpeedAnimClipClock(node, ctx)
-    return
-  }
-
-  if (isClipClockSkAnimType(t)) {
-    runSkAnimClipClock(node, ctx)
-    return
-  }
-
-  if (isSkDurationAnimType(t)) {
-    runSkDurationAnimClipClock(node, ctx)
-    return
-  }
-
-  if (isSkFrameAnimType(t)) {
-    runSkFrameAnimClipClock(node, ctx)
-    return
-  }
-
-  // Follow same pose branching heuristics as updateFromNode for common mixers
-  if (t === 'animAnimNode_Blend2') {
-    const weightNode = resolveHandle(handles, d.weightNode)
-    let weight = 0
-    if (weightNode) {
-      const raw = readFloatSource(weightNode, ctx, NaN)
-      if (Number.isFinite(raw)) {
-        weight = blend2WeightFromInput(
-          raw,
-          readNumber(d.minInputValue, 0),
-          readNumber(d.maxInputValue, 1)
-        )
-      }
-    }
-    const first = resolveHandle(handles, d.firstInputNode)
-    const second = resolveHandle(handles, d.secondInputNode)
-    if (first && weight < 1) tickClipClocksAlongPose(first, ctx, clockVisited)
-    if (second && weight > 0) tickClipClocksAlongPose(second, ctx, clockVisited)
-    return
-  }
-
-  if (t === 'animAnimNode_Switch') {
-    const weightNode = resolveHandle(handles, d.weightNode)
-    let weight = 0
-    if (weightNode) weight = readFloatSource(weightNode, ctx, 0)
-    const inputs = Array.isArray(d.inputNodes) ? d.inputNodes : []
-    const numInputs = readNumber(d.numInputs, inputs.length)
-    const index = switchIndexFromWeight(weight, Math.max(numInputs, inputs.length))
-    const h = resolveHandle(handles, inputs[index])
-    tickClipClocksAlongPose(h, ctx, clockVisited)
-    return
-  }
-
-  if (t === 'animAnimNode_BlendMultiple') {
-    const { slots, select } = resolveBlendMultipleSelection(
-      d as Record<string, unknown>,
-      ctx
-    )
-    if (
-      select.firstIndex >= 0 &&
-      blendMultipleFirstInputActive(select.alpha)
-    ) {
-      tickClipClocksAlongPose(
-        resolveHandle(handles, slots.refs[select.firstIndex]),
-        ctx,
-        clockVisited
-      )
-    }
-    if (
-      select.secondIndex >= 0 &&
-      blendMultipleSecondInputActive(select.alpha)
-    ) {
-      tickClipClocksAlongPose(
-        resolveHandle(handles, slots.refs[select.secondIndex]),
-        ctx,
-        clockVisited
-      )
-    }
-    return
-  }
-
-  if (t === 'animAnimNode_StaticSwitch' || t === 'animAnimNode_RuntimeSwitch') {
-    const cond = resolveHandle(handles, d.condition)
-    let useTrue: boolean
-    if (t === 'animAnimNode_StaticSwitch') {
-      useTrue =
-        ctx.staticSwitchResults?.get(node.HandleId) ??
-        checkStaticCondition(cond, ctx.board, {
-          clipLibrary: ctx.clipLibrary,
-          isWrapperActive: (n) => ctx.board.isWrapperActive(n),
-        })
-    } else {
-      useTrue = checkRuntimeCondition(cond, ctx.board, {
-        clipLibrary: ctx.clipLibrary,
-        isWrapperActive: (n) => ctx.board.isWrapperActive(n),
-      })
-    }
-    const branch = useTrue
-      ? resolveHandle(handles, d.True ?? d.true)
-      : resolveHandle(handles, d.False ?? d.false)
-    tickClipClocksAlongPose(branch, ctx, clockVisited)
-    return
-  }
-
-  if (t === 'animAnimNode_BlendAdditive') {
-    tickClipClocksAlongPose(resolveHandle(handles, d.inputNode), ctx, clockVisited)
-    const wNode = resolveHandle(handles, d.weightNode)
-    let w = 0
-    if (wNode) w = readFloatSource(wNode, ctx, 0)
-    if (isBlendAdditiveInputActive(w)) {
-      tickClipClocksAlongPose(resolveHandle(handles, d.addedInputNode), ctx, clockVisited)
-    }
-    return
-  }
-
-  if (t === 'animAnimNode_BlendOverride') {
-    // Always tick base; override only when control weight > ACTIVATION_THRESHOLD.
-    tickClipClocksAlongPose(resolveHandle(handles, d.inputNode), ctx, clockVisited)
-    const wNode = resolveHandle(handles, d.weightNode)
-    const raw = wNode ? readFloatSource(wNode, ctx, 0) : 0
-    const weight = Math.min(1, Math.max(0, raw))
-    if (blendOverrideInputActive(weight)) {
-      tickClipClocksAlongPose(resolveHandle(handles, d.overrideInputNode), ctx, clockVisited)
-    }
-    return
-  }
-
-  // Generic: follow pose input pins
-  forEachLinkedInput(node, handles, (linked) =>
-    tickClipClocksAlongPose(linked, ctx, clockVisited)
-  )
 }
 
 /** Follow diagram pin inputs (schema + extraPins), not a hardcoded field list. */
@@ -2717,23 +2549,31 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   }
 
   if (t === 'animAnimNode_StateMachine') {
+    const def = readNumber(d.defaultStateIndex, 0)
     let rt = ctx.runtimes.get(node.HandleId)
     if (!rt) {
-      rt = new SimStateMachineRuntime(node.HandleId, readNumber(d.defaultStateIndex, 0))
+      rt = new SimStateMachineRuntime(node.HandleId, def)
       ctx.runtimes.set(node.HandleId, rt)
+    } else if (!wasBoneOpActive(ctx, node.HandleId)) {
+      // Engine OnActivated (e.g. Switch re-selects this SM): default + entry check.
+      rt.reset(def)
     }
     const states = Array.isArray(d.states) ? d.states : []
 
-    // Engine OnUpdate: Update current state FIRST so AnimEnd/events feed CheckTransitions
-    // same frame (animNode_StateMachine — "prevent one frame delay").
+    // Engine OnUpdate: entry → Update current state (full subgraph, nested SMs
+    // included) → CheckTransitions. Nested CheckTransitions run inside that
+    // Update, before parent sees AnimEnd / decides transitions.
+    applySmEntryConditions(node, rt, board, handles, nodes, ctx.condCtx)
+
     if (!rt.isInTransition) {
       const pre = resolveHandle(handles, states[rt.activeStateIndex])
       if (pre) {
-        tickClipClocksAlongPose(findStateOutput(pre, handles), ctx, new Set())
+        const out = findStateOutput(pre, handles)
+        if (out) updateFromNode(out, ctx)
       }
     }
 
-    updateStateMachine(
+    updateStateMachineTransitions(
       node,
       rt,
       ctx.dt,
@@ -2748,6 +2588,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     if (active) {
       markActive(nodes, active.HandleId)
       const out = findStateOutput(active, handles)
+      // Already Updated above when !inTransition; followUpdate no-ops via visited.
       followUpdate(node, out, ctx)
     }
     if (rt.isInTransition && rt.targetStateIndex != null) {
@@ -2780,23 +2621,27 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
       const h = resolveHandle(handles, link)
       if (h) updateFromNode(h, ctx)
     }
-    runAnimDatabaseClipClock(node, ctx)
-    let weight = 0
-    const clock = ctx.clipClocks.get(node.HandleId)
-    if (clock && ctx.clipLibrary && ctx.clipLibrary.entryCount > 0) {
-      const clip = ctx.clipLibrary.resolveClip(clock.animName, (n) =>
-        board.isWrapperActive(n)
+    // durationLink activated inside runAnimDatabaseClipClock (SkPhaseWithDuration parent)
+    const progress = (() => {
+      runAnimDatabaseClipClock(node, ctx)
+      const clock = ctx.clipClocks.get(node.HandleId)
+      if (!clock || !ctx.clipLibrary || ctx.clipLibrary.entryCount <= 0) return 0
+      const phase = readCName(d.phase)
+      const clip = ctx.clipLibrary.resolveClipForPhase(
+        clock.animName,
+        phase,
+        (n) => board.isWrapperActive(n)
       )
-      if (clip) {
-        const front = readNumber(d.clipFront, 0)
-        const endPad = readNumber(d.clipEnd, 0)
-        const animEnd = Math.max(clip.duration - endPad, 0)
-        const clipped = Math.max(animEnd - front, 0)
-        weight = clipped > 1e-8 ? (clock.currTime - front) / clipped : 0
-        weight = Math.max(0, Math.min(1, weight))
-      }
-    }
-    markActive(nodes, node.HandleId, weight, 1)
+      if (!clip) return 0
+      const pads = phase && phase !== 'None' ? resolvePhaseClipPads(clip, phase) : null
+      const front = pads?.clipFront ?? readNumber(d.clipFront, 0)
+      const endPad = pads?.clipEnd ?? readNumber(d.clipEnd, 0)
+      const animEnd = Math.max(clip.duration - endPad, 0)
+      const clipped = Math.max(animEnd - front, 0)
+      if (!(clipped > 1e-8)) return 0
+      return Math.max(0, Math.min(1, (clock.currTime - front) / clipped))
+    })()
+    markActive(nodes, node.HandleId, progress, 1)
     return
   }
 
