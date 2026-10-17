@@ -235,7 +235,7 @@ function resolveDuration(
   if (!name) return 0
   const winner = clipLibrary?.resolveClipEntry(name, isWrap)
   if (winner?.clip.duration && winner.clip.duration > 0) return winner.clip.duration
-  const anim = clipPose?.findAnimation(name, winner?.entryId ?? null)
+  const anim = clipPose?.findAnimation(name, winner?.poseSetId ?? null)
   return anim?.duration ?? 0
 }
 
@@ -248,7 +248,7 @@ function isAnimAdditive(
   const winner = clipLibrary?.resolveClipEntry(name, isWrap)
   const type =
     winner?.clip.animationType ||
-    clipPose?.findAnimation(name, winner?.entryId ?? null)?.animationType ||
+    clipPose?.findAnimation(name, winner?.poseSetId ?? null)?.animationType ||
     ''
   return typeof type === 'string' && type.toLowerCase().startsWith('additive')
 }
@@ -685,7 +685,7 @@ function sampleEntry(
     entry.currentTime,
     ctx.rig,
     out,
-    winner.entryId
+    winner.poseSetId
   )
   if (!ok) return false
   if (entry.convertToAdditive) {
@@ -696,7 +696,7 @@ function sampleEntry(
         0,
         ctx.rig,
         first,
-        winner.entryId
+        winner.poseSetId
       )
       if (ok0) convertToAdditiveFrameLocal(first, out, out)
       else convertAbsoluteToAdditiveFromRig(out, ctx.rig)

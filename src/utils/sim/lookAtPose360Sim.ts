@@ -148,7 +148,7 @@ export function sampleLookAtPose360(
     dyn.animTime,
     rig,
     pose,
-    winner.entryId
+    winner.poseSetId
   )
   if (!ok) return false
 

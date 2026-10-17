@@ -23,9 +23,9 @@ const props = defineProps<{
   wrapperDraft: string
   getClipGlbInfo: (
     clipName: string,
-    setupEntryId?: string | null
+    poseSetId?: string | null
   ) => { name: string; duration: number } | null
-  listGlbAnimNames: (setupEntryId: string) => string[]
+  listGlbAnimNames: (poseSetId: string) => string[]
 }>()
 
 const emit = defineEmits<{
@@ -42,7 +42,9 @@ const cardOpen = ref(false)
 const poseOpen = ref(true)
 const animsOpen = ref(false)
 
-const glbAnimNames = computed(() => props.listGlbAnimNames(props.entry.id))
+const glbAnimNames = computed(() =>
+  props.entry.poseSetId ? props.listGlbAnimNames(props.entry.poseSetId) : []
+)
 
 const poseSource = computed(() => {
   if (!props.pose) return '—'
@@ -178,10 +180,10 @@ const poseSource = computed(() => {
                 >
                   <span class="prop-list__label font-data">{{ an }}</span>
                   <span
-                    v-if="getClipGlbInfo(an, entry.id)"
+                    v-if="getClipGlbInfo(an, entry.poseSetId)"
                     class="prop-list__pin tabular-nums"
                   >
-                    {{ getClipGlbInfo(an, entry.id)!.duration.toFixed(3) }}s
+                    {{ getClipGlbInfo(an, entry.poseSetId)!.duration.toFixed(3) }}s
                   </span>
                 </div>
               </div>

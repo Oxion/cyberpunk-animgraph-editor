@@ -8,6 +8,7 @@
  * 2) Convert channels glTF Y-up → RED Z-up for Sample / .rig.json space.
  */
 
+import { SequentialIdAllocator } from '../SequentialIdAllocator'
 import type { Pose } from './pose'
 import { clearStack, clearTrackStack } from './pose'
 import type { RigEntry } from './rigResource'
@@ -38,7 +39,6 @@ type JointChannels = {
 export type ClipPoseSetView = {
   id: string
   sourceLabel: string
-  setupEntryId: string | null
   animCount: number
   jointCount: number
 }
@@ -66,7 +66,6 @@ export function isClipPoseLibraryJson(data: unknown): data is ClipPoseLibraryJso
 export type ClipPoseSetJson = {
   id: string
   sourceLabel: string
-  setupEntryId: string | null
   jointNames: string[]
   animations: ClipPoseAnimJson[]
 }
@@ -93,13 +92,9 @@ export type ClipPoseChannelJson = {
 type PoseSet = {
   id: string
   sourceLabel: string
-  /** setup entry id this glb was attached to (optional) */
-  setupEntryId: string | null
   animations: Map<string, ClipPoseAnim>
   jointNames: string[]
 }
-
-let nextPoseSetId = 1
 
 function f32ToB64(arr: Float32Array): string {
   const bytes = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength)
@@ -155,9 +150,13 @@ function trackFromJson(raw: ClipPoseTrackJson | undefined): {
 
 export class ClipPoseLibrary {
   private sets: PoseSet[] = []
+  private readonly ids = new SequentialIdAllocator('pose', (id) =>
+    this.sets.some((s) => s.id === id)
+  )
 
   clear(): void {
     this.sets = []
+    this.ids.reset()
   }
 
   get size(): number {
@@ -174,69 +173,56 @@ export class ClipPoseLibrary {
     return this.sets.map((s) => ({
       id: s.id,
       sourceLabel: s.sourceLabel,
-      setupEntryId: s.setupEntryId,
       animCount: s.animations.size,
       jointCount: s.jointNames.length,
     }))
   }
 
-  getBySetupEntry(setupEntryId: string): ClipPoseSetView | null {
-    const s = this.sets.find((x) => x.setupEntryId === setupEntryId)
+  get(poseId: string): ClipPoseSetView | null {
+    const s = this.sets.find((x) => x.id === poseId)
     if (!s) return null
     return {
       id: s.id,
       sourceLabel: s.sourceLabel,
-      setupEntryId: s.setupEntryId,
       animCount: s.animations.size,
       jointCount: s.jointNames.length,
     }
   }
 
-  /** Duration + presence for HUD (scoped to setup entry when provided). */
+  /** Duration + presence for HUD (scoped to pose set when provided). */
   getAnimInfo(
     name: string,
-    setupEntryId?: string | null
+    poseId?: string | null
   ): { name: string; duration: number } | null {
-    const anim = this.findAnimation(name, setupEntryId)
+    const anim = this.findAnimation(name, poseId)
     if (!anim) return null
     return { name: anim.name, duration: anim.duration }
   }
 
-  /** Animation names in a linked glb set (for UI). */
-  listAnimNames(setupEntryId: string): string[] {
-    const s = this.sets.find((x) => x.setupEntryId === setupEntryId)
+  /** Animation names in a pose set (for UI). */
+  listAnimNames(poseId: string): string[] {
+    const s = this.sets.find((x) => x.id === poseId)
     if (!s) return []
     return [...s.animations.keys()].sort((a, b) => a.localeCompare(b))
   }
 
-  /** Attach / replace pose data for a setup entry (or standalone). */
+  /** Load pose curves from GLB; returns new pose set id. */
   loadGlb(
     buffer: ArrayBuffer,
     sourceLabel: string,
-    setupEntryId: string | null = null,
     /** Optional name→animationType from .anims.json (overrides / fills GLB extras). */
-    animationTypes?: ReadonlyMap<string, string> | null
+    animationTypes?: ReadonlyMap<string, string> | null,
+    preferredId?: string | null
   ): { id: string; animCount: number } {
     const parsed = parseGlbAnimations(buffer, animationTypes ?? null)
-    const id = `pose_${nextPoseSetId++}`
-    // Replace existing for same setup entry
-    if (setupEntryId) {
-      this.sets = this.sets.filter((s) => s.setupEntryId !== setupEntryId)
-    }
+    const id = this.ids.alloc(preferredId)
     this.sets.push({
       id,
       sourceLabel,
-      setupEntryId,
       animations: parsed.animations,
       jointNames: parsed.jointNames,
     })
     return { id, animCount: parsed.animations.size }
-  }
-
-  removeBySetupEntry(setupEntryId: string): boolean {
-    const before = this.sets.length
-    this.sets = this.sets.filter((s) => s.setupEntryId !== setupEntryId)
-    return this.sets.length < before
   }
 
   remove(id: string): boolean {
@@ -252,7 +238,6 @@ export class ClipPoseLibrary {
       sets: this.sets.map((s) => ({
         id: s.id,
         sourceLabel: s.sourceLabel,
-        setupEntryId: s.setupEntryId,
         jointNames: [...s.jointNames],
         animations: [...s.animations.values()].map((a) => ({
           name: a.name,
@@ -278,15 +263,11 @@ export class ClipPoseLibrary {
       )
       return
     }
-    let maxNum = 0
     for (const raw of data.sets) {
       if (!raw || !Array.isArray(raw.animations)) continue
-      const id =
-        typeof raw.id === 'string' && raw.id.trim()
-          ? raw.id.trim()
-          : `pose_${nextPoseSetId++}`
-      const m = /^pose_(\d+)$/.exec(id)
-      if (m) maxNum = Math.max(maxNum, Number(m[1]))
+      const id = this.ids.alloc(
+        typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : null
+      )
       const animations = new Map<string, ClipPoseAnim>()
       for (const a of raw.animations) {
         if (!a?.name || typeof a.name !== 'string') continue
@@ -312,27 +293,22 @@ export class ClipPoseLibrary {
       this.sets.push({
         id,
         sourceLabel: raw.sourceLabel || id,
-        setupEntryId:
-          typeof raw.setupEntryId === 'string' && raw.setupEntryId.trim()
-            ? raw.setupEntryId.trim()
-            : null,
         animations,
         jointNames: Array.isArray(raw.jointNames) ? [...raw.jointNames] : [],
       })
     }
-    if (maxNum >= nextPoseSetId) nextPoseSetId = maxNum + 1
   }
 
-  hasAnimation(name: string, setupEntryId?: string | null): boolean {
-    return this.findAnimation(name, setupEntryId) != null
+  hasAnimation(name: string, poseId?: string | null): boolean {
+    return this.findAnimation(name, poseId) != null
   }
 
   /**
    * Find animation by name.
-   * When `setupEntryId` is set — only that set (wrapper/priority resolve path).
-   * When null/omitted — legacy scan of all sets (avoid for Sample).
+   * When `poseId` is set — only that pose set.
+   * When null/omitted — scan all sets (avoid for Sample).
    */
-  findAnimation(name: string, setupEntryId?: string | null): ClipPoseAnim | null {
+  findAnimation(name: string, poseId?: string | null): ClipPoseAnim | null {
     if (!name || name === 'None') return null
     const lower = name.toLowerCase()
     const pick = (map: Map<string, ClipPoseAnim>): ClipPoseAnim | null => {
@@ -343,8 +319,8 @@ export class ClipPoseLibrary {
       }
       return null
     }
-    if (setupEntryId) {
-      const s = this.sets.find((x) => x.setupEntryId === setupEntryId)
+    if (poseId) {
+      const s = this.sets.find((x) => x.id === poseId)
       return s ? pick(s.animations) : null
     }
     for (const s of this.sets) {
@@ -356,16 +332,16 @@ export class ClipPoseLibrary {
 
   /**
    * Sample animation into `out` sized for `rig` (map joints by name).
-   * Pass `setupEntryId` from ClipLibrary.resolveClip winner so inactive sets are ignored.
+   * Pass `poseId` from the resolve-winner entry's `poseSetId`.
    */
   sample(
     name: string,
     time: number,
     rig: RigEntry,
     out: Pose,
-    setupEntryId?: string | null
+    poseId?: string | null
   ): boolean {
-    const anim = this.findAnimation(name, setupEntryId)
+    const anim = this.findAnimation(name, poseId)
     if (!anim) return false
     // Start from reference pose (leaf — no procedural stack)
     out.translation.set(rig.refTranslation.subarray(0, out.boneCount * 3))

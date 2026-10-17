@@ -8,7 +8,8 @@ import { normalizeFootPhase } from './footPhase'
 import {
   ClipLibrary,
   DEFAULT_ANIM_SETUP_PRIORITY,
-  type AddAnimSetOptions,
+  type AddAnimSetProps,
+  type AddAnimSetResult,
   type AnimClipSetupJson,
   type ClipEvent,
   type ClipMeta,
@@ -147,15 +148,16 @@ export function parseAnimsJson(json: unknown, sourceLabel?: string): ClipMeta[] 
   return parseAnimsJsonResult(json, sourceLabel).clips
 }
 
-/** Load .anims.json as one AnimSetupEntry; returns how many clips added. */
+/** Load .anims.json as one AnimSetupEntry. */
 export function loadAnimsJsonIntoLibrary(
   library: ClipLibrary,
   json: unknown,
   sourceLabel?: string,
-  options?: Omit<AddAnimSetOptions, 'sourceLabel'>
-): number {
+  options?: Omit<AddAnimSetProps, 'clips' | 'sourceLabel'>
+): AddAnimSetResult | undefined {
   const { clips, setTags } = parseAnimsJsonResult(json, sourceLabel)
-  return library.addAnimSet(clips, {
+  return library.addAnimSet({
+    clips,
     sourceLabel,
     priority: options?.priority ?? DEFAULT_ANIM_SETUP_PRIORITY,
     variableNames: options?.variableNames,
@@ -184,7 +186,7 @@ export function loadCompactClipLibraryJson(
   }
 
   if (o.$type === 'animAnimSet' || o.Data) {
-    return loadAnimsJsonIntoLibrary(library, json, sourceLabel)
+    return loadAnimsJsonIntoLibrary(library, json, sourceLabel)?.clipCount ?? 0
   }
 
   // New format: animClipSetup with entries
@@ -193,46 +195,37 @@ export function loadCompactClipLibraryJson(
       throw new Error('Expected { $type: "animClipSetup", entries: [...] }')
     }
     let total = 0
+    let skipped = 0
     for (const raw of o.entries) {
       if (!raw || typeof raw !== 'object') continue
-      const e = raw as {
-        sourceLabel?: string
-        priority?: number
-        variableNames?: string[]
-        tags?: string[]
-        clips?: ClipMeta[]
+      const e = raw as Partial<AddAnimSetProps>
+      const id = typeof e.id === 'string' ? e.id.trim() : ''
+      if (!id) {
+        skipped++
+        continue
       }
-      const clips = Array.isArray(e.clips) ? e.clips : []
-      total += library.addAnimSet(clips, {
-        sourceLabel: e.sourceLabel ?? sourceLabel,
-        priority: e.priority,
-        variableNames: e.variableNames,
-        tags: e.tags,
-      })
+      total +=
+        library.addAnimSet({
+          ...e,
+          id,
+          clips: Array.isArray(e.clips) ? e.clips : [],
+          sourceLabel: e.sourceLabel ?? sourceLabel,
+        })?.clipCount ?? 0
+    }
+    if (skipped) {
+      console.warn(
+        `loadCompactClipLibraryJson: skipped ${skipped} anim set(s) without id (reimport .anims.json)`
+      )
     }
     return total
   }
 
-  // Legacy flat: { $type: "animClipLibrary", clips: [...] }
+  // Legacy flat: { $type: "animClipLibrary", clips: [...] } — no entry ids; unsupported.
   if (!Array.isArray(o.clips)) {
     throw new Error('Expected animClipSetup entries or animClipLibrary clips')
   }
-  const clips: ClipMeta[] = []
-  for (const c of o.clips) {
-    if (!c || typeof c !== 'object') continue
-    const clip = c as ClipMeta
-    if (!clip.name) continue
-    clips.push({
-      name: clip.name,
-      duration: Number(clip.duration) || 0,
-      events: Array.isArray(clip.events) ? clip.events : [],
-      tags: Array.isArray(clip.tags) ? clip.tags : [],
-      numFrames: clip.numFrames,
-      source: clip.source ?? sourceLabel,
-    })
-  }
-  return library.addAnimSet(clips, {
-    sourceLabel,
-    priority: DEFAULT_ANIM_SETUP_PRIORITY,
-  })
+  console.warn(
+    'loadCompactClipLibraryJson: skipping legacy flat animClipLibrary (no entry ids; reimport .anims.json)'
+  )
+  return 0
 }

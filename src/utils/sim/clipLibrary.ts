@@ -3,6 +3,8 @@
  * Mirrors animAnimSetup / AnimSetupEntry: priority + wrapper variableNames.
  */
 
+import { SequentialIdAllocator } from '../SequentialIdAllocator'
+
 export type ClipEvent = {
   name: string
   /** Seconds from clip start */
@@ -45,6 +47,8 @@ export type AnimSetupEntry = {
   variableNames: string[]
   /** Set-level tags from animAnimSet.tags (AnimSetTagValue / HasRuntimeTags). */
   tags: string[]
+  /** Linked ClipPoseLibrary set id (glb curves), if attached. */
+  poseSetId: string | null
   clips: Map<string, ClipMeta>
 }
 
@@ -54,6 +58,7 @@ export type AnimSetupEntryView = {
   priority: number
   variableNames: string[]
   tags: string[]
+  poseSetId: string | null
   clipCount: number
   /** Computed against current wrapper board when provided */
   active: boolean
@@ -62,6 +67,7 @@ export type AnimSetupEntryView = {
 /** One loaded set that contains a given clip name. */
 export type ClipSetMembership = {
   entryId: string
+  poseSetId: string | null
   sourceLabel: string
   priority: number
   active: boolean
@@ -78,12 +84,22 @@ export type ClipLibraryStats = {
   sources: string[]
 }
 
-export type AddAnimSetOptions = {
+export type AddAnimSetProps = {
+  clips: ClipMeta[]
   sourceLabel?: string
   priority?: number
   variableNames?: string[]
   /** Set-level tags (animAnimSet.tags) */
   tags?: string[]
+  /** Restore persisted entry id */
+  id?: string
+  /** Restore persisted pose set link */
+  poseSetId?: string | null
+}
+
+export type AddAnimSetResult = {
+  id: string
+  clipCount: number
 }
 
 /** Fallback when numFrames missing (CP2077 anims are typically 30). */
@@ -105,10 +121,13 @@ function findClipInMap(clips: Map<string, ClipMeta>, name: string): ClipMeta | u
 
 export class ClipLibrary {
   private entries: AnimSetupEntry[] = []
-  private nextId = 1
+  private readonly ids = new SequentialIdAllocator('ase', (id) =>
+    this.entries.some((e) => e.id === id)
+  )
 
   clear(): void {
     this.entries = []
+    this.ids.reset()
   }
 
   get size(): number {
@@ -119,6 +138,17 @@ export class ClipLibrary {
     return this.entries.length
   }
 
+  getEntry(id: string): AnimSetupEntry | undefined {
+    return this.entries.find((e) => e.id === id)
+  }
+
+  setEntryPoseSetId(entryId: string, poseSetId: string | null): boolean {
+    const entry = this.entries.find((e) => e.id === entryId)
+    if (!entry) return false
+    entry.poseSetId = poseSetId
+    return true
+  }
+
   listEntries(isWrapperActive?: (name: string) => boolean): AnimSetupEntryView[] {
     return this.entries.map((e) => ({
       id: e.id,
@@ -126,6 +156,7 @@ export class ClipLibrary {
       priority: e.priority,
       variableNames: [...e.variableNames],
       tags: [...e.tags],
+      poseSetId: e.poseSetId,
       clipCount: e.clips.size,
       active: isWrapperActive ? this.isEntryActive(e, isWrapperActive) : this.isEntryActiveDefault(e),
     }))
@@ -228,15 +259,15 @@ export class ClipLibrary {
     return primary
   }
 
-  /** Winning setup entry id + clip (same order as resolveClip). */
+  /** Winning setup entry + pose link + clip (same order as resolveClip). */
   resolveClipEntry(
     name: string,
     isWrapperActive: (name: string) => boolean
-  ): { entryId: string; clip: ClipMeta } | undefined {
+  ): { entryId: string; poseSetId: string | null; clip: ClipMeta } | undefined {
     if (!name || name === 'None') return undefined
     for (const entry of this.orderedActiveEntries(isWrapperActive)) {
       const clip = findClipInMap(entry.clips, name)
-      if (clip) return { entryId: entry.id, clip }
+      if (clip) return { entryId: entry.id, poseSetId: entry.poseSetId, clip }
     }
     return undefined
   }
@@ -281,6 +312,7 @@ export class ClipLibrary {
         : this.isEntryActiveDefault(e)
       return {
         entryId: e.id,
+        poseSetId: e.poseSetId,
         sourceLabel: e.sourceLabel,
         priority: e.priority,
         active,
@@ -375,42 +407,46 @@ export class ClipLibrary {
 
   /**
    * Add one animset as an AnimSetupEntry (does not flatten / last-wins).
-   * Returns how many clips were stored on the new entry.
    */
-  addAnimSet(clips: ClipMeta[], options: AddAnimSetOptions = {}): number {
-    const sourceLabel = options.sourceLabel?.trim() || `animset_${this.nextId}`
+  addAnimSet(props: AddAnimSetProps): AddAnimSetResult | undefined {
     const priority =
-      typeof options.priority === 'number' && Number.isFinite(options.priority)
-        ? Math.max(0, Math.min(255, Math.round(options.priority)))
+      typeof props.priority === 'number' && Number.isFinite(props.priority)
+        ? Math.max(0, Math.min(255, Math.round(props.priority)))
         : DEFAULT_ANIM_SETUP_PRIORITY
-    const variableNames = (options.variableNames ?? [])
+    const variableNames = (props.variableNames ?? [])
       .map((n) => n.trim())
       .filter((n) => n && n !== 'None')
-    const tags = (options.tags ?? [])
+    const tags = (props.tags ?? [])
       .map((n) => n.trim())
       .filter((n) => n && n !== 'None')
+    const poseSetId =
+      typeof props.poseSetId === 'string' && props.poseSetId.trim()
+        ? props.poseSetId.trim()
+        : null
 
     const map = new Map<string, ClipMeta>()
-    let n = 0
-    for (const clip of clips) {
+    for (const clip of props.clips) {
       if (!clip.name || clip.name === 'None') continue
-      map.set(clip.name, {
-        ...clip,
-        source: clip.source ?? sourceLabel,
-      })
-      n++
+      map.set(clip.name, { ...clip })
     }
-    if (!n) return 0
+    if (!map.size) return undefined
+
+    const id = this.ids.alloc(props.id)
+    const sourceLabel = props.sourceLabel?.trim() || `animset_${id}`
+    for (const clip of map.values()) {
+      if (!clip.source) clip.source = sourceLabel
+    }
 
     this.entries.push({
-      id: `ase_${this.nextId++}`,
+      id,
       sourceLabel,
       priority,
       variableNames,
       tags,
+      poseSetId,
       clips: map,
     })
-    return n
+    return { id, clipCount: map.size }
   }
 
   updateEntry(
@@ -449,15 +485,17 @@ export class ClipLibrary {
     return out
   }
 
-  /** Export entries preserving priority / variableNames. */
+  /** Export entries preserving priority / variableNames / ids. */
   toSetupJson(): AnimClipSetupJson {
     return {
       $type: 'animClipSetup',
       entries: this.entries.map((e) => ({
+        id: e.id,
         sourceLabel: e.sourceLabel,
         priority: e.priority,
         variableNames: [...e.variableNames],
         tags: [...e.tags],
+        poseSetId: e.poseSetId,
         clips: [...e.clips.values()],
       })),
     }
@@ -468,10 +506,12 @@ export class ClipLibrary {
 export type AnimClipSetupJson = {
   $type: 'animClipSetup'
   entries: Array<{
+    id?: string
     sourceLabel: string
     priority: number
     variableNames: string[]
     tags: string[]
+    poseSetId?: string | null
     clips: ClipMeta[]
   }>
 }

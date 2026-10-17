@@ -701,7 +701,7 @@
               v-for="entry in setupEntries"
               :key="entry.id"
               :entry="entry"
-              :pose="poseForEntry(entry.id)"
+              :pose="poseForEntry(entry)"
               :wrapper-draft="wrapperAddDraftById[entry.id] ?? ''"
               :get-clip-glb-info="getClipGlbInfo"
               :list-glb-anim-names="listGlbAnimNames"
@@ -835,13 +835,13 @@
                       <span
                         class="shrink-0 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase"
                         :class="
-                          getClipGlbInfo(name, s.entryId)
+                          getClipGlbInfo(name, s.poseSetId)
                             ? 'bg-violet-500/20 text-violet-300'
                             : 'bg-muted text-muted-foreground'
                         "
                       >
-                        <template v-if="getClipGlbInfo(name, s.entryId)">
-                          glb {{ getClipGlbInfo(name, s.entryId)!.duration.toFixed(2) }}s
+                        <template v-if="getClipGlbInfo(name, s.poseSetId)">
+                          glb {{ getClipGlbInfo(name, s.poseSetId)!.duration.toFixed(2) }}s
                         </template>
                         <template v-else>no glb</template>
                       </span>
@@ -1289,9 +1289,9 @@ const props = defineProps<{
   clipPoseSets: ClipPoseSetView[]
   getClipGlbInfo: (
     clipName: string,
-    setupEntryId?: string | null
+    poseSetId?: string | null
   ) => { name: string; duration: number } | null
-  listGlbAnimNames: (setupEntryId: string) => string[]
+  listGlbAnimNames: (poseSetId: string) => string[]
   resolveClip: (name: string) => ClipMeta | undefined
   lookupClip: (name: string) => ClipMeta | undefined
   getClipInEntry: (name: string, entryId: string) => ClipMeta | undefined
@@ -1301,7 +1301,7 @@ const props = defineProps<{
     json: unknown,
     sourceLabel?: string,
     options?: { priority?: number; variableNames?: string[] }
-  ) => number
+  ) => { id: string; clipCount: number } | undefined
   loadAnimsetGlb: (
     buffer: ArrayBuffer,
     sourceLabel: string,
@@ -1537,15 +1537,16 @@ const clipPoseAnimCount = computed(() =>
   (props.clipPoseSets ?? []).reduce((n, s) => n + s.animCount, 0)
 )
 
-const poseByEntryId = computed(() => {
+const poseById = computed(() => {
   const m = new Map<string, (typeof props.clipPoseSets)[number]>()
   for (const s of props.clipPoseSets ?? []) {
-    if (s.setupEntryId) m.set(s.setupEntryId, s)
+    m.set(s.id, s)
   }
   return m
 })
 
-const poseForEntry = (entryId: string) => poseByEntryId.value.get(entryId)
+const poseForEntry = (entry: { poseSetId: string | null }) =>
+  entry.poseSetId ? poseById.value.get(entry.poseSetId) : undefined
 
 const matchesQuery = (text: string, query: string) => {
   const q = query.trim().toLowerCase()
@@ -1745,12 +1746,12 @@ const expandedClipGlb = computed(() => {
   const name = expandedClipName.value
   if (!name) return null
   const win = expandedClipSets.value.find((s) => s.resolves)
-  return props.getClipGlbInfo(name, win?.entryId ?? null)
+  return props.getClipGlbInfo(name, win?.poseSetId ?? null)
 })
 
 const clipHasGlb = (name: string) => {
   const win = props.listClipSets(name).find((s) => s.resolves)
-  if (win) return props.getClipGlbInfo(name, win.entryId) != null
+  if (win) return props.getClipGlbInfo(name, win.poseSetId) != null
   // gated / no winner — any linked set still useful as existence hint
   return props.getClipGlbInfo(name) != null
 }
@@ -2019,8 +2020,8 @@ const onAnimsetFile = async (ev: Event) => {
   try {
     const text = await file.text()
     const json = JSON.parse(text) as unknown
-    const n = props.loadAnimsetJson(json, file.name)
-    if (!n) clipsError.value = 'No clips found in file'
+    const result = props.loadAnimsetJson(json, file.name)
+    if (!result) clipsError.value = 'No clips found in file'
   } catch (err) {
     clipsError.value = err instanceof Error ? err.message : String(err)
   }

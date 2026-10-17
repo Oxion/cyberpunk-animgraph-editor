@@ -1021,7 +1021,7 @@ function sampleSkAnim(node: AnimgraphNode, ctx: SampleCtx, out: Pose): boolean {
     writeNullPose(ctx, out)
     return false
   }
-  const ok = ctx.clipPoseLibrary.sample(animName, time, ctx.rig, out, winner.entryId)
+  const ok = ctx.clipPoseLibrary.sample(animName, time, ctx.rig, out, winner.poseSetId)
   if (!ok) {
     noteMissingGlb(ctx, animName)
     writeNullPose(ctx, out)

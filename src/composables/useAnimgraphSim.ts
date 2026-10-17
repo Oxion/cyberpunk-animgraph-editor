@@ -905,15 +905,15 @@ export function useAnimgraphSim() {
 
   const getClipGlbInfo = (
     clipName: string,
-    setupEntryId?: string | null
+    poseSetId?: string | null
   ): { name: string; duration: number } | null => {
     void clipPoseRevision.value
-    return clipPoseLibrary.value.getAnimInfo(clipName, setupEntryId)
+    return clipPoseLibrary.value.getAnimInfo(clipName, poseSetId)
   }
 
-  const listGlbAnimNames = (setupEntryId: string): string[] => {
+  const listGlbAnimNames = (poseSetId: string): string[] => {
     void clipPoseRevision.value
-    return clipPoseLibrary.value.listAnimNames(setupEntryId)
+    return clipPoseLibrary.value.listAnimNames(poseSetId)
   }
 
   const featureKey = (feature: string, property: string) => `${feature}\0${property}`
@@ -1748,8 +1748,8 @@ export function useAnimgraphSim() {
     json: unknown,
     sourceLabel?: string,
     options?: { priority?: number; variableNames?: string[] }
-  ): number => {
-    const n = loadAnimsJsonIntoLibrary(clipLibrary.value, json, sourceLabel, {
+  ) => {
+    const result = loadAnimsJsonIntoLibrary(clipLibrary.value, json, sourceLabel, {
       priority: options?.priority ?? DEFAULT_ANIM_SETUP_PRIORITY,
       variableNames: options?.variableNames,
     })
@@ -1763,7 +1763,7 @@ export function useAnimgraphSim() {
       wrapperWeightDrafts.value = next
     }
     publish(0)
-    return n
+    return result
   }
 
   const loadClipLibraryJson = (json: unknown, sourceLabel?: string): number => {
@@ -1791,13 +1791,22 @@ export function useAnimgraphSim() {
       console.warn('loadAnimsetGlb requires setupEntryId')
       return 0
     }
+    const entry = clipLibrary.value.getEntry(setupEntryId)
+    if (!entry) {
+      console.warn('loadAnimsetGlb: unknown setupEntryId', setupEntryId)
+      return 0
+    }
+    if (entry.poseSetId) {
+      clipPoseLibrary.value.remove(entry.poseSetId)
+    }
     const typesFromJson = clipLibrary.value.getAnimationTypesForEntry(setupEntryId)
-    const { animCount } = clipPoseLibrary.value.loadGlb(
+    const { id: poseId, animCount } = clipPoseLibrary.value.loadGlb(
       buffer,
       sourceLabel,
-      setupEntryId,
       typesFromJson
     )
+    clipLibrary.value.setEntryPoseSetId(setupEntryId, poseId)
+    bumpClips()
     bumpClipPose()
     syncSampleResourcesToRunners()
     publish(0)
@@ -1805,7 +1814,11 @@ export function useAnimgraphSim() {
   }
 
   const clearAnimsetGlb = (setupEntryId: string) => {
-    if (!clipPoseLibrary.value.removeBySetupEntry(setupEntryId)) return
+    const entry = clipLibrary.value.getEntry(setupEntryId)
+    if (!entry?.poseSetId) return
+    clipPoseLibrary.value.remove(entry.poseSetId)
+    clipLibrary.value.setEntryPoseSetId(setupEntryId, null)
+    bumpClips()
     bumpClipPose()
     syncSampleResourcesToRunners()
     publish(0)
@@ -1813,6 +1826,10 @@ export function useAnimgraphSim() {
 
   const clearClipPoseLibrary = () => {
     clipPoseLibrary.value.clear()
+    for (const e of clipLibrary.value.listEntries()) {
+      if (e.poseSetId) clipLibrary.value.setEntryPoseSetId(e.id, null)
+    }
+    bumpClips()
     bumpClipPose()
     syncSampleResourcesToRunners()
     publish(0)
@@ -1997,7 +2014,10 @@ export function useAnimgraphSim() {
   }
 
   const removeSetupEntry = (id: string) => {
-    clipPoseLibrary.value.removeBySetupEntry(id)
+    const entry = clipLibrary.value.getEntry(id)
+    if (entry?.poseSetId) {
+      clipPoseLibrary.value.remove(entry.poseSetId)
+    }
     if (!clipLibrary.value.removeEntry(id)) return
     bumpClips()
     bumpClipPose()
@@ -2280,6 +2300,12 @@ export function useAnimgraphSim() {
         clipPoseLibrary.value.loadFromJson(resources.clipPoseLibrary)
       } catch (err) {
         console.warn('Failed to restore project clipPoseLibrary', err)
+      }
+    }
+    // Drop dangling pose links (no migration from legacy setupEntryId).
+    for (const e of clipLibrary.value.listEntries()) {
+      if (e.poseSetId && !clipPoseLibrary.value.get(e.poseSetId)) {
+        clipLibrary.value.setEntryPoseSetId(e.id, null)
       }
     }
     applyRunnerSlotsConfig(resources?.runnerSlots)

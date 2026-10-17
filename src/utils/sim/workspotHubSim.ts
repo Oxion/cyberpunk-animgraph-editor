@@ -244,7 +244,7 @@ function clipDuration(
   if (!name) return 0
   const winner = clipLibrary?.resolveClipEntry(name, isWrap)
   if (winner?.clip.duration && winner.clip.duration > 0) return winner.clip.duration
-  return clipPose?.findAnimation(name, winner?.entryId ?? null)?.duration ?? 0
+  return clipPose?.findAnimation(name, winner?.poseSetId ?? null)?.duration ?? 0
 }
 
 function clipHasAnim(
@@ -825,7 +825,7 @@ function sampleClipRecord(
   const winner = ctx.clipLibrary?.resolveClipEntry(record.animName, isWrap)
   const anim = ctx.clipPoseLibrary.findAnimation(
     record.animName,
-    winner?.entryId ?? null
+    winner?.poseSetId ?? null
   )
   const additive = anim && isAdditiveAnimationType(anim.animationType)
   if (additive) {
@@ -838,7 +838,7 @@ function sampleClipRecord(
         record.currTime,
         ctx.rig,
         add,
-        winner?.entryId ?? null
+        winner?.poseSetId ?? null
       )
       if (!okAdd) return false
       blendAdditiveLocal(out, out, add, 1)
@@ -852,7 +852,7 @@ function sampleClipRecord(
     record.currTime,
     ctx.rig,
     out,
-    winner?.entryId ?? null
+    winner?.poseSetId ?? null
   )
 }
 
@@ -895,7 +895,7 @@ function sampleFacialLayer(
     facial.currTime,
     ctx.rig,
     out,
-    winner?.entryId ?? null
+    winner?.poseSetId ?? null
   )
   if (!ok) return false
   if (facial.keyAnimName && facial.keyWeight > 0) {
@@ -907,7 +907,7 @@ function sampleFacialLayer(
         0,
         ctx.rig,
         key,
-        kw?.entryId ?? null
+        kw?.poseSetId ?? null
       )
       if (okKey) blendAdditiveLocal(out, out, key, facial.keyWeight)
     } finally {
@@ -928,14 +928,14 @@ function sampleFacialSync(dyn: WorkspotHubDyn, ctx: SampleCtx, out: Pose): void 
       dyn.facialSync.currentTime,
       ctx.rig,
       sync,
-      winner?.entryId ?? null
+      winner?.poseSetId ?? null
     )
     if (!ok) return
     const dur =
       winner?.clip.duration ||
       ctx.clipPoseLibrary.findAnimation(
         dyn.facialSync.animName,
-        winner?.entryId ?? null
+        winner?.poseSetId ?? null
       )?.duration ||
       0
     const transition = Math.min(dur * 0.15, 0.3)
