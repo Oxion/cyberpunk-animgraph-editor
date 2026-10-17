@@ -12,11 +12,10 @@
 </template>
 
 <script setup lang="ts">
-import { Application, Container, Graphics, Rectangle } from 'pixi.js'
+import { Application, Container, Rectangle } from 'pixi.js'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import type { StateMachineRingPresentation } from '../utils/graph/DiagramConversion'
 import { paintStateMachineRing, type StateMachineRingSimHighlight } from '../utils/graph/DiagramPixiPainter'
-import { parseColor, parseColorAlpha } from '../utils/graph/ConnectionPixiPainter'
 import { DIAGRAM_STAGE_BG } from '../utils/graph/diagramDotGrid'
 import { createPixiDotGrid, type PixiDotGrid } from '../utils/graph/diagramDotGridPixi'
 import { ensureDiagramBitmapFont } from '../utils/graph/pixiText'
@@ -321,19 +320,6 @@ const buildStage = async () => {
   const contentGroup = new Container()
   contentGroup.eventMode = 'none'
   world.addChild(contentGroup)
-
-  const { width: contentW, height: contentH } = props.presentation
-  const backdrop = new Graphics()
-  backdrop.label = 'sm-ring-backdrop'
-  backdrop.eventMode = 'none'
-  backdrop.roundRect(0, 0, contentW, contentH, 8)
-  backdrop.fill({ color: parseColor('#1e2430'), alpha: 1 })
-  backdrop.stroke({
-    width: 1,
-    color: parseColor('#5a9fd4'),
-    alpha: parseColorAlpha('#5a9fd4', 1),
-  })
-  contentGroup.addChild(backdrop)
 
   paintStateMachineRing(contentGroup, props.presentation, props.simHighlight)
 

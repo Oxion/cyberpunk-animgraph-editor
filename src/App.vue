@@ -1339,8 +1339,10 @@ watch(
 )
 
 const fitAppWindow = (windowId: string) => {
-  const viewId = getWindowTopViewId(windowId)
-  if (viewId) getDiagramViewApi(viewId)?.fitView?.()
+  // Stacked hosts (lens / state-links) register under the stack-top view id.
+  // Non-stacked hosts (sm-ring) register under the window id itself.
+  const viewId = getWindowTopViewId(windowId) ?? windowId
+  getDiagramViewApi(viewId)?.fitView?.()
 }
 
 const debugTiles = ref(false)
