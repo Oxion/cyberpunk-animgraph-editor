@@ -12,10 +12,7 @@ import {
   RenderLayer
 } from 'pixi.js'
 import { signal, watcher, WritableSignal } from '../lib/eagerReactive'
-import type { DiagramConnection, RenderData, RenderNode } from './graph/diagramTypes'
-import { getConnectionKey } from './graph/diagramModel'
-import { type PlannedConnection } from './graph/ConnectionDrawPlanner'
-import { DIAGRAM_CONNECTION_TYPE_INPUT } from './graph/diagramConnectionTypes'
+import { type PlannedConnection } from './graph/ConnectionPixiPainter'
 import {
   blenderBezierControls,
   ConnectionPixiContainer,
@@ -29,6 +26,7 @@ import {
   makeCrossViewConnectionPortalPinId,
   makeCrossViewPinId
 } from './graph/crossViewPinIds'
+import { DIAGRAM_CONNECTION_TYPE_INPUT } from './graph/diagramConnectionTypes'
 import {
   isDiagramOverviewLeaf,
   isDiagramPortalNode
@@ -37,9 +35,11 @@ import { DIAGRAM_STAGE_BG } from './graph/diagramDotGrid'
 import { createPixiDotGrid, type PixiDotGrid } from './graph/diagramDotGridPixi'
 import {
   borderPointOnRect,
-  expandNodeIdsWithDescendants,
+  collectNodeWithIdDescendantsIds,
   getWorldPosition
 } from './graph/DiagramGeometry'
+import { getConnectionKey } from './graph/diagramModel'
+import type { DiagramConnection, RenderData, RenderNode } from './graph/diagramTypes'
 import { presentNodeBody } from './graph/NodeBodyPresent'
 import {
   DEFAULT_CHILD_SLOT,
@@ -109,25 +109,8 @@ const CONN_REWIRE_MAX_DIST = 40
 const MIN_REWIRE_DRAG_PX = 6
 const REWIRE_PORTAL_CANCEL_RADIUS = 56
 
-function findLabeledChild(pixiContainer: Container, label: string): Container | undefined {
-  return (pixiContainer.getChildByLabel(label) as Container | null) ?? undefined
-}
-
 function detachFromRenderLayer(obj: Container): void {
   obj.parentRenderLayer?.detach(obj)
-}
-
-function isLiveSceneObject(obj: Container): boolean {
-  return !!obj.parent && !obj.destroyed
-}
-
-/** Skip attach when the object is not in the scene graph (layer still draws parentless items). */
-function attachToRenderLayer(layer: RenderLayer, obj: Container): void {
-  if (!isLiveSceneObject(obj)) {
-    console.warn('attachToRenderLayer: object is not live', obj.label)
-    return
-  }
-  layer.attach(obj)
 }
 
 /**
@@ -146,23 +129,6 @@ function destroyPixiTree(obj: Container): void {
   if ((obj as { destroyed?: boolean }).destroyed) return
   detachTreeFromRenderLayers(obj)
   obj.destroy({ children: true })
-}
-
-/** Remove + destroy so Pixi ticker never sees a destroyed child (renderPipeId null). */
-function destroyLabeledChild(group: Container, child: Container | undefined): void {
-  if (!child) return
-  try {
-    if (child.parent === group) {
-      group.removeChild(child)
-    } else if (child.parent) {
-      child.parent.removeChild(child)
-    }
-    if (!(child as { destroyed?: boolean }).destroyed) {
-      destroyPixiTree(child)
-    }
-  } catch (err) {
-    console.warn('Pixi destroy overlay child failed', err)
-  }
 }
 
 function destroyContainerChildren(container: Container): void {
@@ -322,9 +288,6 @@ export class PixiGraphRenderer {
   private _mainRenderLayersPixiContainer: Container
   private _mainAuxRenderLayersPixiContainer: Container
 
-  private depthConnectionGraphicsLayers: RenderLayer[] = []
-  private depthGraphicsLayers: RenderLayer[] = []
-  private depthTextLayers: RenderLayer[] = []
   private _mainAuxGraphicsLayer: RenderLayer
   private _mainAuxTextLayer: RenderLayer
 
@@ -354,7 +317,6 @@ export class PixiGraphRenderer {
   private _diagramNodeIdToPixiDiagramNodeMap: Map<string, PixiDiagramNode> = new Map()
   private _pixiDiagramNodeContainerToPixiDiagramNodeWeakMap: WeakMap<Container, PixiDiagramNode> = new WeakMap()
   private _connectionKeyToConnectionPixiContainerMap: Map<string, ConnectionPixiContainer> = new Map()
-  private _nodePixiContainerToNodeElsContainerWeakMap: WeakMap<NodeGroup | ConnectionPixiContainer, NodeElsContainer> = new WeakMap()
 
   // Virtual tile system resources
   private _tileSize: number = 4096
@@ -1493,27 +1455,21 @@ export class PixiGraphRenderer {
     this._connectionPixiContainerToTileKeysSetWeakMap.delete(connectionPixiContainer)
   }
 
-  private _resolveDiagramNodePixiDiagramNodePinWorldPos(
+  private _resolveDiagramNodePixiDiagramNodePinPos(
     diagramNode: RenderNode,
     pinId: string,
   ): { x: number; y: number } | undefined {
-    const origin = this._resolveDiagramNodeRendererWorldPosition(diagramNode)
-    if (!origin) return
-
     const pixiDiagramNode = this._diagramNodeIdToPixiDiagramNodeMap.get(diagramNode.id)
     if (!pixiDiagramNode) return
 
-    const pinLocalPos = pixiDiagramNode.getPinPosition(pinId)
-    if (!pinLocalPos) return
-
-    return { x: origin.x + pinLocalPos.x, y: origin.y + pinLocalPos.y }
+    return pixiDiagramNode.getPinPosition(pinId)
   }
 
   private _resolveConnectionAnchors(
     connection: DiagramConnection,
     fromNode: RenderNode,
     toNode: RenderNode
-  ): { from: { x: number; y: number }; to: { x: number; y: number } } | undefined {
+  ) {
     if (fromNode.id === toNode.id) return
     if (isDiagramPortalNode(toNode)) return
     if (!this.isDiagramNodeBelongToThisView(fromNode) || !this.isDiagramNodeBelongToThisView(toNode)) {
@@ -1522,28 +1478,58 @@ export class PixiGraphRenderer {
     if (!connection.pinName) return
 
     const connectionIsCrossView = isCrossViewConnection(connection)
-    const toPt = connectionIsCrossView && connection.to !== connection.metadata.originalTo 
-      ? this._resolveDiagramNodePixiDiagramNodePinWorldPos(toNode, makeCrossViewConnectionPortalPinId(connection))
-      : this._resolveDiagramNodePixiDiagramNodePinWorldPos(toNode, connection.pinName)
-    if (!toPt) return
 
-    let fromPt = this._resolveDiagramNodePixiDiagramNodePinWorldPos(fromNode, 'output')
-    if (!fromPt) {
-      const fromNodeWorldPos = this._resolveDiagramNodeRendererWorldPosition(fromNode)
-      if (!fromNodeWorldPos) return
+    const toPinInNodePos = connectionIsCrossView && connection.to !== connection.metadata.originalTo  
+      ? this._resolveDiagramNodePixiDiagramNodePinPos(toNode, makeCrossViewConnectionPortalPinId(connection))
+      : this._resolveDiagramNodePixiDiagramNodePinPos(toNode, connection.pinName)
+    if (!toPinInNodePos) return
 
+    const viewRootDiagramNodeIdsSet = this._resolveViewRootDiagramNodeIdsSet()
+
+    const toNodeWorldPos = this._resolveDiagramNodeRendererWorldPosition(toNode, viewRootDiagramNodeIdsSet)
+    const toPinWorldPos = { x: toNodeWorldPos.x + toPinInNodePos.x, y: toNodeWorldPos.y + toPinInNodePos.y }
+    
+    const fromNodeWorldPos = this._resolveDiagramNodeRendererWorldPosition(fromNode, viewRootDiagramNodeIdsSet)
+
+    let fromPinInNodePos = this._resolveDiagramNodePixiDiagramNodePinPos(fromNode, 'output')
+    if (!fromPinInNodePos) {
       const fromNodeSize = this.getDiagramNodeSize(fromNode)
-      fromPt = borderPointOnRect(
-        { x: fromNodeWorldPos.x, y: fromNodeWorldPos.y, width: fromNodeSize.width, height: fromNodeSize.height }, 
-        toPt.x, 
-        toPt.y
+      const fromPinWorldPos = borderPointOnRect(
+        { 
+          x: fromNodeWorldPos.x + fromNodeSize.width, 
+          y: fromNodeWorldPos.y, 
+          width: 1, 
+          height: fromNodeSize.height 
+        }, 
+        toPinWorldPos.x, 
+        toPinWorldPos.y
       )
+      fromPinInNodePos = { x: fromPinWorldPos.x - fromNodeWorldPos.x, y: fromPinWorldPos.y - fromNodeWorldPos.y }
     }
 
-    return { from: fromPt, to: toPt }
+    return {
+      fromWorldPos: {
+        x: fromNodeWorldPos.x + fromPinInNodePos.x,
+        y: fromNodeWorldPos.y + fromPinInNodePos.y,
+      },
+      toWorldPos: {
+        x: toNodeWorldPos.x + toPinInNodePos.x,
+        y: toNodeWorldPos.y + toPinInNodePos.y,
+      },
+      fromInNodePos: fromPinInNodePos,
+      toInNodePos: toPinInNodePos,
+      fromInNodeContainerPos: {
+        x: fromNode.position.x + fromPinInNodePos.x,
+        y: fromNode.position.y + fromPinInNodePos.y,
+      },
+      toInNodeContainerPos: {
+        x: toNode.position.x + toPinInNodePos.x,
+        y: toNode.position.y + toPinInNodePos.y,
+      },
+    }
   }
 
-  private _planConnectionRender(connection: DiagramConnection) {
+  private _planConnectionRender(connection: DiagramConnection): PlannedConnection | undefined {
     const fromNode = this.graphData.allNodes.get(connection.from)
     const toNode = this.graphData.allNodes.get(connection.to)
     if (!fromNode || !toNode) return
@@ -1552,9 +1538,16 @@ export class PixiGraphRenderer {
     const anchors = this._resolveConnectionAnchors(connection, fromNode, toNode)
     if (!anchors) return
 
+    // Same parent → mounted under parent.connectionsPixiContainer (parent-local).
+    // Otherwise → mainConnections (world).
+    const sharedParentConnection = !!(fromNode.parent && toNode.parent && fromNode.parent.id === toNode.parent.id)
+
     return {
-      from: anchors.from,
-      to: anchors.to,
+      sharedParentConnection: sharedParentConnection,
+      from: anchors.fromWorldPos,
+      to: anchors.toWorldPos,
+      containerFrom: sharedParentConnection ? anchors.fromInNodeContainerPos : anchors.fromWorldPos,
+      containerTo: sharedParentConnection ? anchors.toInNodeContainerPos : anchors.toWorldPos,
       pinName: connection.pinName,
       dashed: false,
       showArrow: false,
@@ -1596,12 +1589,30 @@ export class PixiGraphRenderer {
 
     // Collect all diagram node ids that are visible in the viewport.
     const viewportMountDiagramNodeIdsSet = new Set<string>()
+    const diagramNodeIdToConnectionPixiContainersSetMap = new Map<string | undefined, Set<ConnectionPixiContainer>>()
+    const nonSharedParentConnectionPixiContainersSet = new Set<ConnectionPixiContainer>()
     viewportTileKeys.forEach((tileKey) => {
       const tile = this._virtualTiles.get(tileKey)
       if (!tile) return
       tile.nodes.forEach((pixiDiagramNode) => {
         viewportMountDiagramNodeIdsSet.add(pixiDiagramNode.diagramNodeId)
       })
+      for (const connectionPixiContainer of tile.connections) {
+        if (!connectionPixiContainer.sharedParentConnection) {
+          nonSharedParentConnectionPixiContainersSet.add(connectionPixiContainer)
+          continue
+        }
+
+        const fromDiagramNodeId = connectionPixiContainer.connection.from
+        const fromDiagramNode = this.graphData.allNodes.get(fromDiagramNodeId)
+        const fromDiagramNodeParentId = fromDiagramNode?.parent?.id
+        const connectionPixiContainersSet = diagramNodeIdToConnectionPixiContainersSetMap.get(fromDiagramNodeParentId)
+        if (connectionPixiContainersSet) {
+          connectionPixiContainersSet.add(connectionPixiContainer)
+        } else {
+          diagramNodeIdToConnectionPixiContainersSetMap.set(fromDiagramNodeParentId, new Set([connectionPixiContainer]))
+        }
+      }
     })
 
     this._addOversizedDiagramNodesToDiagramNodeIdViewportMountSet(viewportMountDiagramNodeIdsSet)
@@ -1609,6 +1620,7 @@ export class PixiGraphRenderer {
     const viewRootDiagramNodeIdsSet = this._resolveViewRootDiagramNodeIdsSet()
 
     // ensure all view root diagram nodes are mounted
+    // collect all diagram node ids that are not in the viewport but are children of the viewport mounted diagram nodes
     const additionalToMountDiagramNodeIds = new Set<string>()
     viewportMountDiagramNodeIdsSet.forEach((visibleDiagramNodeId) => {
       const visibleDiagramNode = this.graphData.allNodes.get(visibleDiagramNodeId)
@@ -1628,8 +1640,6 @@ export class PixiGraphRenderer {
       viewportMountDiagramNodeIdsSet.add(additionalToMountDiagramNodeId)
     }
 
-    const mountedDiagramNodeIdToDepthLevelMap = new Map<string, number>()
-
     const mountDiaramBranch = (diagramNode: RenderNode, depthLevel: number) => {
       const visible = viewportMountDiagramNodeIdsSet.has(diagramNode.id)
 
@@ -1639,21 +1649,15 @@ export class PixiGraphRenderer {
       pixiDiagramNode.pixiContainer.visible = visible
       if (!visible) return
 
-      const nodeElsContainer = this._nodePixiContainerToNodeElsContainerWeakMap.get(pixiDiagramNode.pixiContainer)
-      if (!nodeElsContainer) return
-
-      mountedDiagramNodeIdToDepthLevelMap.set(diagramNode.id, depthLevel)
-
-      this._ensureDepthRenderLayers(depthLevel)
-      const depthGraphicsLayer = this.depthGraphicsLayers[depthLevel]
-      const depthTextLayer = this.depthTextLayers[depthLevel]
-      depthGraphicsLayer.attach(pixiDiagramNode.pixiContainer)
-      nodeElsContainer.graphics.forEach((graphics) => {
-        attachToRenderLayer(depthGraphicsLayer, graphics)
-      })
-      nodeElsContainer.texts.forEach((text) => {
-        attachToRenderLayer(depthTextLayer, text)
-      })
+      // Remount node local connections
+      const connectionPixiContainersSet = diagramNodeIdToConnectionPixiContainersSetMap.get(diagramNode.id)
+      if (connectionPixiContainersSet) {
+        const nodeConnectionsPixiContainer = pixiDiagramNode.connectionsPixiContainer
+        pixiDiagramNode.connectionsPixiContainer.removeChildren()
+        if (connectionPixiContainersSet.size > 0) {
+          nodeConnectionsPixiContainer.addChild(...connectionPixiContainersSet)
+        }
+      }
 
       forEachDirectChild(diagramNode, (childNode) => {
         mountDiaramBranch(childNode, depthLevel + 1)
@@ -1679,22 +1683,6 @@ export class PixiGraphRenderer {
       mountDiaramBranch(viewRootDiagramNode, 0)
     })
 
-    const resolveDiagramNodeDepthLevel = (diagramNodeId: string) => {
-      let depthLevel = 0
-      let currentDiagramNode = this.graphData.allNodes.get(diagramNodeId)
-      while (currentDiagramNode && !viewRootDiagramNodeIdsSet.has(currentDiagramNode.id)) {
-        depthLevel++
-        currentDiagramNode = currentDiagramNode.parent
-      }
-      return depthLevel
-    }
-
-    const resolveConnectionDiagramNodeDepthLevel = (diagramNodeId: string) => {
-      let depthLevel = mountedDiagramNodeIdToDepthLevelMap.get(diagramNodeId)
-      if (depthLevel || depthLevel === 0) return depthLevel
-      return resolveDiagramNodeDepthLevel(diagramNodeId)
-    }
-
     const connectionOverlays: Container[] = []
     if (this._pinDrag?.connectionDragLineGraphics && this._pinDrag.connectionDragLineGraphics.parent === this._mainConnectionsPixiContainer) {
       connectionOverlays.push(this._pinDrag.connectionDragLineGraphics)
@@ -1714,30 +1702,9 @@ export class PixiGraphRenderer {
     for (const overlay of connectionOverlays) {
       this._mainConnectionsPixiContainer.addChild(overlay)
     }
-    const addedConnections = new Set<NodeGroup>()
-    viewportTileKeys.forEach((tileKey) => {
-      const tile = this._virtualTiles.get(tileKey)
-      if (!tile) return
-      tile.connections.forEach((connectionPixiContainer) => {
-        if (addedConnections.has(connectionPixiContainer)) return
-        if ((connectionPixiContainer as { destroyed?: boolean }).destroyed) return
-        addedConnections.add(connectionPixiContainer)
-
-        const connection = connectionPixiContainer.connection
-        const connectionFromDiagramNodeLevel = resolveConnectionDiagramNodeDepthLevel(connection.from)
-        const connectionToDiagramNodeLevel = resolveConnectionDiagramNodeDepthLevel(connection.to)
-        const connectionDepthLevel = Math.max(connectionFromDiagramNodeLevel, connectionToDiagramNodeLevel)
-        
-        this._mainConnectionsPixiContainer!.addChild(connectionPixiContainer)
-
-        this._ensureDepthRenderLayers(connectionDepthLevel)
-        const nodeElsContainer = this._nodePixiContainerToNodeElsContainerWeakMap.get(connectionPixiContainer)
-        if (!nodeElsContainer) return
-        nodeElsContainer.graphics.forEach((graphics) => {
-          attachToRenderLayer(this.depthConnectionGraphicsLayers[connectionDepthLevel], graphics)
-        })
-      })
-    })
+    if (nonSharedParentConnectionPixiContainersSet.size > 0) {
+      this._mainConnectionsPixiContainer.addChild(...nonSharedParentConnectionPixiContainersSet)
+    }
 
     this._mountedTileKeysSet = new Set(viewportTileKeys)
     this._viewportMountedDiagramNodeIdsSetRef.value = viewportMountDiagramNodeIdsSet
@@ -1866,8 +1833,8 @@ export class PixiGraphRenderer {
     }
   }
 
-  private _reindexDiagramNodesIntoTiles(movedDiagramNodeIds: string[]): void {
-    if (movedDiagramNodeIds.length === 0) return
+  private _reindexDiagramNodesIntoTiles(affectedDiagramNodeIdsSet: Set<string>): void {
+    if (affectedDiagramNodeIdsSet.size === 0) return
 
     // Batch process: collect all changes first, then apply them
     const tileKeyToTileUpdateRecordMap = new Map<string, { toAdd: PixiDiagramNode[], toRemove: PixiDiagramNode[] }>()
@@ -1885,7 +1852,7 @@ export class PixiGraphRenderer {
     const viewRootDiagramNodeIdsSet = this._resolveViewRootDiagramNodeIdsSet()
 
     // Process all moved nodes
-    movedDiagramNodeIds.forEach(diagramNodeId => {
+    for (const diagramNodeId of affectedDiagramNodeIdsSet) {
       const diagramNode = this.graphData.allNodes.get(diagramNodeId)
       if (!diagramNode || !diagramNode.position) return
 
@@ -1915,7 +1882,7 @@ export class PixiGraphRenderer {
           ensureTileUpdateRecord(tileKey).toAdd.push(pixiDiagramNode)
         }
       }
-    })
+    }
 
     // Apply all tile updates in batch
     tileKeyToTileUpdateRecordMap.forEach((tileUpdateRecord, tileKey) => {
@@ -1986,16 +1953,9 @@ export class PixiGraphRenderer {
     pixiDiagramNode.setup()
     pixiDiagramNode.update()
 
-    const nodeElsContainer: NodeElsContainer = {
-      connections: new Set(),
-      graphics: new Set(),
-      texts: new Set(),
-    }
-
     this._diagramNodeIdToPixiDiagramNodeMap.set(diagramNode.id, pixiDiagramNode)
     this._pixiDiagramNodeToTileKeysSetWeakMap.set(pixiDiagramNode, new Set())
     this._pixiDiagramNodeContainerToPixiDiagramNodeWeakMap.set(pixiDiagramNode.pixiContainer, pixiDiagramNode)
-    this._nodePixiContainerToNodeElsContainerWeakMap.set(pixiDiagramNode.pixiContainer, nodeElsContainer)
 
     return pixiDiagramNode
   }
@@ -2087,25 +2047,6 @@ export class PixiGraphRenderer {
       if (!pixiDiagramNode) continue
 
       pixiDiagramNode.updateBorder()
-    }
-  }
-
-  private _ensureDepthRenderLayers(depthLevel: number): void {
-    for (let i = this.depthGraphicsLayers.length; i < depthLevel + 1; i++) {
-      const connectionGraphicsLayer = new RenderLayer()
-      connectionGraphicsLayer.label = `depth-connections-${i}`
-      this.depthConnectionGraphicsLayers.push(connectionGraphicsLayer)
-      this._mainRenderLayersPixiContainer.addChild(connectionGraphicsLayer)
-
-      const graphicsLayer = new RenderLayer()
-      graphicsLayer.label = `depth-graphics-${i}`
-      this.depthGraphicsLayers.push(graphicsLayer)
-      this._mainRenderLayersPixiContainer.addChild(graphicsLayer)
-
-      const textLayer = new RenderLayer()
-      textLayer.label = `depth-text-${i}`
-      this.depthTextLayers.push(textLayer)
-      this._mainRenderLayersPixiContainer.addChild(textLayer)
     }
   }
 
@@ -2343,7 +2284,6 @@ export class PixiGraphRenderer {
         showLabel: this._connectionLabels,
       }
     )
-    this._nodePixiContainerToNodeElsContainerWeakMap.set(connectionPixiContainer, nodeElsContainer)
 
     this._connectionKeyToConnectionPixiContainerMap.set(connectionKey, connectionPixiContainer)
     this._reindexConnectionToTiles(connectionPixiContainer)
@@ -2483,7 +2423,7 @@ export class PixiGraphRenderer {
     this._selectedNodeIdsSet = nextIds
     this._primarySelectedNodeId = primaryNodeId
 
-    this._batchUpdateNodeConnections(Array.from(affectedDiagramNodeIdsSet))
+    this._batchUpdateNodeConnections(new Set(), affectedDiagramNodeIdsSet)
 
     // this._updateConnectionsHighlighting()
 
@@ -3281,12 +3221,11 @@ export class PixiGraphRenderer {
   private _flushInteractiveTileUpdates(): void {
     if (this._interactiveDirtyNodeIds.size === 0) return
 
-    const ids = [...this._interactiveDirtyNodeIds]
-    this._interactiveDirtyNodeIds.clear()
-    this._reindexDiagramNodesIntoTiles(ids)
-    this._batchUpdateNodeConnections(ids)
+    this._reindexDiagramNodesIntoTiles(this._interactiveDirtyNodeIds)
+    this._batchUpdateNodeConnections(this._interactiveDirtyNodeIds, new Set())
     this._remountViewportTiles()
     this._pixiRender()
+    this._interactiveDirtyNodeIds.clear()
   }
 
   // #endregion
@@ -3336,13 +3275,13 @@ export class PixiGraphRenderer {
   /**
    * Efficiently update connections for multiple moved nodes
    */
-  private _batchUpdateNodeConnections(affectedDiagramNodeIds: string[]): void {
-    if (
-      !this._mainConnectionsPixiContainer 
-      || !affectedDiagramNodeIds.length
-    ) return
+  private _batchUpdateNodeConnections(movedDiagramNodeIdsSet: Set<string>, chromeDirtyDiagramNodeIdsSet: Set<string>): void {
 
-    const affectedDiagramNodeIdsSet = new Set(affectedDiagramNodeIds)
+    const affectedDiagramNodeIdsSet = new Set(chromeDirtyDiagramNodeIdsSet)
+    for (const id of movedDiagramNodeIdsSet) {
+      affectedDiagramNodeIdsSet.add(id)
+      collectNodeWithIdDescendantsIds(this.graphData.allNodes, id, affectedDiagramNodeIdsSet)
+    }
 
     this._connectionKeyToConnectionPixiContainerMap.forEach((connectionPixiContainer) => {
       const connection = connectionPixiContainer.connection
@@ -3374,7 +3313,7 @@ export class PixiGraphRenderer {
 
     /** @todo  */
     // Update connections
-    this._batchUpdateNodeConnections([diagramNode.id])
+    this._batchUpdateNodeConnections(new Set([diagramNode.id]), new Set())
 
     if (this._suspended) return
 
@@ -3435,8 +3374,10 @@ export class PixiGraphRenderer {
     if (!this.ready || this._suspended) return
 
     const contentChangedIds = options?.contentChangedIds
-    const movedDiagramNodeIds: string[] = []
-    const chromeDirtyIds: string[] = []
+
+    const affectedDiagramNodeIdsSet: Set<string> = new Set()
+    const movedDiagramNodeIdsSet: Set<string> = new Set()
+    const chromeDirtyDiagramNodeIdsSet: Set<string> = new Set()
 
     for (const nodeId of nodeIds) {
       const diagramNode = this.graphData.allNodes.get(nodeId)
@@ -3455,11 +3396,13 @@ export class PixiGraphRenderer {
       if (posChanged) {
         pixiDiagramNode.x = diagramNode.position.x
         pixiDiagramNode.y = diagramNode.position.y
-        movedDiagramNodeIds.push(nodeId)
+        movedDiagramNodeIdsSet.add(nodeId)
+        affectedDiagramNodeIdsSet.add(nodeId)
       }
 
       if (sizeChanged || contentChanged) {
-        chromeDirtyIds.push(nodeId)
+        chromeDirtyDiagramNodeIdsSet.add(nodeId)
+        affectedDiagramNodeIdsSet.add(nodeId)
         pixiDiagramNode.width = stored.width
         pixiDiagramNode.height = stored.height
 
@@ -3474,22 +3417,14 @@ export class PixiGraphRenderer {
       }
     }
 
-    const affectedDiagramNodeIdsSet = new Set<string>(
-      movedDiagramNodeIds.length > 0
-        ? expandNodeIdsWithDescendants(movedDiagramNodeIds, this.graphData.allNodes)
-        : []
-    )
-    for (const id of chromeDirtyIds) affectedDiagramNodeIdsSet.add(id)
-    const affectedDiagramNodeIds = [...affectedDiagramNodeIdsSet]
-
-    this._batchUpdateNodeConnections(affectedDiagramNodeIds)
+    this._batchUpdateNodeConnections(movedDiagramNodeIdsSet, chromeDirtyDiagramNodeIdsSet)
 
     if (this._interactiveEditDepth > 0) {
-      for (const id of affectedDiagramNodeIds) {
+      for (const id of affectedDiagramNodeIdsSet) {
         this._interactiveDirtyNodeIds.add(id)
       }
     } else {
-      this._reindexDiagramNodesIntoTiles(affectedDiagramNodeIds)
+      this._reindexDiagramNodesIntoTiles(affectedDiagramNodeIdsSet)
       this._remountViewportTiles()
     }
 
@@ -3522,8 +3457,11 @@ export class PixiGraphRenderer {
     const connectionPaintConfig = this._resolveConnectionPaintConfig(diagramConnection)
 
     connectionPixiContainer.visible = true
+    connectionPixiContainer.sharedParentConnection = plannedConnection.sharedParentConnection
     connectionPixiContainer.lineFrom = { ...plannedConnection.from }
     connectionPixiContainer.lineTo = { ...plannedConnection.to }
+    connectionPixiContainer.containerFrom = { ...plannedConnection.containerFrom }
+    connectionPixiContainer.containerTo = { ...plannedConnection.containerTo }
 
     redrawConnectionPixiContainerLine(
       connectionPixiContainer,

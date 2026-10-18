@@ -4,11 +4,21 @@ import {
   Graphics,
   TextStyle,
 } from 'pixi.js'
-import { type PlannedConnection } from './ConnectionDrawPlanner'
 import { createDiagramText, DIAGRAM_FONT_FAMILY, type DiagramText } from './pixiText'
 import { NodeElsContainer } from '../PixiGraphrenderer.types'
 import type { DiagramConnection } from './diagramTypes'
 import { getConnectionKey } from './diagramModel'
+
+export interface PlannedConnection {
+  sharedParentConnection: boolean
+  from: { x: number; y: number }
+  to: { x: number; y: number }
+  containerFrom: { x: number; y: number }
+  containerTo: { x: number; y: number }
+  pinName?: string
+  dashed?: boolean
+  showArrow?: boolean
+}
 
 export interface ConnectionPixiStyle {
   opacity: number
@@ -365,8 +375,11 @@ export interface ConnectionShapeContainer extends Container {
 }
 
 export type ConnectionPixiContainerProps = {
+  sharedParentConnection: boolean
   lineFrom: { x: number; y: number }
   lineTo: { x: number; y: number }
+  containerFrom: { x: number; y: number }
+  containerTo: { x: number; y: number }
   connectionKey: string
   connection: DiagramConnection
   nodeFromId: string
@@ -376,8 +389,11 @@ export type ConnectionPixiContainerProps = {
 
 export class ConnectionPixiContainer extends Container {
   
+  #sharedParentConnection: boolean
   #lineFrom: { x: number; y: number }
   #lineTo: { x: number; y: number }
+  #containerFrom: { x: number; y: number }
+  #containerTo: { x: number; y: number }
   #connectionKey: string
   #connection: DiagramConnection
   
@@ -385,11 +401,22 @@ export class ConnectionPixiContainer extends Container {
     super()
     this.label = CONNECTION_PIXI_CONTAINER_LABEL
     this.eventMode = 'none'
+    this.#sharedParentConnection = props.sharedParentConnection
     this.#lineFrom = props.lineFrom
     this.#lineTo = props.lineTo
+    this.#containerFrom = props.containerFrom
+    this.#containerTo = props.containerTo
     this.connection = props.connection
     this.#connectionKey = getConnectionKey(props.connection)
     this.#connection = props.connection
+  }
+
+  get sharedParentConnection(): boolean {
+    return this.#sharedParentConnection
+  }
+
+  set sharedParentConnection(value: boolean) {
+    this.#sharedParentConnection = value
   }
 
   get lineFrom(): { x: number; y: number } {
@@ -406,6 +433,22 @@ export class ConnectionPixiContainer extends Container {
 
   set lineTo(value: { x: number; y: number }) {
     this.#lineTo = value
+  }
+
+  get containerFrom(): { x: number; y: number } {
+    return this.#containerFrom
+  }
+
+  set containerFrom(value: { x: number; y: number }) {
+    this.#containerFrom = value
+  }
+
+  get containerTo(): { x: number; y: number } {
+    return this.#containerTo
+  }
+
+  set containerTo(value: { x: number; y: number }) {
+    this.#containerTo = value
   }
 
   get connectionKey(): string {
@@ -429,11 +472,14 @@ export function createConnectionPixiContainer(
   style: ConnectionPixiStyle
 ): ConnectionPixiContainer {
   const stroke = style.stroke ?? `rgba(0, 255, 136, ${style.opacity})`
-  const adjusted = adjustBezierEndpointsForDrawing(planned.from, planned.to, false)
+  const adjusted = adjustBezierEndpointsForDrawing(planned.containerFrom, planned.containerTo, false)
 
   const connectionPixiContainer = new ConnectionPixiContainer({
+    sharedParentConnection: planned.sharedParentConnection,
     lineFrom: { ...planned.from },
     lineTo: { ...planned.to },
+    containerFrom: { ...planned.containerFrom },
+    containerTo: { ...planned.containerTo },
     connectionKey: getConnectionKey(connection),
     connection,
     nodeFromId: connection.from,
@@ -466,8 +512,8 @@ export function redrawConnectionPixiContainerLine(
   if (!(lineGraphics instanceof Graphics)) return
 
   const adjusted = adjustBezierEndpointsForDrawing(
-    connectionPixiContainer.lineFrom, 
-    connectionPixiContainer.lineTo, 
+    connectionPixiContainer.containerFrom,
+    connectionPixiContainer.containerTo,
     false
   )
 

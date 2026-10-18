@@ -13,6 +13,7 @@ import type { DiagramConnection, RenderData, RenderNode } from './diagramTypes'
 import {
   isConditionalEntryDescriptionNode,
   isDiagramOverviewLeaf,
+  isDiagramPortalNode,
   isStateMachineDiagramRoot,
   isTransitionDescriptionNode,
 } from './DiagramConversion'
@@ -109,6 +110,7 @@ export function resolveFootprintStrategy(node: RenderNode): NodeFootprintStrateg
   if (isTransitionDescriptionNode(node)) return rowAuto
   if (isConditionalEntryDescriptionNode(node)) return rowAuto
   if (isTypedDataBodyDiagramNode(node)) return rowAutoFitChildren
+  if (isDiagramPortalNode(node)) return rowAuto
   return defaultFootprintStrategy
 }
 

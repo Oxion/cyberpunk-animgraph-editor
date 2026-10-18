@@ -4,7 +4,7 @@
  */
 
 import type { AnimgraphNode } from './animgraphTypes'
-import type { DiagramConnection, RenderData, RenderNode } from './diagramTypes'
+import type { RenderData, RenderNode } from './diagramTypes'
 import { NodeDefinitionRegistry } from '../NodeDefinition'
 import { getInputPinColor, resolvePinColorFromType } from './pinTyping/resolvePinColor'
 import {
@@ -42,7 +42,8 @@ import {
   type StateMachineRingPresentation,
   buildStateMachineRingPresentation,
 } from './DiagramConversion'
-import { getCrossViewConnsForHost, isVirtualOverviewPinId, makeCrossViewConnectionPortalPinId, makeCrossViewPinId } from './crossViewPinIds'
+import { getCrossViewConnsForHost, isVirtualOverviewPinId, makeCrossViewConnectionPortalPinId } from './crossViewPinIds'
+import { findCrossViewConnForPinPortal } from './portalTopology'
 import {
   DIAGRAM_FRAME_DEFAULT_WIDTH,
   isDiagramFrameNode,
@@ -456,6 +457,20 @@ function propertyRowsAsFields(rows: DiagramPropertyRow[]): NodeRow[] {
   return rows.map((row) => ({ kind: 'field' as const, label: row.text }))
 }
 
+/** Drop outputs; demote inputs to fields; leave everything else as-is. */
+function asNoPinRows(rows: NodeRow[]): NodeRow[] {
+  const out: NodeRow[] = []
+  for (const row of rows) {
+    if (row.kind === 'output') continue
+    if (row.kind === 'input') {
+      out.push({ kind: 'field', label: row.label })
+      continue
+    }
+    out.push(row)
+  }
+  return out
+}
+
 function buildTransitionWrapperRows({ node, diagramData }: RowBuildCtx): NodeRow[] {
   return propertyRowsAsFields(
     getTransitionDescriptionPropertyRows(node, diagramData.handlesRegistry)
@@ -466,6 +481,18 @@ function buildConditionalEntryWrapperRows({ node, diagramData }: RowBuildCtx): N
   return propertyRowsAsFields(
     getConditionalEntryDescriptionPropertyRows(node, diagramData.handlesRegistry)
   )
+}
+
+function buildPortalRows({ node, diagramData }: RowBuildCtx): NodeRow[] {
+  const conn = findCrossViewConnForPinPortal(diagramData, node)
+  const sourceId =
+    (typeof node.metadata?.originalFrom === 'string' ? node.metadata.originalFrom : undefined) ||
+    conn?.metadata?.originalFrom ||
+    conn?.from
+  if (!sourceId || sourceId === node.id) return []
+  const source = diagramData.allNodes.get(sourceId)
+  if (!source || isDiagramPortalNode(source)) return []
+  return asNoPinRows(buildNodeRows(diagramData, source))
 }
 
 function buildEmptyRows(): NodeRow[] {
@@ -512,7 +539,7 @@ const ROW_BUILDERS_BY_TYPE: Record<string, RowBuilder> = {
   [CONDITIONAL_ENTRY_TYPE]: buildConditionalEntryDescriptionRows,
   [DIAGRAM_TRANSITION_WRAPPER_TYPE]: buildTransitionWrapperRows,
   [DIAGRAM_CONDITIONAL_ENTRY_WRAPPER_TYPE]: buildConditionalEntryWrapperRows,
-  [DIAGRAM_NODE_TYPE_PORTAL]: buildEmptyRows,
+  [DIAGRAM_NODE_TYPE_PORTAL]: buildPortalRows,
   [DIAGRAM_NODE_TYPE_NOTE]: buildNoteRows,
   PropertyGroup: buildEmptyRows,
 }
@@ -560,7 +587,8 @@ export function layoutOptionsForNode(node: RenderNode): LayoutNodeRowsOptions {
     isTransitionDescriptionNode(node) ||
     isConditionalEntryDescriptionNode(node) ||
     isTypedDataBodyDiagramNode(node) ||
-    isSmInputChainOverviewLeaf(node)
+    isSmInputChainOverviewLeaf(node) ||
+    isDiagramPortalNode(node)
   ) {
     return {
       width: SM_INPUT_CHAIN_OVERVIEW_WIDTH,
@@ -637,7 +665,8 @@ function widthFloorForNode(
     isTransitionDescriptionNode(node) ||
     isConditionalEntryDescriptionNode(node) ||
     isTypedDataBodyDiagramNode(node) ||
-    isSmInputChainOverviewLeaf(node)
+    isSmInputChainOverviewLeaf(node) ||
+    isDiagramPortalNode(node)
   ) {
     return SM_INPUT_CHAIN_OVERVIEW_WIDTH
   }
@@ -715,7 +744,7 @@ export function nodeUsesRowComposition(node: RenderNode): boolean {
   if (isTransitionDescriptionNode(node)) return true
   if (isConditionalEntryDescriptionNode(node)) return true
   if (isTypedDataBodyDiagramNode(node)) return true
-  if (isDiagramPortalNode(node)) return false
+  if (isDiagramPortalNode(node)) return true
   if (isDiagramFrameNode(node) || node.isGroup || node.type === 'PropertyGroup') return false
   return true
 }

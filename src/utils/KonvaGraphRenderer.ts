@@ -3,15 +3,13 @@
  */
 
 import Konva from 'konva'
-import type { DiagramConnection, RenderData, RenderNode } from './graph/diagramTypes'
-import { getConnectionKey } from './graph/diagramModel'
 import {
-  DEFAULT_CHILD_SLOT,
-  OVERVIEW_CHILD_SLOT,
-  forEachDirectChild,
-  getChildSlot,
-} from './graph/nodeChildSlots'
-import { GraphScopeIndex } from './graph/GraphScopeIndex'
+  type PlannedConnection
+} from './graph/ConnectionDrawPlanner'
+import {
+  createPlannedConnectionShape,
+  repositionConnectionLabel,
+} from './graph/ConnectionKonvaPainter'
 import {
   getSmInputChainOverviewSubtitle,
   getSmInputChainOverviewTitleText,
@@ -23,6 +21,7 @@ import {
   isStateMachineDiagramRoot,
   isStateOverviewLeaf,
 } from './graph/DiagramConversion'
+import { applyDotGridElementStyle, subscribeDiagramGridSettings } from './graph/diagramDotGrid'
 import {
   isDiagramGroupNode,
   isDiagramNoteNode,
@@ -30,25 +29,24 @@ import {
 } from './graph/diagramFrameNodes'
 import {
   adjustConnectionEndpointsForDrawing,
-  connectionPointBetweenNodes,
   expandNodeIdsWithDescendants,
   getWorldPosition,
-  type RectBounds,
+  type RectBounds
 } from './graph/DiagramGeometry'
-import {
-  planMainGraphConnection,
-  type PlannedConnection,
-} from './graph/ConnectionDrawPlanner'
-import {
-  createPlannedConnectionShape,
-  repositionConnectionLabel,
-} from './graph/ConnectionKonvaPainter'
+import { getConnectionKey } from './graph/diagramModel'
+import type { DiagramConnection, RenderData, RenderNode } from './graph/diagramTypes'
+import { GraphScopeIndex } from './graph/GraphScopeIndex'
 import {
   collectLensScopeNodeIds,
   filterConnectionsForLensScope,
   planLensInternalEdge,
 } from './graph/LensScope'
-import { applyDotGridElementStyle, subscribeDiagramGridSettings } from './graph/diagramDotGrid'
+import {
+  DEFAULT_CHILD_SLOT,
+  OVERVIEW_CHILD_SLOT,
+  forEachDirectChild,
+  getChildSlot,
+} from './graph/nodeChildSlots'
 
 export interface KonvaGraphRendererOptions {
   /** Render only this node and its descendants (lens view). */
@@ -722,12 +720,7 @@ export class KonvaGraphRenderer {
     if (this.lensMode && this.scopeRootId) {
       return this.planLensScopeConnection(connection)
     }
-    return planMainGraphConnection(
-      connection,
-      this.graphData,
-      this.graphScope,
-      (node) => this.graphScope.shouldRenderOnMainGraph(node)
-    )
+    return 
   }
 
   /**

@@ -71,17 +71,27 @@ export function collectDescendantIds(node: RenderNode, out: Set<string> = new Se
   return out
 }
 
+export function collectNodeWithIdDescendantsIds(
+  diagramNodeIdToDiagramNodeMap: Map<string, RenderNode>,
+  nodeId: string,
+  out: Set<string> = new Set()
+): Set<string> {
+  const node = diagramNodeIdToDiagramNodeMap.get(nodeId)
+  if (node) collectDescendantIds(node, out)
+  return out
+}
+
 /**
  * Expand moved ids with descendants — local coords of children do not change when a
  * parent moves, but their world tiles / connection endpoints do.
  */
 export function expandNodeIdsWithDescendants(
   nodeIds: string[],
-  allNodes: Map<string, RenderNode>
+  diagramNodeIdToDiagramNodeMap: Map<string, RenderNode>
 ): string[] {
   const out = new Set(nodeIds)
   for (const id of nodeIds) {
-    const node = allNodes.get(id)
+    const node = diagramNodeIdToDiagramNodeMap.get(id)
     if (node) collectDescendantIds(node, out)
   }
   return [...out]

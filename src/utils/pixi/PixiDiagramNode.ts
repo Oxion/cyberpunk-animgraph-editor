@@ -1,7 +1,6 @@
 import { Container, FederatedPointerEvent, Graphics, NineSliceSprite, Rectangle, Texture } from "pixi.js"
 import type { RenderData, RenderNode } from '../graph/diagramTypes'
 import {
-  formatCrossViewSourceLabel,
   getSmInputChainOverviewSubtitle, 
   getSmInputChainOverviewTitleText, 
   getStateOverviewTitleText, 
@@ -28,6 +27,7 @@ import { isTypedDataBodyDiagramNode } from "../graph/typedDataBodyDiagramNodeTyp
 import { SimNodeState } from "../sim"
 
 export const ROOT_CONTAINER_LABEL = 'root-container'
+export const CONNECTIONS_CONTAINER_LABEL = 'connections-container'
 export const BG_SPRITE_LABEL = 'node-bg-texture'
 export const HEADER_SPRITE_LABEL = 'node-header-texture'
 export const BORDER_GRAPHICS_LABEL = 'node-border-graphics'
@@ -126,6 +126,7 @@ export class PixiDiagramNode {
   private readonly _bgNineSliceSprite: NineSliceSprite
   private readonly _headerBgNineSliceSprite: NineSliceSprite
   private readonly _borderGraphics: Graphics
+  private readonly _connectionsPixiContainer: Container
   private readonly _titlePixiText: DiagramText
   private readonly _subtitleText: DiagramText
   private _openScopeBtnLabelText?: DiagramText
@@ -152,6 +153,7 @@ export class PixiDiagramNode {
     this._bodyModel = props.bodyModel
     
     this._pixiContainer = new Container()
+    
     this._bgNineSliceSprite = new NineSliceSprite({
       texture: PixiDiagramNode.nodeBgTemplateTexture,
       leftWidth: NODE_CORNER_RADIUS,
@@ -174,6 +176,8 @@ export class PixiDiagramNode {
     })
 
     this._borderGraphics = new Graphics()
+
+    this._connectionsPixiContainer = new Container()
 
     this._titlePixiText = createDiagramText({
       text: props.visualOptions.titleText ?? '',
@@ -205,6 +209,9 @@ export class PixiDiagramNode {
     this._borderGraphics.eventMode = 'static'
     this._borderGraphics.cursor = 'pointer'
     this._pixiContainer.addChild(this._borderGraphics)
+
+    this._connectionsPixiContainer.label = CONNECTIONS_CONTAINER_LABEL
+    this._pixiContainer.addChild(this._connectionsPixiContainer)
 
     this._titlePixiText.label = SUBTITLE_TEXT_LABEL
     this._titlePixiText.x = NODE_HORIZONTAL_PADDING
@@ -534,6 +541,10 @@ export class PixiDiagramNode {
     return this._pixiContainer
   }
 
+  public get connectionsPixiContainer(): Container {
+    return this._connectionsPixiContainer
+  }
+
   public get showOpenScopeBtn(): boolean {
     return this._showOpenScopeBtn
   }
@@ -667,29 +678,26 @@ export class PixiDiagramNode {
     )
 
     if (isDiagramPortalNode(diagramNode)) {
-      const crossConn = findCrossViewConnForPinPortal(diagramData, diagramNode)
+      const conn = findCrossViewConnForPinPortal(diagramData, diagramNode)
       const originalFrom =
-        crossConn?.metadata?.originalFrom ??
-        (diagramNode.metadata?.originalFrom as string | undefined) ??
-        crossConn?.from ??
+        (typeof diagramNode.metadata?.originalFrom === 'string'
+          ? diagramNode.metadata.originalFrom
+          : '') ||
+        conn?.metadata?.originalFrom ||
+        conn?.from ||
         ''
-      if (originalFrom) {
-        return {
-          titleText: '',
-          subtitleText: formatCrossViewSourceLabel(
-            originalFrom,
-            diagramData.handlesRegistry,
-            diagramData.allNodes
-          ),
-          hideTitleLine: true,
-          ...chrome,
-        }
-      }
-      const pin = crossConn?.pinName ?? (diagramNode.metadata?.pinName as string | undefined)
+      const sourceNode = originalFrom ? diagramData.allNodes.get(originalFrom) : undefined
+      const sourceId = String(
+        sourceNode?.data?.originalNodeId ?? (originalFrom || diagramNode.id)
+      )
+      const sourceTypeRaw =
+        (diagramData.handlesRegistry?.get(sourceId)?.Data?.$type as string | undefined) ??
+        sourceNode?.type ??
+        ''
+      const sourceType = sourceTypeRaw.replace(/^animAnimNode_/, '').replace(/^anim/, '') || '?'
       return {
-        titleText: '',
-        subtitleText: pin ? `← ${pin}` : '←',
-        hideTitleLine: true,
+        titleText: `Portal[${sourceId}]`,
+        subtitleText: `portal[${sourceType}]`,
         ...chrome,
       }
     }

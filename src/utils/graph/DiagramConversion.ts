@@ -924,10 +924,13 @@ export function ensureCrossViewPortalChain(
     deep = createDiagramPortalNode({
       id: portalId,
       parent,
+      originalFrom: fromId,
     })
     appendChild(parent, deep)
     renderData.allNodes.set(portalId, deep)
     renderData.nodeTypes.add(DIAGRAM_NODE_TYPE_PORTAL)
+  } else {
+    deep.metadata = { ...deep.metadata, originalFrom: fromId }
   }
 
   pushHop(deep.id, target.id)
@@ -956,10 +959,13 @@ export function ensureCrossViewPortalChain(
       bridge = createDiagramPortalNode({
         id: entryId,
         parent: parkParent,
+        originalFrom: fromId,
       })
       appendChild(parkParent, bridge)
       renderData.allNodes.set(entryId, bridge)
       renderData.nodeTypes.add(DIAGRAM_NODE_TYPE_PORTAL)
+    } else {
+      bridge.metadata = { ...bridge.metadata, originalFrom: fromId }
     }
 
     pushHop(bridge.id, host.id)
@@ -1168,6 +1174,7 @@ export function collectSmStatesGroupLayoutNodes(group: RenderNode): RenderNode[]
 function createDiagramPortalNode(options: {
   id: string
   parent: RenderNode
+  originalFrom: string
   width?: number
   height?: number
 }): RenderNode {
@@ -1181,7 +1188,7 @@ function createDiagramPortalNode(options: {
     size: { width: w, height: h },
     childSlots: emptyChildSlots(),
     parent: options.parent,
-    metadata: {},
+    metadata: { originalFrom: options.originalFrom },
     bounds: { x: 0, y: 0, width: w, height: h },
     isContainer: false,
     isGroup: false,
