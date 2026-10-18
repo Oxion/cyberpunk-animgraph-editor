@@ -1466,6 +1466,7 @@ export class PixiGraphRenderer {
   }
 
   private _resolveConnectionAnchors(
+    viewRootDiagramNodeIdsSet: Set<string>,
     connection: DiagramConnection,
     fromNode: RenderNode,
     toNode: RenderNode
@@ -1483,8 +1484,6 @@ export class PixiGraphRenderer {
       ? this._resolveDiagramNodePixiDiagramNodePinPos(toNode, makeCrossViewConnectionPortalPinId(connection))
       : this._resolveDiagramNodePixiDiagramNodePinPos(toNode, connection.pinName)
     if (!toPinInNodePos) return
-
-    const viewRootDiagramNodeIdsSet = this._resolveViewRootDiagramNodeIdsSet()
 
     const toNodeWorldPos = this._resolveDiagramNodeRendererWorldPosition(toNode, viewRootDiagramNodeIdsSet)
     const toPinWorldPos = { x: toNodeWorldPos.x + toPinInNodePos.x, y: toNodeWorldPos.y + toPinInNodePos.y }
@@ -1535,12 +1534,19 @@ export class PixiGraphRenderer {
     if (!fromNode || !toNode) return
     if (fromNode.visible === false || toNode.visible === false) return
 
-    const anchors = this._resolveConnectionAnchors(connection, fromNode, toNode)
+    const viewRootDiagramNodeIdsSet = this._resolveViewRootDiagramNodeIdsSet()
+
+    const anchors = this._resolveConnectionAnchors(viewRootDiagramNodeIdsSet, connection, fromNode, toNode)
     if (!anchors) return
 
-    // Same parent → mounted under parent.connectionsPixiContainer (parent-local).
+    // Same parent → mounted under parent.connectionsPixiContainer (parent-local) and not view root nodes.
     // Otherwise → mainConnections (world).
-    const sharedParentConnection = !!(fromNode.parent && toNode.parent && fromNode.parent.id === toNode.parent.id)
+    const sharedParentConnection =
+      !viewRootDiagramNodeIdsSet.has(fromNode.id) &&
+      !viewRootDiagramNodeIdsSet.has(toNode.id) &&
+      !!fromNode.parent && 
+      !!toNode.parent && 
+      fromNode.parent.id === toNode.parent.id
 
     return {
       sharedParentConnection: sharedParentConnection,
