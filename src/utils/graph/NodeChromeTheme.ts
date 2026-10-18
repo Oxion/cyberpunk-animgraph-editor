@@ -1,5 +1,5 @@
 /**
- * Blender-like node chrome: category header colors.
+ * Blender-like node chrome: per-type header colors (codegen).
  * Pin socket/wire colors: `pinTyping/PIN_ENDPOINT_COLOR` (type → hex).
  */
 
@@ -10,27 +10,15 @@ import {
   ANIM_NODE_TYPE_STATE_MACHINE_DIAGRAM,
 } from './animNodeTypes'
 import {
+  DIAGRAM_CONDITIONAL_ENTRY_WRAPPER_TYPE,
   DIAGRAM_NODE_TYPE_GROUP,
   DIAGRAM_NODE_TYPE_NOTE,
+  DIAGRAM_NODE_TYPE_PORTAL,
   DIAGRAM_NODE_TYPE_PROPERTY_GROUP,
+  DIAGRAM_TRANSITION_WRAPPER_TYPE,
 } from './diagramNodeTypes'
-
-export type NodeChromeCategory =
-  | 'pose'
-  | 'float'
-  | 'bool'
-  | 'int'
-  | 'vector'
-  | 'constraint'
-  | 'control'
-  | 'signal'
-  | 'sm'
-  | 'state'
-  | 'transition'
-  | 'portal'
-  | 'group'
-  | 'note'
-  | 'default'
+import { NODE_HEADER_COLOR_FALLBACK } from './nodeHeaderColors/nodeHeaderColorSeeds'
+import { NODE_HEADER_FILL } from './nodeHeaderColors/nodeHeaderColors.generated'
 
 export type NodeChromeHints = {
   isPortal?: boolean
@@ -47,108 +35,59 @@ export const NODE_CHROME_STROKE = '#5c5c5c'
 export const NODE_CHROME_TITLE = '#e8e8e8'
 export const NODE_CHROME_SUBTITLE = '#b0b0b0'
 
-const HEADER_BY_CATEGORY: Record<NodeChromeCategory, string> = {
-  pose: '#2e6231',
-  float: '#4a5560',
-  bool: '#6b3a5a',
-  int: '#3a5a7a',
-  vector: '#4a3a6b',
-  constraint: '#6b5a30',
-  control: '#2e5a55',
-  signal: '#6b5a20',
-  sm: '#2e4a62',
-  state: '#2e4a62',
-  transition: '#2e6231',
-  portal: '#2e4a62',
-  group: '#3d3d3d',
-  note: '#6b5a20',
-  default: '#3d3d3d',
-}
-
-export function resolveNodeChromeCategory(
+/**
+ * Structural hints remap to canonical diagram / animgraph types before lookup.
+ */
+export function resolveChromeLookupType(
   type: string,
   hints?: NodeChromeHints
-): NodeChromeCategory {
-  if (hints?.isPortal) return 'portal'
-  if (hints?.isStateMachine) return 'sm'
-  if (hints?.isState) return 'state'
-  if (hints?.isTransition || hints?.isConditionalEntry) return 'transition'
-  if (hints?.isGroup) return 'group'
-
-  const t = type || ''
-
-  if (
-    t === ANIM_NODE_TYPE_STATE_MACHINE ||
-    t === ANIM_NODE_TYPE_STATE_MACHINE_DIAGRAM ||
-    t.includes('StateMachine')
-  ) {
-    return 'sm'
+): string {
+  if (hints?.isPortal) return DIAGRAM_NODE_TYPE_PORTAL
+  if (hints?.isGroup) return DIAGRAM_NODE_TYPE_GROUP
+  if (hints?.isStateMachine) {
+    if (
+      type === ANIM_NODE_TYPE_STATE_MACHINE_DIAGRAM ||
+      type.includes('StateMachineDiagram')
+    ) {
+      return ANIM_NODE_TYPE_STATE_MACHINE_DIAGRAM
+    }
+    return ANIM_NODE_TYPE_STATE_MACHINE
   }
-  if (t === ANIM_NODE_TYPE_STATE || t === ANIM_NODE_TYPE_STATE_FROZEN) return 'state'
-  if (t.includes('Transition') || t.includes('ConditionalEntry')) return 'transition'
-  if (t === DIAGRAM_NODE_TYPE_PROPERTY_GROUP || t === DIAGRAM_NODE_TYPE_GROUP) return 'group'
-  if (t === DIAGRAM_NODE_TYPE_NOTE) return 'note'
-  if (t === 'diagram-portal') return 'portal'
-
-  if (
-    /Constraint/i.test(t) ||
-    /SetBone/i.test(t) ||
-    /RotateBone/i.test(t) ||
-    /TranslateBone/i.test(t)
-  ) {
-    return 'constraint'
+  if (hints?.isState) {
+    if (type === ANIM_NODE_TYPE_STATE_FROZEN) return ANIM_NODE_TYPE_STATE_FROZEN
+    return ANIM_NODE_TYPE_STATE
+  }
+  if (hints?.isConditionalEntry) return DIAGRAM_CONDITIONAL_ENTRY_WRAPPER_TYPE
+  if (hints?.isTransition) {
+    if (type === DIAGRAM_TRANSITION_WRAPPER_TYPE) return DIAGRAM_TRANSITION_WRAPPER_TYPE
+    if (type === DIAGRAM_CONDITIONAL_ENTRY_WRAPPER_TYPE) {
+      return DIAGRAM_CONDITIONAL_ENTRY_WRAPPER_TYPE
+    }
+    return DIAGRAM_TRANSITION_WRAPPER_TYPE
   }
 
-  if (/SourceChannel_/i.test(t) || /Quaternion/i.test(t) || /Vector/i.test(t) || /Transform/i.test(t)) {
-    return 'vector'
+  // Normalize known diagram natives if passed under aliases
+  if (type === DIAGRAM_NODE_TYPE_PROPERTY_GROUP || type === DIAGRAM_NODE_TYPE_GROUP) {
+    return type
   }
+  if (type === DIAGRAM_NODE_TYPE_NOTE) return DIAGRAM_NODE_TYPE_NOTE
+  if (type === DIAGRAM_NODE_TYPE_PORTAL) return DIAGRAM_NODE_TYPE_PORTAL
 
-  if (/Bool/i.test(t) || /AnimSetTagValue/i.test(t)) return 'bool'
-
-  if (/IntInput|IntToFloat|IntConstant|IntJoin|IntClamp/i.test(t) || /animAnimNode_Int/.test(t)) {
-    return 'int'
-  }
-
-  if (
-    /Float/i.test(t) ||
-    /MathExpressionFloat/i.test(t) ||
-    /Clamp/i.test(t) ||
-    /Damp/i.test(t) ||
-    /Latch/i.test(t) ||
-    /Random/i.test(t) ||
-    /Sinus/i.test(t) ||
-    /CurveFloat/i.test(t)
-  ) {
-    return 'float'
-  }
-
-  if (/Signal/i.test(t)) return 'signal'
-
-  if (
-    /Blend/i.test(t) ||
-    /Switch/i.test(t) ||
-    /Join/i.test(t) ||
-    /SkAnim/i.test(t) ||
-    /SkFrame|SkSpeed/i.test(t) ||
-    /Output/i.test(t) ||
-    /Identity/i.test(t) ||
-    /Wrapper/i.test(t) ||
-    /MathExpressionPose/i.test(t)
-  ) {
-    return 'pose'
-  }
-
-  // StaticSwitch / Switch already covered; remaining control-ish
-  if (/StaticSwitch/i.test(t)) return 'control'
-
-  return 'default'
+  return type || ''
 }
 
-export function headerFillForCategory(category: NodeChromeCategory): string {
-  return HEADER_BY_CATEGORY[category]
+export function headerFillForNodeType(
+  type: string,
+  hints?: NodeChromeHints
+): string {
+  const key = resolveChromeLookupType(type, hints)
+  return NODE_HEADER_FILL[key] ?? NODE_HEADER_COLOR_FALLBACK
 }
 
-export function blenderVisualForCategory(category: NodeChromeCategory): {
+export function blenderVisualForNodeType(
+  type: string,
+  hints?: NodeChromeHints
+): {
   fill: string
   headerFill: string
   stroke: string
@@ -157,7 +96,7 @@ export function blenderVisualForCategory(category: NodeChromeCategory): {
 } {
   return {
     fill: NODE_CHROME_BODY,
-    headerFill: headerFillForCategory(category),
+    headerFill: headerFillForNodeType(type, hints),
     stroke: NODE_CHROME_STROKE,
     titleFill: NODE_CHROME_TITLE,
     subtitleFill: NODE_CHROME_SUBTITLE,

@@ -12,6 +12,8 @@
     "type-check": "tsc --noEmit",
     "gen:pin-endpoints": "tsx scripts/gen-pin-endpoints.ts",
     "gen:pin-endpoints:check": "tsx scripts/gen-pin-endpoints.ts --check",
+    "gen:node-header-colors": "tsx scripts/gen-node-header-colors.ts",
+    "gen:node-header-colors:check": "tsx scripts/gen-node-header-colors.ts --check",
     "electron:compile": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --packages=external --external:electron --outdir=dist-electron --format=cjs --out-extension:.js=.js",
     "gen:app-icon": "node scripts/gen-app-icon.mjs",
     "electron:clean": "node scripts/electron-clean.mjs",

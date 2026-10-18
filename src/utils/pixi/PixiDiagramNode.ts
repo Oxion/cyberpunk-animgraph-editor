@@ -17,7 +17,7 @@ import {
 import { isDiagramGroupNode, isDiagramNoteNode, readDiagramGroupLabel } from "../graph/diagramFrameNodes"
 import { ellipsizeDiagramText } from "../graph/diagramTextMetrics"
 import type { BodyPaintModel } from "../graph/NodeBodyPresent"
-import { blenderVisualForCategory, NodeChromeHints, resolveNodeChromeCategory } from "../graph/NodeChromeTheme"
+import { blenderVisualForNodeType, NodeChromeHints } from "../graph/NodeChromeTheme"
 import { NodePinDesc, NodePinShape, PinSide } from "../graph/NodePins"
 import { clearNodeRowsHost, paintNodeRows } from "../graph/NodeRowPainter"
 import { PIN_COLOR_FALLBACK } from "../graph/pinTyping"
@@ -673,8 +673,9 @@ export class PixiDiagramNode {
   }
 
   public static resolvePixiDiagramNodeVisualOptions(diagramData: RenderData, diagramNode: RenderNode): PixiDiagramNodeVisualOptions {
-    const chrome = blenderVisualForCategory(
-      resolveNodeChromeCategory(diagramNode.type, PixiDiagramNode.chromeHintsForNode(diagramNode))
+    const chrome = blenderVisualForNodeType(
+      diagramNode.type,
+      PixiDiagramNode.chromeHintsForNode(diagramNode)
     )
 
     if (isDiagramPortalNode(diagramNode)) {

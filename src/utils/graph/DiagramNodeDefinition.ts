@@ -24,6 +24,7 @@ import {
   DIAGRAM_CONDITIONAL_ENTRY_WRAPPER_TYPE,
   DIAGRAM_NODE_TYPE_GROUP,
   DIAGRAM_NODE_TYPE_NOTE,
+  DIAGRAM_NODE_TYPE_PORTAL,
   DIAGRAM_NODE_TYPE_PROPERTY_GROUP,
   DIAGRAM_TRANSITION_WRAPPER_TYPE,
 } from './diagramNodeTypes'
@@ -31,6 +32,7 @@ import {
 export {
   DIAGRAM_NODE_TYPE_GROUP,
   DIAGRAM_NODE_TYPE_NOTE,
+  DIAGRAM_NODE_TYPE_PORTAL,
   DIAGRAM_NODE_TYPE_PROPERTY_GROUP,
 } from './diagramNodeTypes'
 
@@ -120,6 +122,7 @@ const DIAGRAM_NODE_DEFINITIONS: Record<string, DiagramNodeDefinition> = {
   [DIAGRAM_NODE_TYPE_NOTE]: {
     diagramChildSlots: [{ name: DEFAULT_CHILD_SLOT, kind: 'array' }],
   },
+  [DIAGRAM_NODE_TYPE_PORTAL]: {},
   [DIAGRAM_TRANSITION_WRAPPER_TYPE]: {
     overviewLeaf: true,
     diagramChildSlots: [

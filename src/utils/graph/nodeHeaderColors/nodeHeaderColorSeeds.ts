@@ -1,0 +1,86 @@
+/**
+ * Hand-edited header color seeds / overrides for codegen.
+ * Sparse: not every ancestor needs a seed — walk parent until one is found.
+ * Diagram natives have no inheritance; seed them here.
+ */
+
+import {
+  ANIM_NODE_TYPE_BASE,
+  ANIM_NODE_TYPE_BASE_SWITCH,
+  ANIM_NODE_TYPE_BOOL_VALUE,
+  ANIM_NODE_TYPE_CONDITIONAL_ENTRY,
+  ANIM_NODE_TYPE_FLOAT_VALUE,
+  ANIM_NODE_TYPE_INT_VALUE,
+  ANIM_NODE_TYPE_QUATERNION_VALUE,
+  ANIM_NODE_TYPE_SIGNAL,
+  ANIM_NODE_TYPE_STATE,
+  ANIM_NODE_TYPE_STATE_FROZEN,
+  ANIM_NODE_TYPE_STATE_MACHINE,
+  ANIM_NODE_TYPE_STATE_MACHINE_DIAGRAM,
+  ANIM_NODE_TYPE_STATIC_SWITCH,
+  ANIM_NODE_TYPE_TRANSFORM_VALUE,
+  ANIM_NODE_TYPE_TRANSITION_CONDITION,
+  ANIM_NODE_TYPE_TRANSITION_DESCRIPTION,
+  ANIM_NODE_TYPE_TRANSITION_INTERPOLATOR,
+  ANIM_NODE_TYPE_VECTOR_VALUE,
+} from '../animNodeTypes'
+import {
+  DIAGRAM_CONDITIONAL_ENTRY_WRAPPER_TYPE,
+  DIAGRAM_NODE_TYPE_GROUP,
+  DIAGRAM_NODE_TYPE_NOTE,
+  DIAGRAM_NODE_TYPE_PORTAL,
+  DIAGRAM_NODE_TYPE_PROPERTY_GROUP,
+  DIAGRAM_TRANSITION_WRAPPER_TYPE,
+} from '../diagramNodeTypes'
+
+/** Exact type → hex; wins over seed + jitter. */
+export const NODE_HEADER_COLOR_OVERRIDES: Readonly<Record<string, string>> = {
+  // e.g. [ANIM_NODE_TYPE_BASE]: '#112233',
+}
+
+/**
+ * Optional ancestor / self seeds. Descendants inherit with HSV jitter.
+ * Values match the former NodeChromeTheme category palette.
+ */
+export const NODE_HEADER_COLOR_SEEDS: Readonly<Record<string, string>> = {
+  // Value families
+  [ANIM_NODE_TYPE_FLOAT_VALUE]: '#4a5560',
+  [ANIM_NODE_TYPE_BOOL_VALUE]: '#6b3a5a',
+  [ANIM_NODE_TYPE_INT_VALUE]: '#3a5a7a',
+  [ANIM_NODE_TYPE_VECTOR_VALUE]: '#4a3a6b',
+  [ANIM_NODE_TYPE_QUATERNION_VALUE]: '#4a3a6b',
+  [ANIM_NODE_TYPE_TRANSFORM_VALUE]: '#4a3a6b',
+
+  // Pose / default anim node family
+  [ANIM_NODE_TYPE_BASE]: '#2e6231',
+
+  // State machine
+  [ANIM_NODE_TYPE_STATE_MACHINE]: '#2e4a62',
+  [ANIM_NODE_TYPE_STATE_MACHINE_DIAGRAM]: '#2e4a62',
+  [ANIM_NODE_TYPE_STATE]: '#2e4a62',
+  [ANIM_NODE_TYPE_STATE_FROZEN]: '#2e4a62',
+
+  // Transitions
+  [ANIM_NODE_TYPE_TRANSITION_DESCRIPTION]: '#2e6231',
+  [ANIM_NODE_TYPE_CONDITIONAL_ENTRY]: '#2e6231',
+  [ANIM_NODE_TYPE_TRANSITION_CONDITION]: '#2e6231',
+  [ANIM_NODE_TYPE_TRANSITION_INTERPOLATOR]: '#2e6231',
+  [DIAGRAM_TRANSITION_WRAPPER_TYPE]: '#2e6231',
+  [DIAGRAM_CONDITIONAL_ENTRY_WRAPPER_TYPE]: '#2e6231',
+
+  // Signal
+  [ANIM_NODE_TYPE_SIGNAL]: '#6b5a20',
+
+  // Control / switch-ish
+  [ANIM_NODE_TYPE_BASE_SWITCH]: '#2e5a55',
+  [ANIM_NODE_TYPE_STATIC_SWITCH]: '#2e5a55',
+
+  // Diagram natives
+  [DIAGRAM_NODE_TYPE_PROPERTY_GROUP]: '#3d3d3d',
+  [DIAGRAM_NODE_TYPE_GROUP]: '#3d3d3d',
+  [DIAGRAM_NODE_TYPE_NOTE]: '#6b5a20',
+  [DIAGRAM_NODE_TYPE_PORTAL]: '#2e4a62',
+}
+
+/** When no seed on self or any ancestor. */
+export const NODE_HEADER_COLOR_FALLBACK = '#3d3d3d'
