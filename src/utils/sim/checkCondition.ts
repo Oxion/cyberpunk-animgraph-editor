@@ -59,10 +59,9 @@ function edgePrevCurr(
   board: SimInputBoard,
   feature: string,
   prop: string
-): { prev: number; curr: number } | 'unknown' {
-  const curr = board.getFeature(feature, prop)
-  if (curr === undefined) return 'unknown'
-  // First sample: no edge (engine init prev=curr)
+): { prev: number; curr: number } {
+  // Engine IntInput slots are 0 until ApplyFeature; missing board → 0/0 (no edge).
+  const curr = board.getFeature(feature, prop) ?? 0
   const prev = board.getPrevFeature(feature, prop)
   return { prev: prev === undefined ? curr : prev, curr }
 }
@@ -100,17 +99,17 @@ export function checkCondition(
       return board.anyAnimEnd || board.animEndEvents.size > 0
 
     case 'animAnimStateTransitionCondition_FloatFeature': {
+      // Engine FloatInput defaults to 0 until ApplyFeature.
       const feature = readCName(data.featureName)
       const prop = readCName(data.featurePropertyName)
-      const cur = board.getFeature(feature, prop)
-      if (cur === undefined) return 'unknown'
+      const cur = board.getFeature(feature, prop) ?? 0
       return compareNumber(cur, readNumber(data.compareValue), data.compareFunc ?? 'equal')
     }
     case 'animAnimStateTransitionCondition_IntFeature': {
+      // Engine IntInput defaults to 0 until ApplyFeature.
       const feature = readCName(data.featureName)
       const prop = readCName(data.featurePropertyName)
-      const cur = board.getFeature(feature, prop)
-      if (cur === undefined) return 'unknown'
+      const cur = board.getFeature(feature, prop) ?? 0
       return compareNumber(
         Math.round(cur),
         Math.round(readNumber(data.compareValue)),
@@ -118,10 +117,10 @@ export function checkCondition(
       )
     }
     case 'animAnimStateTransitionCondition_BoolFeature': {
+      // Engine BoolInput defaults to false until ApplyFeature.
       const feature = readCName(data.featureName)
       const prop = readCName(data.featurePropertyName)
-      const cur = board.getBoolFeature(feature, prop)
-      if (cur === undefined) return 'unknown'
+      const cur = board.getBoolFeature(feature, prop) ?? false
       const compare =
         data.compareValue === undefined ? true : readBool(data.compareValue)
       return cur === compare
@@ -133,7 +132,6 @@ export function checkCondition(
         readCName(data.featureName),
         readCName(data.featurePropertyName)
       )
-      if (edge === 'unknown') return 'unknown'
       return edge.prev !== edge.curr
     }
     case 'animAnimStateTransitionCondition_IntEdgeFromToFeature': {
@@ -142,7 +140,6 @@ export function checkCondition(
         readCName(data.featureName),
         readCName(data.featurePropertyName)
       )
-      if (edge === 'unknown') return 'unknown'
       const from = Math.round(readNumber(data.fromValue, 0))
       const to = Math.round(readNumber(data.toValue, 0))
       return Math.round(edge.prev) === from && Math.round(edge.curr) === to
@@ -153,7 +150,6 @@ export function checkCondition(
         readCName(data.featureName),
         readCName(data.featurePropertyName)
       )
-      if (edge === 'unknown') return 'unknown'
       const to = Math.round(readNumber(data.toValue, 0))
       return edge.prev !== edge.curr && Math.round(edge.curr) === to
     }
@@ -163,16 +159,15 @@ export function checkCondition(
         readCName(data.featureName),
         readCName(data.featurePropertyName)
       )
-      if (edge === 'unknown') return 'unknown'
       // Engine field typo: greaterThenValue
       const thr = Math.round(readNumber(data.greaterThenValue ?? data.greaterThanValue, 0))
       return Math.round(edge.prev) === 0 && Math.round(edge.curr) > thr
     }
     case 'animAnimStateTransitionCondition_BoolEdgeFeature': {
+      // Engine BoolInput defaults to false; missing → false/false (no edge).
       const feature = readCName(data.featureName)
       const prop = readCName(data.featurePropertyName)
-      const curr = board.getBoolFeature(feature, prop)
-      if (curr === undefined) return 'unknown'
+      const curr = board.getBoolFeature(feature, prop) ?? false
       const prev = board.getPrevBoolFeature(feature, prop)
       const prevB = prev === undefined ? curr : prev
       return prevB !== curr
