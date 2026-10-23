@@ -42,3 +42,17 @@ export function flushSimSampleLog(log: SimSampleLog | null | undefined): void {
   lastFlushByTag.set(log.tag, now)
   console.log(`[sim-sample] ${log.tag}\n` + log.lines.join('\n'))
 }
+
+let frameLogIds = new Set<string>()
+
+export function addFrameLogId(id: string): void {
+  frameLogIds.add(id)
+}
+
+export function clearFrameLogIds(): void {
+  frameLogIds.clear()
+}
+
+export function isFrameLogIdPresent(id: string): boolean {
+  return frameLogIds.has(id)
+}

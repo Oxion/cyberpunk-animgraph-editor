@@ -1,4 +1,4 @@
-import { defineConfig, type PreviewServer, type ViteDevServer } from 'vite'
+import { defineConfig, type PreviewServer, type ViteDevServer, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
@@ -26,46 +26,53 @@ function mountFsApi(middlewares: ViteDevServer['middlewares']) {
   })
 }
 
-export default defineConfig({
-  base: './',
-  plugins: [
-    vue({
-      script: {
-        defineModel: true,
-        propsDestructure: true,
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+
+  return {
+    base: './',
+    plugins: [
+      vue({
+        script: {
+          defineModel: true,
+          propsDestructure: true,
+        },
+      }),
+      tailwindcss(),
+      {
+        name: 'api-server',
+        configureServer(server: ViteDevServer) {
+          mountFsApi(server.middlewares)
+        },
+        configurePreviewServer(server: PreviewServer) {
+          mountFsApi(server.middlewares)
+        },
       },
-    }),
-    tailwindcss(),
-    {
-      name: 'api-server',
-      configureServer(server: ViteDevServer) {
-        mountFsApi(server.middlewares)
-      },
-      configurePreviewServer(server: PreviewServer) {
-        mountFsApi(server.middlewares)
+    ],
+    server: {
+      port: 5001,
+      host: '0.0.0.0',
+      cors: true,
+      strictPort: false,
+      fs: {
+        allow: ['..'],
       },
     },
-  ],
-  server: {
-    port: 5001,
-    host: '0.0.0.0',
-    cors: true,
-    strictPort: false,
-    fs: {
-      allow: ['..'],
+    preview: {
+      port: 5001,
+      host: '0.0.0.0',
     },
-  },
-  preview: {
-    port: 5001,
-    host: '0.0.0.0',
-  },
-  build: {
-    outDir: 'dist',
-    assetsDir: 'assets',
-  },
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
+    build: {
+      outDir: 'dist',
+      assetsDir: 'assets',
     },
-  },
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, './src'),
+      },
+    },
+    define: {
+      __ENABLE_SIM_DEBUG__: JSON.stringify(!!env.ENABLE_SIM_DEBUG),
+    },
+  }
 })
