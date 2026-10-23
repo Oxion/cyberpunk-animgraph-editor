@@ -16,6 +16,12 @@ export interface ElectronFsApi {
   windowIsMaximized: () => Promise<boolean>
   onTryClose: (handler: () => boolean) => () => void
   onMaximizedChanged: (handler: (maximized: boolean) => void) => () => void
+  liveBridgeStart: () => Promise<{ enabled: boolean; connected: boolean }>
+  liveBridgeStop: () => Promise<{ enabled: boolean; connected: boolean }>
+  liveBridgeStatus: () => Promise<{ enabled: boolean; connected: boolean }>
+  /** NDJSON lines from animgraph-bridge game server (after liveBridgeStart). */
+  onLiveBridgeLine: (handler: (line: string) => void) => () => void
+  onLiveBridgeStatus: (handler: (status: { enabled: boolean; connected: boolean }) => void) => () => void
 }
 
 declare global {

@@ -100,45 +100,36 @@ export interface SimActiveClip {
   resolve: SimClipResolve
 }
 
-/**
- * Structured sim HUD — prefer this over string formatting.
- * Arrays are short (runner caps); safe to bind in Vue without heavy work.
- */
-export interface SimStatus {
-  rootHandleId: string | null
-  /** Stepped SkAnim clocks this frame */
+export interface SimSnapshotUpdate {
+  rootHandleId?: string
   clips: SimActiveClip[]
+  simSmStateByHandleId: Record<string, SimSmState>
+  simNodeStateByHandleId: Record<string, SimNodeState>
+  nodeDelta?: SimNodeDelta
+  warnings: SimUpdateWarning[]
 }
 
-/** Lightweight sample diagnostics in the snapshot (no stack/inspect mapping). */
-export interface SimPoseStats {
+export interface SimSnapshotSample {
   ok: boolean
   reason?: string
   boneCount: number
   trackCount: number
   sampleMs: number
   /** Anim names on sample that resolved clip meta but had no glb in winning set */
-  missingGlb?: string[]
+  missingGlb: string[]
   /** Sample warnings this frame (only when detect enabled) */
-  warnings?: SimSampleWarning[]
-  /** Update warnings this frame (only when detect enabled) */
-  updateWarnings?: SimUpdateWarning[]
+  warnings: SimSampleWarning[]
 }
 
 export interface SimSnapshot {
-  time: number
-  playing: boolean
-  speed: number
   /**
    * Monotonic generation bumped each publish/sample.
    * Use for derived pose-stats cache keys and Vue frame ticks (not display `f=`).
    */
   poseGen: number
-  sms: Record<string, SimSmState>
-  nodes: Record<string, SimNodeState>
-  /** null on first step after bind/reset — consumers should full-apply `nodes`. */
-  nodeDelta: SimNodeDelta | null
-  status: SimStatus
-  /** Sample-phase diagnostics (pooled pose stays on runner; stack/inspect via getDerivedPoseStats) */
-  poseStats?: SimPoseStats | null
+  playing: boolean
+  time: number
+  speed: number
+  update: SimSnapshotUpdate
+  sample?: SimSnapshotSample
 }

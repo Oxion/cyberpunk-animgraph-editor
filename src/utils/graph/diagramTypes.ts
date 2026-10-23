@@ -20,7 +20,7 @@ export type SimRunnerSlotsConfigJson = {
    * When true, `runners` must not contain a root entry with empty diagramId.
    */
   rootDetached?: boolean
-  runners: Record<
+  runners: Partial<Record<
     string,
     {
       /** Nonempty diagram id (bound runner only). */
@@ -31,7 +31,7 @@ export type SimRunnerSlotsConfigJson = {
       slotDiagramIds: Record<string, string>
       slotRunnerIds: Record<string, string>
     }
-  >
+  >>
 }
 
 /** Roots: world/stage; children: local offset to parent. */

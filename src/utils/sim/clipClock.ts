@@ -6,6 +6,7 @@
 import type { ClipLibrary, ClipMeta } from './clipLibrary'
 import type { SimAnimEventPhase, SimInputBoard } from './SimInputBoard'
 import { SimInputBoard as Board } from './SimInputBoard'
+import { SimClipResolve } from './simTypes'
 
 export type ClipClockState = {
   prevTime: number
@@ -25,7 +26,7 @@ export type ClipClockState = {
    * Optional HUD resolve override (e.g. AnimDatabase without loaded CSV → no-db).
    * Cleared each beginClipClockStep.
    */
-  resolveHint?: import('./simTypes').SimClipResolve
+  resolveHint?: SimClipResolve
   /** SkOneShotAnim: playing shot until progress hits end (cleared on deactivate). */
   oneShotRunning?: boolean
 }

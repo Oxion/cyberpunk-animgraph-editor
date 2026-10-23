@@ -51,4 +51,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeListener('window:maximized-changed', listener)
     }
   },
+
+  liveBridgeStart: () =>
+    ipcRenderer.invoke('live-bridge:start') as Promise<{ enabled: boolean; connected: boolean }>,
+  liveBridgeStop: () =>
+    ipcRenderer.invoke('live-bridge:stop') as Promise<{ enabled: boolean; connected: boolean }>,
+  liveBridgeStatus: () =>
+    ipcRenderer.invoke('live-bridge:status') as Promise<{ enabled: boolean; connected: boolean }>,
+
+  onLiveBridgeLine: (handler: (line: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, line: string) => {
+      handler(String(line ?? ''))
+    }
+    ipcRenderer.on('live-bridge:line', listener)
+    return () => {
+      ipcRenderer.removeListener('live-bridge:line', listener)
+    }
+  },
+
+  onLiveBridgeStatus: (handler: (status: { enabled: boolean; connected: boolean }) => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      status: { enabled: boolean; connected: boolean }
+    ) => {
+      handler(status)
+    }
+    ipcRenderer.on('live-bridge:status', listener)
+    return () => {
+      ipcRenderer.removeListener('live-bridge:status', listener)
+    }
+  },
 })

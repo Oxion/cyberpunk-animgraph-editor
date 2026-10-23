@@ -66,14 +66,14 @@ export function evalLookAtPose360Direction(
  */
 export function updateLookAtPose360(
   node: AnimgraphNode,
-  store: InstanceStore,
+  transientStore: InstanceStore,
   eyes: EyesLookAtCtx,
   dt: number,
   clipLibrary: ClipLibrary | null,
   board: SimInputBoard,
   readFloat: FloatLinkReader
 ): number {
-  const dyn = ensureLookAtPose360Dyn(store, node.HandleId)
+  const dyn = ensureLookAtPose360Dyn(transientStore, node.HandleId)
   const d = node.Data ?? {}
   const animName = readCName(d.animation)
   if (!animName || animName === 'None') {

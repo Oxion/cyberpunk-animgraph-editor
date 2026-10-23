@@ -1777,30 +1777,31 @@ const simRingHighlightFor = (smNodeId: string | undefined | null) => {
   const handleId =
     (node?.data?.originalNodeId as string | undefined) ??
     smNodeId
-  const snap =
-    (simOverlayRunnerId.value.trim()
-      ? simSnapshotForRunner(simOverlayRunnerId.value)
-      : undefined) ?? simSnapshotRef.value
-  const st = snap.sms[handleId]
-  if (!st) return null
+    
+  const runnerSnapshot = simSnapshotForRunner(simOverlayRunnerId.value)
+  if (!runnerSnapshot) return null
+
+  const simSmState = runnerSnapshot.update.simSmStateByHandleId[handleId]
+  if (!simSmState) return null
+
   const handles = data.handlesRegistry
   const eligibleEdges = new Set<string>()
-  for (const tid of st.eligibleTransitionIds) {
+  for (const tid of simSmState.eligibleTransitionIds) {
     const t = handles.get(tid)
     const to = Number(t?.Data?.targetStateIndex)
     if (Number.isFinite(to) && to >= 0) {
-      eligibleEdges.add(`${st.activeStateIndex}->${to}`)
+      eligibleEdges.add(`${simSmState.activeStateIndex}->${to}`)
     }
   }
   const firingTo =
-    st.isInTransition && st.targetStateIndex != null
-      ? st.targetStateIndex
+    simSmState.isInTransition && simSmState.targetStateIndex != null
+      ? simSmState.targetStateIndex
       : null
   return {
-    activeStateIndex: st.activeStateIndex,
+    activeStateIndex: simSmState.activeStateIndex,
     targetStateIndex: firingTo,
-    transitionProgress: st.isInTransition ? st.transitionProgress : undefined,
-    firingEdge: firingTo != null ? `${st.activeStateIndex}->${firingTo}` : null,
+    transitionProgress: simSmState.isInTransition ? simSmState.transitionProgress : undefined,
+    firingEdge: firingTo != null ? `${simSmState.activeStateIndex}->${firingTo}` : null,
     eligibleEdges,
   }
 }

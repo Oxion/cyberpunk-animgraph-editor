@@ -226,7 +226,7 @@
                 :model-value="row.diagramId"
                 :options="diagramSelectOptions"
                 :option-labels="DIAGRAM_OPTION_LABELS"
-                @update:model-value="(v) => onDiagramSlotSelect(row, String(v ?? ''))"
+                @update:model-value="(value) => onDiagramSlotSelect(row, value)"
               />
             </div>
           </div>
@@ -1457,12 +1457,12 @@ const diagramSlotRows = computed((): DiagramSlotRow[] => {
   return rows
 })
 
-function onDiagramSlotSelect(row: DiagramSlotRow, next: string) {
-  const diagramId = next.trim()
+function onDiagramSlotSelect(row: DiagramSlotRow, diagramId: string) {
+  const nextDiagramId = diagramId || null
   if (row.runnerId === simGetRootRunnerId()) {
-    simSetRunnerDiagramId(row.runnerId, diagramId)
+    simSetRunnerDiagramId(row.runnerId, nextDiagramId)
   } else {
-    simSetSlotDiagramId(row.parentRunnerId, row.slotName, diagramId)
+    simSetSlotDiagramId(row.parentRunnerId, row.slotName, nextDiagramId)
   }
   bumpDiagramSlots()
 }

@@ -1,4 +1,6 @@
-import type { SimNodeDelta, SimNodeState, SimSnapshot, SimStatus } from './simTypes'
+import { ClipClockState } from './clipClock'
+import { ClipLibrary } from './clipLibrary'
+import type { SimActiveClip, SimClipResolve, SimNodeDelta, SimNodeState, SimSnapshot } from './simTypes'
 
 /** Cap per Sample frame to keep HUD bounded. */
 export const SIM_SAMPLE_WARNINGS_MAX = 64
@@ -6,21 +8,20 @@ export const SIM_SAMPLE_WARNINGS_MAX = 64
 /** Cap per Update frame to keep HUD bounded. */
 export const SIM_UPDATE_WARNINGS_MAX = 64
 
-export function emptySimStatus(): SimStatus {
-  return { rootHandleId: null, clips: [] }
-}
-
 export function emptySimSnapshot(): SimSnapshot {
   return {
     time: 0,
     playing: false,
     speed: 1,
     poseGen: 0,
-    sms: {},
-    nodes: {},
-    nodeDelta: null,
-    status: emptySimStatus(),
-    poseStats: null,
+    update: {
+      rootHandleId: undefined,
+      clips: [],
+      simSmStateByHandleId: {},
+      simNodeStateByHandleId: {},
+      nodeDelta: undefined,
+      warnings: [],
+    },
   }
 }
 
@@ -40,9 +41,11 @@ export function simNodeStateEqual(a: SimNodeState, b: SimNodeState): boolean {
 }
 
 export function diffSimNodeStates(
-  prev: Record<string, SimNodeState>,
-  next: Record<string, SimNodeState>
-): SimNodeDelta {
+  next: Readonly<Record<string, SimNodeState>>,
+  prev?: Readonly<Record<string, SimNodeState>>,
+): SimNodeDelta | undefined {
+  if (!prev) return
+
   const changes: Record<string, SimNodeState> = {}
   const removed: string[] = []
   for (const id of Object.keys(next)) {
@@ -54,4 +57,48 @@ export function diffSimNodeStates(
     if (!(id in next)) removed.push(id)
   }
   return { changes, removed }
+}
+
+/** Classify SkAnim clip lookup for HUD (ok / empty / no-lib / missing / gated). */
+export function classifyClipResolve(
+  animName: string,
+  isWrapperActive: (name: string) => boolean,
+  clipLibrary?: ClipLibrary | null,
+): SimClipResolve {
+  if (!animName || animName === 'None') return 'empty'
+  if (!clipLibrary || clipLibrary.entryCount === 0) return 'no-lib'
+  if (clipLibrary.resolveClip(animName, isWrapperActive)) return 'ok'
+  if (clipLibrary.hasClipAnywhere(animName)) return 'gated'
+  return 'missing'
+}
+
+export function resolveSimActiveClips(
+   clipClocks: ReadonlyMap<string, ClipClockState>,
+   handleIdToSimNodeState: Readonly<Record<string, SimNodeState>>,
+   isWrapperActive: (name: string) => boolean,
+   clipLibrary?: ClipLibrary | null,
+): SimActiveClip[] {
+  const clips: SimActiveClip[] = []
+  for (const [handleId, clipClock] of clipClocks) {
+    if (!clipClock.stepped) continue
+
+    const simNodeStateWeight = handleIdToSimNodeState[handleId]?.weight
+    const progress = typeof simNodeStateWeight === 'number' && Number.isFinite(simNodeStateWeight)
+      ? simNodeStateWeight
+      : 0
+
+    const animName = clipClock.animName || 'None'
+    const simClipResolveResult = clipClock.resolveHint 
+      ?? classifyClipResolve(animName, isWrapperActive, clipLibrary)
+    
+    clips.push({
+      handleId: handleId,
+      animName,
+      time: simClipResolveResult === 'ok' ? clipClock.currTime : 0,
+      progress: simClipResolveResult === 'ok' ? progress : 0,
+      resolve: simClipResolveResult,
+    })
+  }
+
+  return clips
 }

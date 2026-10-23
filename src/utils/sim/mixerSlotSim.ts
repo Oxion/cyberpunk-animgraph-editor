@@ -54,7 +54,7 @@ import {
   type MixerSlotAnimEntry,
   type MixerSlotDyn,
 } from './mixerSlotDyn'
-import type { SampleCtx } from './sampleWalk'
+import { SampleCtx } from './SimGraphRunner.types'
 
 /** Local pool helpers — avoid circular import with sampleWalk. */
 function acquirePose(ctx: SampleCtx): Pose {

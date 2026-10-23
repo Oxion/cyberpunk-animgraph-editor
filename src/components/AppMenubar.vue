@@ -32,6 +32,7 @@ import { computed } from 'vue'
 import { isElectron } from '../utils/platform'
 import { isSettingsWindowOpen, toggleSettingsWindow } from '../stores/appWindows'
 import { hasProject } from '../stores/graphProject'
+import { simLiveBridgeActive, simStartLiveBridge, simStopLiveBridge } from '../stores/animgraphSim'
 import { selectedNodeRef } from '../stores/graphSession'
 import { commandShortcut } from '../stores/hotkeyBindings'
 import { canToggleAppTool, commandEnabled, whenEnabled } from '../stores/appContext'
@@ -101,6 +102,11 @@ const electronApp = isElectron()
 
 async function onQuit() {
   await window.electronAPI?.windowClose()
+}
+
+async function onToggleLiveBridge() {
+  if (simLiveBridgeActive.value) await simStopLiveBridge()
+  else await simStartLiveBridge()
 }
 </script>
 
@@ -381,6 +387,16 @@ async function onQuit() {
           <Waypoints class="size-3.5" />
           Simulation
           <Check v-if="simOpen" class="ml-auto size-3.5 opacity-80" />
+        </MenubarItem>
+        <MenubarItem
+          v-if="electronApp"
+          class="header-menu-item"
+          :disabled="!hasProject"
+          @select="onToggleLiveBridge"
+        >
+          <Network class="size-3.5" />
+          Live Bridge
+          <Check v-if="simLiveBridgeActive" class="ml-auto size-3.5 opacity-80" />
         </MenubarItem>
         <MenubarItem
           class="header-menu-item"

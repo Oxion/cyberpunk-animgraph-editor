@@ -23,7 +23,7 @@ export class InstanceStateDef<T, P = void> extends StateKey<Map<string, T>> {
 export class InstanceStore {
   private readonly _store = new TypedStore<Map<string, unknown>>()
 
-  buckets(): Iterator<Map<string, unknown>> {
+  buckets(): MapIterator<Map<string, unknown>> {
     return this._store.values()
   }
 

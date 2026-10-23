@@ -3,7 +3,7 @@
     <div class="flex shrink-0 flex-wrap items-center gap-2">
       <span class="text-[10px] uppercase tracking-wide text-muted-foreground">Runner</span>
       <SimRunnerSelect
-        v-model="selectedRunnerId"
+        v-model="selectedRunnerIdRef"
         trigger-class="h-6! w-[min(14rem,100%)]"
         trigger-title="Runner whose sim status to show"
         placeholder="Runner"
@@ -45,50 +45,54 @@
           {{ chip }}
         </span>
       </div>
-      <div
-        v-if="simSampleWarningsEnabled && snapshot.poseStats?.warnings?.length"
-        class="mt-1 border-t border-border/60 pt-1 font-data text-[10px] text-amber-400/90"
-      >
-        <p class="m-0 mb-0.5 text-[9px] uppercase tracking-wide text-muted-foreground/80">
-          Sample warnings ({{ snapshot.poseStats.warnings.length }})
-        </p>
-        <p
-          v-for="(w, i) in snapshot.poseStats.warnings"
-          :key="`s-${w.code}-${w.handleId}-${i}`"
-          class="m-0 truncate"
-          :title="w.message"
+      <template v-if="simUpdateWarningsEnabled">
+        <div
+          v-if="selectedRunnerSnapshotComputed.update.warnings.length"
+          class="mt-1 border-t border-border/60 pt-1 font-data text-[10px] text-amber-400/90"
         >
-          {{ w.message }}
-        </p>
-      </div>
-      <p
-        v-else-if="simSampleWarningsEnabled && snapshot.poseStats"
-        class="mt-1 border-t border-border/60 pt-1 text-[10px] text-muted-foreground/70"
-      >
-        No sample warnings this frame
-      </p>
-      <div
-        v-if="simUpdateWarningsEnabled && snapshot.poseStats?.updateWarnings?.length"
-        class="mt-1 border-t border-border/60 pt-1 font-data text-[10px] text-amber-400/90"
-      >
-        <p class="m-0 mb-0.5 text-[9px] uppercase tracking-wide text-muted-foreground/80">
-          Update warnings ({{ snapshot.poseStats.updateWarnings.length }})
-        </p>
+          <p class="m-0 mb-0.5 text-[9px] uppercase tracking-wide text-muted-foreground/80">
+            Update warnings ({{ selectedRunnerSnapshotComputed.update.warnings.length }})
+          </p>
+          <p
+            v-for="(w, i) in selectedRunnerSnapshotComputed.update.warnings"
+            :key="`u-${w.code}-${w.handleId}-${i}`"
+            class="m-0 truncate"
+            :title="w.message"
+          >
+            {{ w.message }}
+          </p>
+        </div>
         <p
-          v-for="(w, i) in snapshot.poseStats.updateWarnings"
-          :key="`u-${w.code}-${w.handleId}-${i}`"
-          class="m-0 truncate"
-          :title="w.message"
+          v-else
+          class="mt-1 border-t border-border/60 pt-1 text-[10px] text-muted-foreground/70"
         >
-          {{ w.message }}
+          No update warnings this frame
         </p>
-      </div>
-      <p
-        v-else-if="simUpdateWarningsEnabled && snapshot.poseStats"
-        class="mt-1 border-t border-border/60 pt-1 text-[10px] text-muted-foreground/70"
-      >
-        No update warnings this frame
-      </p>
+      </template>
+      <template v-if="simSampleWarningsEnabled">
+        <div
+          v-if="selectedRunnerSnapshotComputed.sample?.warnings.length"
+          class="mt-1 border-t border-border/60 pt-1 font-data text-[10px] text-amber-400/90"
+        >
+          <p class="m-0 mb-0.5 text-[9px] uppercase tracking-wide text-muted-foreground/80">
+            Sample warnings ({{ selectedRunnerSnapshotComputed.sample.warnings.length }})
+          </p>
+          <p
+            v-for="(w, i) in selectedRunnerSnapshotComputed.sample.warnings"
+            :key="`s-${w.code}-${w.handleId}-${i}`"
+            class="m-0 truncate"
+            :title="w.message"
+          >
+            {{ w.message }}
+          </p>
+        </div>
+        <p
+          v-else
+          class="mt-1 border-t border-border/60 pt-1 text-[10px] text-muted-foreground/70"
+        >
+          No sample warnings this frame
+        </p>
+      </template>
     </div>
   </div>
 </template>
@@ -109,12 +113,11 @@ import {
 import { emptySimSnapshot } from '../utils/sim/simSnapshot'
 import { SimInputBoard } from '../utils/sim/SimInputBoard'
 
-const selectedRunnerId = ref(simGetRootRunnerId())
+const selectedRunnerIdRef = ref(simGetRootRunnerId())
 
-const snapshot = computed(
-  () =>
-    simSnapshotsByRunner.value[selectedRunnerId.value] ?? emptySimSnapshot()
-)
+const selectedRunnerSnapshotComputed = computed(() => {
+  return simSnapshotsByRunner.value[selectedRunnerIdRef.value] ?? emptySimSnapshot()
+})
 
 type StatusRow = {
   key: string
@@ -127,16 +130,19 @@ type StatusRow = {
 
 const statusRows = computed((): StatusRow[] => {
   const rows: StatusRow[] = []
-  const st = snapshot.value.status
-  if (st?.rootHandleId) {
+
+  const snapshotUpdate = selectedRunnerSnapshotComputed.value.update
+
+  if (snapshotUpdate.rootHandleId) {
     rows.push({
       key: 'root',
       kind: 'root',
-      label: st.rootHandleId,
-      detail: st.rootHandleId,
+      label: snapshotUpdate.rootHandleId,
+      detail: snapshotUpdate.rootHandleId,
     })
   }
-  for (const c of st?.clips ?? []) {
+
+  for (const c of snapshotUpdate.clips) {
     const resolve = c.resolve ?? 'ok'
     let meta: string
     let tone: StatusRow['tone']
@@ -167,19 +173,24 @@ const statusRows = computed((): StatusRow[] => {
       detail: `${c.animName} @ ${c.handleId} (${resolve})`,
     })
   }
-  const nodes = snapshot.value.nodes
-  for (const [id, sm] of Object.entries(snapshot.value.sms)) {
-    if (!nodes[id]?.active) continue
-    const trans = sm.isInTransition
-      ? `→${sm.targetStateIndex ?? '?'} ${(sm.transitionProgress * 100).toFixed(0)}%`
+
+  const simNodeStateByHandleId = snapshotUpdate.simNodeStateByHandleId
+  const simSmStateByHandleId = snapshotUpdate.simSmStateByHandleId
+  for (const [id, simSmState] of Object.entries(simSmStateByHandleId)) {
+    if (!simNodeStateByHandleId[id]?.active) continue
+    
+    const trans = simSmState.isInTransition
+      ? `→${simSmState.targetStateIndex ?? '?'} ${(simSmState.transitionProgress * 100).toFixed(0)}%`
       : undefined
+    
     const bits: string[] = []
-    if (sm.eligibleTransitionIds.length) bits.push(`elig ${sm.eligibleTransitionIds.length}`)
-    if (sm.instantChainLength > 1) bits.push(`×${sm.instantChainLength}`)
+    if (simSmState.eligibleTransitionIds.length) bits.push(`elig ${simSmState.eligibleTransitionIds.length}`)
+    if (simSmState.instantChainLength > 1) bits.push(`×${simSmState.instantChainLength}`)
+    
     rows.push({
       key: `sm-${id}`,
       kind: 'sm',
-      label: `${id} · state ${sm.activeStateIndex}`,
+      label: `${id} · state ${simSmState.activeStateIndex}`,
       meta: [trans, bits.join(' ')].filter(Boolean).join(' · ') || undefined,
       detail: id,
     })

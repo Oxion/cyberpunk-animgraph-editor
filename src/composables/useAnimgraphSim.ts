@@ -34,7 +34,6 @@ import { SimClock } from '../utils/sim/SimClock'
 import {
   SimGraphRunner,
   collectGraphSlotNames,
-  type SimGraphSlotHost,
 } from '../utils/sim/SimGraphRunner'
 import { SimInputBoard } from '../utils/sim/SimInputBoard'
 import {
@@ -42,10 +41,10 @@ import {
   ZERO_VEC4,
   type SimVec4,
 } from '../utils/sim/evalAnimMathExpressionVector'
-import { collectDiscoveredInputs } from '../utils/sim/SimStateMachine'
 import type { SimSnapshot } from '../utils/sim/simTypes'
 import { emptySimSnapshot } from '../utils/sim/simSnapshot'
-import { isSimSampleLogEnabled } from '../utils/sim/simSampleLog'
+import { addFrameLogId, clearFrameLogIds, isSimSampleLogEnabled } from '../utils/sim/simSampleLog'
+import type { SimServiceEvent } from '../utils/sim/simServiceEvents'
 import { RigLibrary, type RigLibraryJson, type RigEntry, type RigEntryView } from '../utils/sim/rigResource'
 import {
   ClipPoseLibrary,
@@ -63,6 +62,8 @@ import {
   type DerivedPoseStats,
   type DerivedPoseStatsNeed,
 } from '../utils/sim/poseDerivedStats'
+import { SimGraphSampleSlotHost, SimGraphUpdateSlotHost } from '@/utils/sim/SimGraphRunner.types'
+import { discoverGraphInputs } from '@/utils/sim/discoverGraphInputs'
 
 function resolveRootDiagramId(ids: string[]): string | null {
   if (!ids.length) return null
@@ -155,7 +156,7 @@ export function rewriteRunnerSlotsDiagramIds(
   // Drop slot→child links whose child runner was removed.
   const keptRunnerIds = new Set(Object.keys(runnersOut))
   for (const entry of Object.values(runnersOut)) {
-    if (!entry.slotRunnerIds) continue
+    if (!entry || !entry.slotRunnerIds) continue
     const next: Record<string, string> = {}
     for (const [slot, childId] of Object.entries(entry.slotRunnerIds)) {
       const s = slot.trim()
@@ -414,20 +415,18 @@ export function useAnimgraphSim() {
 
   /**
    * Bind runner to a diagram, or destroy when empty (None).
-   * `diagramId` is only written inside `runner.bind`.
    */
-  const setRunnerDiagramId = (
+  const bindRunnerToDiagramId = (
     runnerId: string,
-    diagramId?: string | null,
-    opts?: { skipMaterialize?: boolean }
-  ): SimGraphRunner | null => {
+    diagramId?: string | null
+  ): SimGraphRunner | undefined => {
     const nextDiagramId = (diagramId ?? '').trim()
 
     if (!nextDiagramId) {
       if (runnerId === ROOT_RUNNER_ID) rootDetached = true
       destroyRunner(runnerId)
       bumpRunners()
-      return null
+      return
     }
 
     const nextDiagramData = getRenderData(nextDiagramId)
@@ -438,18 +437,26 @@ export function useAnimgraphSim() {
       if (runnerId === ROOT_RUNNER_ID) rootDetached = true
       destroyRunner(runnerId)
       bumpRunners()
-      return null
+      return
     }
 
     if (runnerId === ROOT_RUNNER_ID) rootDetached = false
+    
     const simGraphRunner = ensureRunner(runnerId)
+    if (simGraphRunner.diagramId !== nextDiagramId) {
+      for (const childId of [...simGraphRunner.slotRunnerIds.values()]) {
+        destroyRunner(childId)
+      }
+      simGraphRunner.slotInitialized.clear()
+      simGraphRunner.slotDiagramIds.clear()
+      simGraphRunner.slotRunnerIds.clear()
+    }
+
     // Libraries/rig before bind so compile / StaticSwitch see them.
     syncRunnerResources(simGraphRunner)
     simGraphRunner.bind(nextDiagramId, nextDiagramData, board.value)
-    if (!opts?.skipMaterialize) {
-      materializeSlotTree(runnerId)
-    }
     bumpRunners()
+
     return simGraphRunner
   }
 
@@ -458,65 +465,69 @@ export function useAnimgraphSim() {
    * Initialized None → destroy child, clear slotRunnerId, return null.
    */
   const ensureSlotRunner = (
-    parentSimGraphRunner: SimGraphRunner,
+    simGraphRunner: SimGraphRunner,
     slotName: string
-  ): string | null => {
-    if (!slotName || slotName === 'None') return null
+  ): string | undefined => {
+    if (!slotName || slotName === 'None') return
 
-    let diagramId = parentSimGraphRunner.getSlotDiagramId(slotName) ?? ''
-    if (!diagramId && !parentSimGraphRunner.isSlotInitialized(slotName)) {
-      const matched = findDiagramIdBySlotName(listDiagramIds.value, slotName)
-      if (matched) {
-        diagramId = matched
-        parentSimGraphRunner.setSlotDiagramId(slotName, matched)
+    let slotDiagramId = simGraphRunner.getSlotDiagramId(slotName) ?? ''
+    if (!slotDiagramId && !simGraphRunner.isSlotInitialized(slotName)) {
+      const slotNamedDiagramId = findDiagramIdBySlotName(listDiagramIds.value, slotName)
+      if (slotNamedDiagramId) {
+        slotDiagramId = slotNamedDiagramId
+        simGraphRunner.setSlotDiagramId(slotName, slotNamedDiagramId)
       }
     }
 
     // Explicit / resolved None — no live child.
-    if (!diagramId) {
-      if (parentSimGraphRunner.isSlotInitialized(slotName)) {
-        const slotSimGraphRunner = parentSimGraphRunner.getSlotRunnerId(slotName)
+    if (!slotDiagramId) {
+      if (simGraphRunner.isSlotInitialized(slotName)) {
+        const slotSimGraphRunner = simGraphRunner.getSlotRunnerId(slotName)
         if (slotSimGraphRunner) {
           destroyRunner(slotSimGraphRunner)
-          parentSimGraphRunner.setSlotRunnerId(slotName, null)
+          simGraphRunner.setSlotRunnerId(slotName, null)
         }
       }
-      return null
+      return
     }
 
-    let slotSimGraphRunnerId = parentSimGraphRunner.getSlotRunnerId(slotName)
+    let slotSimGraphRunnerId = simGraphRunner.getSlotRunnerId(slotName)
     if (!slotSimGraphRunnerId) {
       slotSimGraphRunnerId = allocSlotRunnerId()
-      parentSimGraphRunner.setSlotRunnerId(slotName, slotSimGraphRunnerId)
     }
 
-    const child = runners.get(slotSimGraphRunnerId)
-    if (!child || child.diagramId !== diagramId) {
-      // Never cascade materialize here — rebind/BFS or materializeSlotTree owns that.
-      setRunnerDiagramId(slotSimGraphRunnerId, diagramId, { skipMaterialize: true })
+    const slotSimGraphRunner = runners.get(slotSimGraphRunnerId)
+    if (!slotSimGraphRunner || slotSimGraphRunner.diagramId !== slotDiagramId) {
+      if (bindRunnerToDiagramId(slotSimGraphRunnerId, slotDiagramId)) {
+        simGraphRunner.setSlotRunnerId(slotName, slotSimGraphRunnerId)
+        return slotSimGraphRunnerId
+      } else {
+        return undefined
+      }
     }
-    return runners.has(slotSimGraphRunnerId) ? slotSimGraphRunnerId : null
+
+    return slotSimGraphRunner.runnerId
   }
 
   /** Eagerly create child runners for GraphSlot names on parent's bound diagram (one level). */
-  const materializeSlotRunners = (parentId: string) => {
-    const parentSimGraphRunner = runners.get(parentId)
-    if (!parentSimGraphRunner?.diagramId) return
+  const materializeSlotRunners = (runnerId: string) => {
+    const simGraphRunner = runners.get(runnerId)
+    if (!simGraphRunner || !simGraphRunner.diagramId) return
 
-    const diagramData = getRenderData(parentSimGraphRunner.diagramId)
+    const diagramData = getRenderData(simGraphRunner.diagramId)
     const diagramGraphSlotNames = collectGraphSlotNames(diagramData?.handlesRegistry)
-    const known = new Set(diagramGraphSlotNames)
+    const knownDiagramSlotNamesSet = new Set(diagramGraphSlotNames)
 
-    for (const name of diagramGraphSlotNames) {
-      ensureSlotRunner(parentSimGraphRunner, name)
+    for (const diagramSlotName of diagramGraphSlotNames) {
+      ensureSlotRunner(simGraphRunner, diagramSlotName)
     }
 
     let pruned = false
-    for (const [slotName, childId] of [...parentSimGraphRunner.slotRunnerIds.entries()]) {
-      if (known.has(slotName)) continue
-      if (childId) destroyRunner(childId)
-      parentSimGraphRunner.setSlotRunnerId(slotName, null)
-      parentSimGraphRunner.forgetSlotDiagram(slotName)
+    for (const [slotName, slotRunnerId] of [...simGraphRunner.slotRunnerIds.entries()]) {
+      if (knownDiagramSlotNamesSet.has(slotName)) continue
+      if (slotRunnerId) destroyRunner(slotRunnerId)
+      simGraphRunner.setSlotRunnerId(slotName, null)
+      simGraphRunner.forgetSlotDiagram(slotName)
       pruned = true
     }
     if (pruned || diagramGraphSlotNames.length) bumpRunners()
@@ -524,17 +535,22 @@ export function useAnimgraphSim() {
 
   /** BFS materialize from a runner (cycle-safe). */
   const materializeSlotTree = (startId: string) => {
-    const visited = new Set<string>()
-    const queue = [startId]
-    while (queue.length) {
-      const id = queue.shift()!
-      if (visited.has(id)) continue
-      visited.add(id)
-      materializeSlotRunners(id)
-      const r = runners.get(id)
-      if (!r) continue
-      for (const childId of r.slotRunnerIds.values()) {
-        if (childId && !visited.has(childId)) queue.push(childId)
+    const visitedRunnerIdsSet = new Set<string>()
+    const runnerIdsQueue = [startId]
+    while (runnerIdsQueue.length) {
+      const runnerId = runnerIdsQueue.shift()!
+      if (visitedRunnerIdsSet.has(runnerId)) continue
+      visitedRunnerIdsSet.add(runnerId)
+
+      materializeSlotRunners(runnerId)
+      
+      const simGraphRunner = runners.get(runnerId)
+      if (!simGraphRunner) continue
+
+      for (const slotRunnerId of simGraphRunner.slotRunnerIds.values()) {
+        if (slotRunnerId && !visitedRunnerIdsSet.has(slotRunnerId)) {
+          runnerIdsQueue.push(slotRunnerId)
+        }
       }
     }
   }
@@ -565,33 +581,37 @@ export function useAnimgraphSim() {
   }
 
   const setSlotDiagramId = (
-    parentRunnerId: string,
+    runnerId: string,
     slotName: string,
-    diagramId: string
+    diagramId: string | null
   ) => {
-    const parentSimGraphRunner = runners.get(parentRunnerId)
-    if (!parentSimGraphRunner) {
+    const simGraphRunner = runners.get(runnerId)
+    if (!simGraphRunner) {
       console.warn(
-        `[sim] setSlotDiagramId: missing parent runner "${parentRunnerId}"`
+        `[sim] setSlotDiagramId: missing parent runner "${runnerId}"`
       )
       return
     }
-    const want = slotName.trim()
-    if (!want || want === 'None') return
 
-    const next = diagramId.trim()
-    // Marks initialized; empty next = explicit None (passthrough, no auto-default).
-    parentSimGraphRunner.setSlotDiagramId(want, next || null)
-    if (!next) {
-      const existing = parentSimGraphRunner.getSlotRunnerId(want)
-      if (existing) destroyRunner(existing)
-      parentSimGraphRunner.setSlotRunnerId(want, null)
+    const _slotName = slotName.trim()
+    if (!_slotName || _slotName === 'None') return
+
+    simGraphRunner.setSlotDiagramId(_slotName, diagramId || null)
+    if (!diagramId) {
+      const slotSimGraphRunnerId = simGraphRunner.getSlotRunnerId(_slotName)
+      if (slotSimGraphRunnerId) destroyRunner(slotSimGraphRunnerId)
+      simGraphRunner.setSlotRunnerId(_slotName, null)
       bumpRunners()
       return
     }
-    const childId = ensureSlotRunner(parentSimGraphRunner, want)
-    if (childId) setRunnerDiagramId(childId, next)
-    else bumpRunners()
+
+    const slotSimGraphRunnerId = ensureSlotRunner(simGraphRunner, _slotName)
+    if (slotSimGraphRunnerId) {
+      bindRunnerToDiagramId(slotSimGraphRunnerId, diagramId)
+      materializeSlotTree(slotSimGraphRunnerId)
+    } else {
+      bumpRunners()
+    }
   }
 
   /** Bound runners only (diagram set) — for Skeleton / Status pickers. */
@@ -762,7 +782,7 @@ export function useAnimgraphSim() {
     for (const id of listDiagramIds.value) {
       const handles = getRenderData(id)?.handlesRegistry
       if (!handles) continue
-      const fromGraph = collectDiscoveredInputs(handles)
+      const fromGraph = discoverGraphInputs(handles)
       for (const f of fromGraph.features) {
         const k = `${f.feature}\0${f.property}`.toLowerCase()
         if (featSeen.has(k)) continue
@@ -983,170 +1003,297 @@ export function useAnimgraphSim() {
     }
   }
 
-  /** Nested GraphSlot poses from last publish (survives until next publish). */
-  let lastNestedPoseBySlot = new Map<string, Pose>()
-
-  const makeSlotHost = (
-    parentRunnerId: string,
-    snapsByRunner: Record<string, SimSnapshot>,
-    dt: number,
-    nestedPoseBySlot: Map<string, Pose>,
+  const updateRunner = (
+    runner: SimGraphRunner,
     poseGen: number,
-    rawDt = dt
-  ): SimGraphSlotHost => ({
-    stepNested(slotName, parentPoseUpdate, parentPoseSample) {
-      const parentSimGraphRunner = runners.get(parentRunnerId)
-      if (!parentSimGraphRunner) {
-        console.warn(
-          `[sim] stepNested: missing parent runner "${parentRunnerId}" (slot="${slotName}")`
-        )
-        return null
-      }
-      
-      const parentSimGraphRunnerSlotDiagramId = parentSimGraphRunner.getSlotDiagramId(slotName)
-      if (parentSimGraphRunner.isSlotInitialized(slotName) && !parentSimGraphRunnerSlotDiagramId) {
-        // Uninitialized / explicit None → passthrough (do not step a child graph).
-        return null
-      }
-
-      const childId = ensureSlotRunner(parentSimGraphRunner, slotName)
-      if (!childId) return null
-      if (nestStack.includes(childId)) return null
-      const runner = runners.get(childId)
-      if (!runner?.diagramId || !getRenderData(runner.diagramId)) return null
-      // Share LookAt sample-context fields with parent (engine one AnimNodeSampleContext).
-      runner.eyesLookAtEnabled = parentSimGraphRunner.eyesLookAtEnabled
-      runner.entityLocalToWorld = parentSimGraphRunner.entityLocalToWorld
-      runner.parentObjectLocalToWorld = parentSimGraphRunner.parentObjectLocalToWorld
-      nestStack.push(childId)
-      try {
-        const snap = runner.step(
-          dt,
-          board.value,
-          clock.value.time,
-          clock.value.playing,
-          clock.value.speed,
-          {
-            endBoardFrame: false,
-            slotHost: makeSlotHost(
-              childId,
-              snapsByRunner,
-              dt,
-              nestedPoseBySlot,
-              poseGen,
-              rawDt
-            ),
-            parentPoseUpdate,
-            parentPoseSample,
-            poseGen,
-            rawDt,
-          }
-        )
-        parentSimGraphRunner.eyesLookAtEnabled = runner.eyesLookAtEnabled
-        snapsByRunner[childId] = snap
-        const pose = runner.getSampledPose()
-        if (pose) {
-          nestedPoseBySlot.set(slotName, pose)
-          const lower = slotName.trim().toLowerCase()
-          if (lower && lower !== slotName) nestedPoseBySlot.set(lower, pose)
-        }
-        return {
-          diagramId: runner.diagramId,
-          snap,
-          inertialization: {
-            isInertializationRequested:
-              runner.inertializationRequest.isInertializationRequested,
-            inertializationDuration:
-              runner.inertializationRequest.inertializationDuration,
-          },
-          keepFullUpdate: runner.lastKeepFullUpdate,
-        }
-      } finally {
-        nestStack.pop()
-      }
-    },
-    getNestedPose(slotName) {
-      const want = slotName.trim()
-      if (!want || want === 'None') return null
-      // Only poses written by stepNested this frame (never stale unbound sampleOut).
-      return (
-        nestedPoseBySlot.get(want) ??
-        nestedPoseBySlot.get(want.toLowerCase()) ??
-        null
-      )
-    },
-  })
-
-  const stepRunner = (
-    runnerId: string,
     dt: number,
-    slotHost: SimGraphSlotHost,
-    endBoardFrame: boolean,
-    poseGen: number,
-    rawDt: number
+    rawDt: number,
+    slotHost: SimGraphUpdateSlotHost,
   ): SimSnapshot => {
-    const runner = runners.get(runnerId)
-    if (!runner?.diagramId) {
-      throw new Error(`[sim] stepRunner: missing bound runner "${runnerId}"`)
-    }
-    nestStack.push(runnerId)
+    nestStack.push(runner.runnerId)
     try {
-      return runner.step(dt, board.value, clock.value.time, clock.value.playing, clock.value.speed, {
-        endBoardFrame,
-        slotHost,
+      return runner.update({
         poseGen,
+        dt,
         rawDt,
+        playing: clock.value.playing,
+        time: clock.value.time,
+        speed: clock.value.speed,
+        board: board.value,
+        slotHost,
       })
     } finally {
       nestStack.pop()
     }
   }
 
+  const sampleRunner = (
+    runner: SimGraphRunner,
+    poseGen: number,
+    dt: number,
+    rawDt: number,
+    slotHost: SimGraphSampleSlotHost,
+  ): Pose | undefined => {
+    nestStack.push(runner.runnerId)
+    try {
+      return runner.sample({
+        poseGen,
+        dt,
+        rawDt,
+        playing: clock.value.playing,
+        time: clock.value.time,
+        speed: clock.value.speed,
+        board: board.value,
+        slotHost,
+      })
+    } finally {
+      nestStack.pop()
+    }
+  }
+
+  const makeSimGraphUpdateSlotHost = (
+    simGraphRunnerId: string,
+    poseGen: number,
+    dt: number,
+    rawDt: number,
+    simGraphRunnerIdToSimSnapshot: Record<string, SimSnapshot>,
+    updateInput?: SimGraphUpdateSlotHost['updateInput'],
+  ): SimGraphUpdateSlotHost => {
+    return {
+      updateNested(slotName, updateInput) {
+        const simGraphRunner = runners.get(simGraphRunnerId)
+        if (!simGraphRunner) {
+          console.warn(
+            `[sim] sampleNested (slot="${slotName}") missing runner "${simGraphRunnerId}"`
+          )
+          return
+        }
+
+        const simGraphRunnerSlotDiagramId = simGraphRunner.getSlotDiagramId(slotName)
+        if (simGraphRunner.isSlotInitialized(slotName) && !simGraphRunnerSlotDiagramId) {
+          // Explicit None → passthrough (do not step a child graph).
+          return
+        }
+
+        const slotSimGraphRunnerId = ensureSlotRunner(simGraphRunner, slotName)
+        if (!slotSimGraphRunnerId || nestStack.includes(slotSimGraphRunnerId)) return
+        
+        const slotSimGraphRunner = runners.get(slotSimGraphRunnerId)
+        if (!slotSimGraphRunner || !slotSimGraphRunner.diagramId) {
+          console.warn('[sim] sampleNested: missing slot runner or runner is not bound to a diagram')
+          return
+        }
+  
+        // @TODO: code smell
+        // Share LookAt sample-context fields with parent (engine one AnimNodeSampleContext).
+        slotSimGraphRunner.eyesLookAtEnabled = simGraphRunner.eyesLookAtEnabled
+        slotSimGraphRunner.entityLocalToWorld = simGraphRunner.entityLocalToWorld
+        slotSimGraphRunner.parentObjectLocalToWorld = simGraphRunner.parentObjectLocalToWorld
+        
+        const snapshot = updateRunner(
+          slotSimGraphRunner,
+          poseGen,
+          dt,
+          rawDt,
+          makeSimGraphUpdateSlotHost(
+            slotSimGraphRunnerId, 
+            poseGen, 
+            dt, 
+            rawDt, 
+            simGraphRunnerIdToSimSnapshot, 
+            updateInput
+          ),
+        )
+
+        // @TODO: code smell
+        simGraphRunner.eyesLookAtEnabled = slotSimGraphRunner.eyesLookAtEnabled
+
+        simGraphRunnerIdToSimSnapshot[slotSimGraphRunnerId] = snapshot
+
+        return {
+          diagramId: slotSimGraphRunner.diagramId,
+          snap: snapshot,
+          inertialization: {
+            isInertializationRequested:
+              slotSimGraphRunner.inertializationRequest.isInertializationRequested,
+            inertializationDuration:
+            slotSimGraphRunner.inertializationRequest.inertializationDuration,
+          },
+          keepFullUpdate: slotSimGraphRunner.lastKeepFullUpdate,
+        }
+      },
+      updateInput,
+    }
+  }
+
+  const makeSimGraphSampleSlotHost = (
+    simGraphRunnerId: string,
+    poseGen: number,
+    dt: number,
+    rawDt: number,
+    sampleInput?: SimGraphSampleSlotHost['sampleInput'],
+  ): SimGraphSampleSlotHost => {
+    return {
+      sampleNested(slotName, sampleInput) {
+        const simGraphRunner = runners.get(simGraphRunnerId)
+        if (!simGraphRunner) {
+          console.warn(
+            `[sim] sampleNested (slot="${slotName}") missing runner "${simGraphRunnerId}"`
+          )
+          return
+        }
+
+        const simGraphRunnerSlotDiagramId = simGraphRunner.getSlotDiagramId(slotName)
+        if (simGraphRunner.isSlotInitialized(slotName) && !simGraphRunnerSlotDiagramId) {
+          // Explicit None → passthrough (do not step a child graph).
+          return
+        }
+
+        const slotSimGraphRunnerId = ensureSlotRunner(simGraphRunner, slotName)
+        if (!slotSimGraphRunnerId || nestStack.includes(slotSimGraphRunnerId)) return
+        
+        const slotSimGraphRunner = runners.get(slotSimGraphRunnerId)
+        if (!slotSimGraphRunner || !slotSimGraphRunner.diagramId) {
+          console.warn('[sim] sampleNested: missing slot runner or runner is not bound to a diagram')
+          return
+        }
+
+        // @TODO: code smell
+        slotSimGraphRunner.eyesLookAtEnabled = simGraphRunner.eyesLookAtEnabled
+        slotSimGraphRunner.entityLocalToWorld = simGraphRunner.entityLocalToWorld
+        slotSimGraphRunner.parentObjectLocalToWorld = simGraphRunner.parentObjectLocalToWorld
+
+        return sampleRunner(
+          slotSimGraphRunner,
+          poseGen,
+          dt,
+          rawDt,
+          makeSimGraphSampleSlotHost(slotSimGraphRunnerId, poseGen, dt, rawDt, sampleInput),
+        )
+      },
+      sampleInput,
+    }
+  }
+
+  /** Live bridge: game `op:tick` drives publish (not raf). Enter via startLiveBridge before lines. */
+  const liveBridgeActive = ref(false)
+
+  const setLiveBridgeActive = (on: boolean) => {
+    if (on === liveBridgeActive.value) {
+      syncLoop()
+      return
+    }
+    liveBridgeActive.value = on
+    if (on) {
+      // Clean slate before any game tick / sticky drafts.
+      clock.value.reset()
+      board.value.resetDynamics()
+      for (const runner of runners.values()) runner.reset()
+      featureDrafts.value = {}
+      vectorFeatureDrafts.value = {}
+      quatFeatureDrafts.value = {}
+      boolFeatureDrafts.value = {}
+      stringFeatureDrafts.value = {}
+      floatVarDrafts.value = {}
+      vectorVarDrafts.value = {}
+      quatVarDrafts.value = {}
+      boolVarDrafts.value = {}
+      intVarDrafts.value = {}
+      tagValueDrafts.value = {}
+      entityTagDrafts.value = {}
+      wrapperWeightDrafts.value = {}
+      active.value = true
+      clock.value.play()
+      syncPlaying()
+      publish(0)
+    } else {
+      clock.value.pause()
+      syncPlaying()
+    }
+    syncLoop()
+  }
+
+  const startLiveBridge = async () => {
+    setLiveBridgeActive(true)
+    return (await window.electronAPI?.liveBridgeStart()) ?? {
+      enabled: false,
+      connected: false,
+    }
+  }
+
+  const stopLiveBridge = async () => {
+    const status = (await window.electronAPI?.liveBridgeStop()) ?? {
+      enabled: false,
+      connected: false,
+    }
+    setLiveBridgeActive(false)
+    return status
+  }
+
   const publish = (dt: number, rawDt = dt) => {
     if (!active.value) return
 
     applyDraftsToBoard()
-    
+
     poseGenCounter += 1
     const poseGen = poseGenCounter
 
     const simGraphRunnerIdToSimSnapshot: Record<string, SimSnapshot> = {}
 
-    lastNestedPoseBySlot = new Map()
-    let root = runners.get(ROOT_RUNNER_ID)
-    if (!root && !rootDetached) {
-      const rootDiagram = resolveRootDiagramId(listDiagramIds.value)
-      if (rootDiagram) root = setRunnerDiagramId(ROOT_RUNNER_ID, rootDiagram) ?? undefined
+    let rootSimGraphRunner = runners.get(ROOT_RUNNER_ID)
+    if (!rootSimGraphRunner && !rootDetached) {
+      const rootDiagramId = resolveRootDiagramId(listDiagramIds.value)
+      if (rootDiagramId) {
+        rootSimGraphRunner = bindRunnerToDiagramId(ROOT_RUNNER_ID, rootDiagramId)
+        materializeSlotTree(ROOT_RUNNER_ID)
+      }
     }
-    if (!root?.diagramId) {
+    if (!rootSimGraphRunner) {
+      // Unable to resolve root runner
       board.value.endFrame()
       snapshotsByRunner.value = simGraphRunnerIdToSimSnapshot
       return
     }
 
-    const slotHost = makeSlotHost(
-      ROOT_RUNNER_ID,
-      simGraphRunnerIdToSimSnapshot,
-      dt,
-      lastNestedPoseBySlot,
+    if (__ENABLE_SIM_DEBUG__) {
+      if (board.value.externalEvents.has("DoubleJump")) {
+        addFrameLogId(`DoubleJump`)
+      }
+    }
+
+    simGraphRunnerIdToSimSnapshot[ROOT_RUNNER_ID] = updateRunner(
+      rootSimGraphRunner,
       poseGen,
-      rawDt
+      dt,
+      rawDt,
+      makeSimGraphUpdateSlotHost(
+        ROOT_RUNNER_ID, 
+        poseGen, 
+        dt, 
+        rawDt, 
+        simGraphRunnerIdToSimSnapshot
+      ),
     )
 
-    // Only root Update; slotted diagrams tick solely when GraphSlot is on the active path.
-    if (getRenderData(root.diagramId)) {
-      simGraphRunnerIdToSimSnapshot[ROOT_RUNNER_ID] = stepRunner(
-        ROOT_RUNNER_ID,
-        dt,
-        slotHost,
-        false,
-        poseGen,
-        rawDt
-      )
-    }
+    sampleRunner(
+      rootSimGraphRunner,
+      poseGen,
+      dt,
+      rawDt,
+      makeSimGraphSampleSlotHost(
+        ROOT_RUNNER_ID, 
+        poseGen, 
+        dt, 
+        rawDt, 
+      ),
+    )
 
     board.value.endFrame()
     snapshotsByRunner.value = simGraphRunnerIdToSimSnapshot
+
+    if (__ENABLE_SIM_DEBUG__) {
+      clearFrameLogIds()
+    }
   }
 
   const stopLoop = () => {
@@ -1173,6 +1320,12 @@ export function useAnimgraphSim() {
 
   const syncLoop = () => {
     syncPlaying()
+    // Live bridge: game sends op:tick — do not free-run raf (sticky deltas).
+    if (liveBridgeActive.value) {
+      enabled.value = active.value
+      stopLoop()
+      return
+    }
     const want = active.value && clock.value.playing
     enabled.value = want
     if (!want) {
@@ -1319,6 +1472,7 @@ export function useAnimgraphSim() {
     else activate()
   }
 
+  // @TODO decouple from snapshot
   const setSpeed = (s: number) => {
     clock.value.setSpeed(s)
     const nextSnaps: Record<string, SimSnapshot> = { ...snapshotsByRunner.value }
@@ -1326,7 +1480,6 @@ export function useAnimgraphSim() {
       nextSnaps[id] = {
         ...snap,
         speed: clock.value.speed,
-        nodeDelta: snap.nodeDelta ? { changes: {}, removed: [] } : null,
       }
     }
     snapshotsByRunner.value = nextSnaps
@@ -2097,8 +2250,8 @@ export function useAnimgraphSim() {
     for (const id of [...runners.keys()]) destroyRunner(id)
     nextSlotRunnerSeq = 1
     rootDetached = false
-    const ids = listDiagramIds.value
-    const idSet = new Set(ids)
+    const projectDiagramIds = listDiagramIds.value
+    const projectDiagramIdsSet = new Set(projectDiagramIds)
 
     if (cfg?.rootDetached === true) {
       rootDetached = true
@@ -2106,101 +2259,116 @@ export function useAnimgraphSim() {
       return
     }
 
-    // Legacy: empty diagramId on root entry → rootDetached.
-    const legacyRootEntry =
-      cfg?.runners && typeof cfg.runners === 'object'
-        ? cfg.runners[ROOT_RUNNER_ID] ??
-          (typeof cfg.rootRunnerId === 'string'
-            ? cfg.runners[cfg.rootRunnerId.trim()]
-            : undefined)
-        : undefined
-    if (
-      legacyRootEntry &&
-      typeof legacyRootEntry.diagramId === 'string' &&
-      !legacyRootEntry.diagramId.trim()
-    ) {
-      rootDetached = true
-      bumpRunners()
-      return
-    }
-
     if (!cfg?.runners || typeof cfg.runners !== 'object') {
-      const rootDiag = resolveRootDiagramId(ids)
-      if (rootDiag) setRunnerDiagramId(ROOT_RUNNER_ID, rootDiag)
-      bumpRunners()
+      const rootDiagramId = resolveRootDiagramId(projectDiagramIds)
+      if (rootDiagramId) {
+        bindRunnerToDiagramId(ROOT_RUNNER_ID, rootDiagramId)
+        materializeSlotTree(ROOT_RUNNER_ID)
+      }
       return
     }
 
-    const rootEntry =
-      cfg.runners[ROOT_RUNNER_ID] ??
-      (typeof cfg.rootRunnerId === 'string' && cfg.runners[cfg.rootRunnerId.trim()]
-        ? cfg.runners[cfg.rootRunnerId.trim()]
-        : undefined)
+    const rootSimGraphRunnerId = cfg.rootRunnerId && typeof cfg.rootRunnerId === 'string'
+      ? cfg.rootRunnerId.trim()
+      : ROOT_RUNNER_ID
+
+    const rootEntry = cfg.runners[rootSimGraphRunnerId]
+    const rootEntryDiagramId = rootEntry?.diagramId
+    if (!rootEntry || 
+      !rootEntryDiagramId || typeof rootEntryDiagramId !== 'string' || 
+      !projectDiagramIds.includes(rootEntryDiagramId)
+    ) {
+      const rootDiagramId = resolveRootDiagramId(projectDiagramIds)
+      if (rootDiagramId) {
+        bindRunnerToDiagramId(ROOT_RUNNER_ID, rootDiagramId)
+        materializeSlotTree(ROOT_RUNNER_ID)
+      }
+      return
+    }
+    
 
     const rootDiagRaw =
       typeof rootEntry?.diagramId === 'string' ? rootEntry.diagramId.trim() : ''
     const rootDiag =
-      rootDiagRaw && idSet.has(rootDiagRaw)
+      rootDiagRaw && projectDiagramIdsSet.has(rootDiagRaw)
         ? rootDiagRaw
-        : resolveRootDiagramId(ids) ?? ''
+        : resolveRootDiagramId(projectDiagramIds) ?? ''
     if (!rootDiag) {
       rootDetached = true
       bumpRunners()
       return
     }
 
-    setRunnerDiagramId(ROOT_RUNNER_ID, rootDiag, { skipMaterialize: true })
-    const root = runners.get(ROOT_RUNNER_ID)
-    if (!root) {
-      bumpRunners()
+    const rootSimGraphRunner = bindRunnerToDiagramId(ROOT_RUNNER_ID, rootEntryDiagramId)
+    if (!rootSimGraphRunner) {
       return
     }
 
     // Apply slot topology onto bound runners (BFS by saved entries).
-    const applySlotsToRunner = (
+    const applySimRunnerSlotsConfigEntry = (
       runnerId: string,
       entry: NonNullable<SimRunnerSlotsConfigJson['runners']>[string]
     ) => {
-      const r = runners.get(runnerId)
-      if (!r || !entry) return
+      const simGraphRunner = runners.get(runnerId)
+      if (!simGraphRunner || !entry) return
+
       if (entry.slotDiagramIds && typeof entry.slotDiagramIds === 'object') {
-        for (const [slot, diag] of Object.entries(entry.slotDiagramIds)) {
-          const s = slot.trim()
-          if (!s) continue
-          const d = typeof diag === 'string' ? diag.trim() : ''
-          if (!d || !idSet.has(d)) continue
-          r.setSlotDiagramId(s, d)
+        for (const [slotName, diagramId] of Object.entries(entry.slotDiagramIds)) {
+          const _slotName = slotName.trim()
+          if (!_slotName) continue
+          
+          const _diagramId = typeof diagramId === 'string' ? diagramId.trim() : undefined
+          if (!_diagramId || !projectDiagramIdsSet.has(_diagramId)) continue
+
+          simGraphRunner.setSlotDiagramId(_slotName, _diagramId)
         }
       }
+
       if (Array.isArray(entry.slotInitialized)) {
-        for (const slot of entry.slotInitialized) {
-          const s = typeof slot === 'string' ? slot.trim() : ''
-          if (!s) continue
-          if (!r.isSlotInitialized(s)) r.setSlotDiagramId(s, null)
+        for (const initializedSlotName of entry.slotInitialized) {
+          const _initializedSlotName = typeof initializedSlotName === 'string' 
+            ? initializedSlotName.trim() 
+            : undefined
+          if (!_initializedSlotName) continue
+
+          if (!simGraphRunner.isSlotInitialized(_initializedSlotName)) {
+            simGraphRunner.setSlotDiagramId(_initializedSlotName, null)
+          }
         }
       }
+
       if (entry.slotRunnerIds && typeof entry.slotRunnerIds === 'object') {
-        for (const [slot, childId] of Object.entries(entry.slotRunnerIds)) {
-          const s = slot.trim()
-          const c = typeof childId === 'string' ? childId.trim() : ''
-          if (!s || !c) continue
-          const childEntry = cfg!.runners![c]
-          const childDiag =
-            typeof childEntry?.diagramId === 'string' ? childEntry.diagramId.trim() : ''
-          if (!childDiag || !idSet.has(childDiag)) continue
-          r.setSlotRunnerId(s, c)
-          const m = /^s(\d+)$/.exec(c)
+        for (const [slotName, slotSimGraphRunnerId] of Object.entries(entry.slotRunnerIds)) {
+          const _slotName = slotName.trim()
+          const _slotSimGraphRunnerId = typeof slotSimGraphRunnerId === 'string' 
+            ? slotSimGraphRunnerId.trim() 
+            : undefined
+          if (!_slotName || !_slotSimGraphRunnerId) continue
+
+          const slotRunnerEntry = cfg.runners[_slotSimGraphRunnerId]
+          if (!slotRunnerEntry) continue
+
+          const slotRunnerEntryDiagramId = typeof slotRunnerEntry.diagramId === 'string' 
+            ? slotRunnerEntry.diagramId.trim() 
+            : undefined
+          if (!slotRunnerEntryDiagramId || !projectDiagramIdsSet.has(slotRunnerEntryDiagramId)) continue
+
+          // @TODO not stable, use dedi
+          const m = /^s(\d+)$/.exec(_slotSimGraphRunnerId)
           if (m) {
             const n = Number(m[1])
             if (Number.isFinite(n) && n >= nextSlotRunnerSeq) nextSlotRunnerSeq = n + 1
           }
-          setRunnerDiagramId(c, childDiag, { skipMaterialize: true })
-          if (childEntry) applySlotsToRunner(c, childEntry)
+
+          simGraphRunner.setSlotRunnerId(_slotName, _slotSimGraphRunnerId)
+          bindRunnerToDiagramId(_slotSimGraphRunnerId, slotRunnerEntryDiagramId)
+
+          applySimRunnerSlotsConfigEntry(_slotSimGraphRunnerId, slotRunnerEntry)
         }
       }
     }
 
-    if (rootEntry) applySlotsToRunner(ROOT_RUNNER_ID, rootEntry)
+    applySimRunnerSlotsConfigEntry(ROOT_RUNNER_ID, rootEntry)
     materializeSlotTree(ROOT_RUNNER_ID)
     bumpRunners()
   }
@@ -2430,6 +2598,173 @@ export function useAnimgraphSim() {
     )
   }
 
+  type LiveTyped = { type?: string; value?: unknown }
+  type LiveVec = { x?: number; y?: number; z?: number; w?: number }
+
+  const asSimVec4 = (v: unknown, fallbackW = 0): SimVec4 => {
+    if (!v || typeof v !== 'object') return { x: 0, y: 0, z: 0, w: fallbackW }
+    const o = v as LiveVec
+    return {
+      x: Number.isFinite(o.x) ? Number(o.x) : 0,
+      y: Number.isFinite(o.y) ? Number(o.y) : 0,
+      z: Number.isFinite(o.z) ? Number(o.z) : 0,
+      w: Number.isFinite(o.w) ? Number(o.w) : fallbackW,
+    }
+  }
+
+  /** Draft-only — no board write / publish; next sim tick picks up via applyDraftsToBoard. */
+  const applyLiveTypedFeature = (feature: string, property: string, typed: LiveTyped) => {
+    if (!feature || !property) return
+    const t = String(typed.type ?? '').trim()
+    if (!t) return
+    const key = featureKey(feature, property)
+    const v = typed.value
+    if (t === 'bool') {
+      boolFeatureDrafts.value = { ...boolFeatureDrafts.value, [key]: v === true }
+    } else if (t === 'cname' || t === 'string') {
+      stringFeatureDrafts.value = { ...stringFeatureDrafts.value, [key]: String(v ?? '') }
+    } else if (t === 'vector') {
+      vectorFeatureDrafts.value = { ...vectorFeatureDrafts.value, [key]: asSimVec4(v, 0) }
+    } else if (t === 'quat') {
+      quatFeatureDrafts.value = { ...quatFeatureDrafts.value, [key]: asSimVec4(v, 1) }
+    } else if (t === 'int') {
+      featureDrafts.value = { ...featureDrafts.value, [key]: Math.round(Number(v) || 0) }
+    } else if (t === 'float') {
+      const n = Number(v) || 0
+      if (!Number.isFinite(n)) return
+      featureDrafts.value = { ...featureDrafts.value, [key]: n }
+    }
+  }
+
+  const applyLiveTypedVar = (name: string, typed: LiveTyped) => {
+    const trimmed = String(name ?? '').trim()
+    if (!trimmed) return
+    const t = String(typed.type ?? '').trim()
+    if (!t) return
+    const v = typed.value
+    if (t === 'bool') {
+      boolVarDrafts.value = { ...boolVarDrafts.value, [trimmed]: v === true }
+    } else if (t === 'int') {
+      intVarDrafts.value = { ...intVarDrafts.value, [trimmed]: Math.round(Number(v) || 0) }
+    } else if (t === 'vector') {
+      vectorVarDrafts.value = { ...vectorVarDrafts.value, [trimmed]: asSimVec4(v, 0) }
+    } else if (t === 'quat') {
+      quatVarDrafts.value = { ...quatVarDrafts.value, [trimmed]: asSimVec4(v, 1) }
+    } else if (t === 'float') {
+      const n = Number(v) || 0
+      if (!Number.isFinite(n)) return
+      floatVarDrafts.value = { ...floatVarDrafts.value, [trimmed]: n }
+    }
+  }
+
+  const applyLiveWrapper = (name: string, value: unknown) => {
+    const trimmed = String(name ?? '').trim()
+    if (!trimmed) return
+    const n = Number(value)
+    if (!Number.isFinite(n)) return
+    wrapperWeightDrafts.value = { ...wrapperWeightDrafts.value, [trimmed]: n }
+  }
+
+  /** Apply one JSON line from the game bridge (snapshot / setFeature / setVar / fireExternal). */
+  const applyLiveBridgeLine = (line: string) => {
+    const trimmed = line.trim()
+    if (!trimmed) return
+    let msg: Record<string, unknown>
+    try {
+      msg = JSON.parse(trimmed) as Record<string, unknown>
+    } catch {
+      return
+    }
+    if (!liveBridgeActive.value) return
+    const op = String(msg.op ?? '')
+
+    if (op === 'snapshot') {
+      const features = msg.features as Record<string, Record<string, LiveTyped>> | undefined
+      if (features) {
+        for (const [feat, props] of Object.entries(features)) {
+          for (const [prop, typed] of Object.entries(props ?? {})) {
+            applyLiveTypedFeature(feat, prop, typed ?? {})
+          }
+        }
+      }
+      const vars = msg.vars as Record<string, LiveTyped> | undefined
+      if (vars) {
+        for (const [name, typed] of Object.entries(vars)) {
+          applyLiveTypedVar(name, typed ?? {})
+        }
+      }
+      const wrappers = msg.wrappers as Record<string, unknown> | undefined
+      if (wrappers) {
+        for (const [name, value] of Object.entries(wrappers)) {
+          applyLiveWrapper(name, value)
+        }
+      }
+      return
+    }
+
+    if (op === 'setFeature') {
+      const feature = String(msg.feature ?? '')
+      const props = msg.props as Array<{ name?: unknown; type?: unknown; value?: unknown }> | undefined
+      if (!Array.isArray(props)) return
+      for (const p of props) {
+        applyLiveTypedFeature(feature, String(p?.name ?? ''), {
+          type: p?.type != null ? String(p.type) : undefined,
+          value: p?.value,
+        })
+      }
+      return
+    }
+
+    if (op === 'setVar') {
+      applyLiveTypedVar(String(msg.name ?? ''), {
+        type: msg.type != null ? String(msg.type) : undefined,
+        value: msg.value,
+      })
+      return
+    }
+
+    if (op === 'setWrapper') {
+      applyLiveWrapper(String(msg.name ?? ''), msg.value)
+      return
+    }
+
+    if (op === 'fireExternal') {
+      // Legacy: prefer tick.externalEvents (atomic with frame). Still accept live lines.
+      const name = String(msg.name ?? '').trim()
+      if (!name) return
+      board.value.fireExternalEvent(name)
+      return
+    }
+
+    if (op === 'serviceEvent') {
+      const event = msg.event as SimServiceEvent | undefined
+      if (!event || typeof event !== 'object' || !('kind' in event)) return
+      getPrimaryRunner()?.pushServiceEvent(event)
+      return
+    }
+
+    if (op === 'tick') {
+      // Apply this frame's ACC PushEvents immediately before publish (same Update set).
+      const ext = msg.externalEvents
+      if (Array.isArray(ext)) {
+        for (const raw of ext) {
+          const name = String(raw ?? '').trim()
+          if (name === "DoubleJump") {
+            console.log(poseGenCounter, 'op tick DoubjeJump event received')
+          }
+          if (name) board.value.fireExternalEvent(name)
+        }
+      }
+      const gameDt = Number(msg.dt)
+      const gameRaw = Number(msg.rawDt)
+      const dt = clock.value.tickGame(
+        Number.isFinite(gameDt) ? gameDt : 0,
+        Number.isFinite(gameRaw) ? gameRaw : undefined
+      )
+      publish(dt, clock.value.lastRawDt)
+    }
+  }
+
   return {
     enabled,
     active,
@@ -2450,7 +2785,7 @@ export function useAnimgraphSim() {
     setSlotDiagramId,
     getSlotDiagramId,
     getSlotRunnerId,
-    setRunnerDiagramId,
+    setRunnerDiagramId: bindRunnerToDiagramId,
     findRunnerByDiagramId,
     findRunnersByDiagramId,
     withFeatureBatch,
@@ -2564,6 +2899,11 @@ export function useAnimgraphSim() {
     setQuatFeatureAxis,
     rebind,
     dispose,
+    liveBridgeActive,
+    setLiveBridgeActive,
+    startLiveBridge,
+    stopLiveBridge,
+    applyLiveBridgeLine,
   }
 }
 

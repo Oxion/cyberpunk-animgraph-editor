@@ -3,7 +3,10 @@
  *
  * Primary sources:
  * - animGraph — Update then Sample frame phases
- * - animNode_StateMachine — CheckTransitions / FireTransition / progress
+ * - animNode_StateMachine — CheckTransitions (locals iff !inTransition; globals always)
+ *   → CheckTransitionFinish (progress>=1 lands; else break) → then
+ *   duration<=0 ? progress=1 : progress+=dt/duration. Fire does not swap state;
+ *   instant finishes next frame after progress forced to 1.
  * - animStateTransition — CheckConditionContext, IAnimStateTransitionCondition
  * - animNode_Blend2 — CalculateWeightFromInputValue
  * - animNode_BlendOverride — BlendOverride / BlendByMaskDynamic OnUpdate / ACTIVATION_THRESHOLD

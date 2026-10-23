@@ -108,3 +108,13 @@ export function resolveHandleId(
 export function handleType(node: AnimgraphNode | null | undefined): string {
   return (node?.Data?.$type as string | undefined) ?? ''
 }
+
+export function listHandles(
+  handles: Map<string, AnimgraphNode>,
+  refs: unknown
+): AnimgraphNode[] {
+  if (!Array.isArray(refs)) return []
+  return refs
+    .map((ref) => resolveHandle(handles, ref))
+    .filter((h): h is AnimgraphNode => !!h)
+}

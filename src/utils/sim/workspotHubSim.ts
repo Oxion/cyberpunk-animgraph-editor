@@ -26,7 +26,6 @@ import { isAdditiveAnimationType } from './clipPoseLibrary'
 import type { SimCompileCtx } from './simCompile'
 import { readBool, readCName, readNumber, resolveHandle } from './simDataUtils'
 import type { SimInputBoard } from './SimInputBoard'
-import type { SampleCtx } from './sampleWalk'
 import {
   createWorkspotHubDyn,
   emptyWorkspotHubFacial,
@@ -41,6 +40,7 @@ import {
   UpdateWorkspotProp as P,
   type UpdateWorkspotPropName,
 } from './workspotHubKeys'
+import { SampleCtx, WalkCtx } from './SimGraphRunner.types'
 
 /** AnimFeatureUpdateWorkspot::Flags — RED_FLAG(n) = 1<<(n-1). */
 export const UpdateWorkspotFlags = {
@@ -65,10 +65,9 @@ export type WorkspotHubUpdateCtx = {
   clipPoseLibrary: ClipPoseLibrary | null
   clipClocks: Map<string, ClipClockState>
   isFacial: boolean
-  /** Nested GraphSlot parent inputLink Update. */
-  parentPoseUpdate?: () => void
   /** Update a pose-graph successor (records updateSucc + recurse). */
   followUpdate: (
+    ctx: WalkCtx,
     parent: AnimgraphNode,
     child: AnimgraphNode | null | undefined
   ) => void
@@ -239,10 +238,10 @@ function clipDuration(
   name: string,
   clipLibrary: ClipLibrary | null,
   clipPose: ClipPoseLibrary | null,
-  isWrap: (n: string) => boolean
+  isWrapperActive: (varName: string) => boolean
 ): number {
   if (!name) return 0
-  const winner = clipLibrary?.resolveClipEntry(name, isWrap)
+  const winner = clipLibrary?.resolveClipEntry(name, isWrapperActive)
   if (winner?.clip.duration && winner.clip.duration > 0) return winner.clip.duration
   return clipPose?.findAnimation(name, winner?.poseSetId ?? null)?.duration ?? 0
 }
@@ -251,10 +250,10 @@ function clipHasAnim(
   name: string,
   clipLibrary: ClipLibrary | null,
   clipPose: ClipPoseLibrary | null,
-  isWrap: (n: string) => boolean
+  isWrapperActive: (varName: string) => boolean
 ): boolean {
   if (!name) return false
-  if (clipLibrary?.resolveClipEntry(name, isWrap)) return true
+  if (clipLibrary?.resolveClipEntry(name, isWrapperActive)) return true
   return !!clipPose?.findAnimation(name, null)
 }
 
@@ -263,22 +262,26 @@ function pushAnimEnd(board: SimInputBoard, animLoopEventName: string): void {
 }
 
 function activateRecord(
+  ctx: WalkCtx,
   record: WorkspotHubRecord,
-  board: SimInputBoard,
-  time: number,
   sockets: WorkspotHubSockets,
-  handles: Map<string, AnimgraphNode>,
-  hub: AnimgraphNode,
-  followUpdate: WorkspotHubUpdateCtx['followUpdate'],
-  clipLibrary: ClipLibrary | null,
-  clipPose: ClipPoseLibrary | null,
-  isWrap: (n: string) => boolean
+  hubAnimgraphNode: AnimgraphNode,
 ): void {
+  const {
+    handles: handleIdToAnimgraphNodeMap,
+    board,
+    time,
+    clipLibrary,
+    clipPoseLibrary,
+    isWrapperActive,
+    followUpdate,
+  } = ctx
+
   const recordId = featNum(board, P.recordID, 0) >>> 0
   const entryId = Number.isFinite(recordId) ? recordId : 0
-  const link = resolveSocketLink(handles, sockets, entryId)
+  const link = resolveSocketLink(handleIdToAnimgraphNodeMap, sockets, entryId)
   if (link && record.entryId !== entryId) {
-    followUpdate(hub, link)
+    followUpdate(ctx, hubAnimgraphNode, link)
   }
 
   // Engine forceAnimTime: <0 means unset. Board default 0 = start at 0.
@@ -304,7 +307,7 @@ function activateRecord(
   record.isExitAnim = featBool(board, P.isExitAnim)
   record.isLooped = featBool(board, P.isLooped)
   record.animName = animName
-  record.hasClip = !!link || clipHasAnim(animName, clipLibrary, clipPose, isWrap)
+  record.hasClip = !!link || clipHasAnim(animName, clipLibrary, clipPoseLibrary, isWrapperActive)
 }
 
 /** Engine IsEntryMatching — entryId+updateCounter, or looped same animName (no socket). */
@@ -546,7 +549,7 @@ function facialSyncReceive(
  */
 export function updateWorkspotHub(
   node: AnimgraphNode,
-  ctx: WorkspotHubUpdateCtx
+  ctx: WalkCtx
 ): boolean {
   const dyn = ensureWorkspotHubDyn(ctx.instanceStore, node)
   const d = node.Data ?? {}
@@ -555,7 +558,6 @@ export function updateWorkspotHub(
   const isCoverHubHack = readBool(d.isCoverHubHack)
   const animLoopEventName = readCName(d.animLoopEventName)
   const { board, handles } = ctx
-  const isWrap = (n: string) => board.isWrapperActive(n)
 
   if (filter === 'Solo') {
     board.animEvents.clear()
@@ -583,7 +585,7 @@ export function updateWorkspotHub(
       handles,
       ctx.clipLibrary,
       ctx.clipPoseLibrary,
-      isWrap,
+      ctx.isWrapperActive,
       isCoverHubHack,
       animLoopEventName
     )
@@ -599,7 +601,7 @@ export function updateWorkspotHub(
         dyn.curr.animName,
         ctx.clipLibrary,
         ctx.clipPoseLibrary,
-        isWrap
+        ctx.isWrapperActive
       )
       if (duration > 0 && dyn.curr.currTime > duration - globalBlendDuration) {
         dyn.globalBlendTime = Math.max(dyn.globalBlendTime - ctx.dt, 0)
@@ -617,7 +619,7 @@ export function updateWorkspotHub(
       handles,
       ctx.clipLibrary,
       ctx.clipPoseLibrary,
-      isWrap,
+      ctx.isWrapperActive,
       isCoverHubHack,
       animLoopEventName
     )
@@ -629,16 +631,10 @@ export function updateWorkspotHub(
       // deactivate old link — no-op for offline
     }
     activateRecord(
+      ctx,
       dyn.next,
-      board,
-      ctx.time,
       sockets,
-      handles,
       node,
-      ctx.followUpdate,
-      ctx.clipLibrary,
-      ctx.clipPoseLibrary,
-      isWrap
     )
     dyn.curr = { ...dyn.next }
     dyn.blendWeight = -1
@@ -652,16 +648,10 @@ export function updateWorkspotHub(
       dyn.curr = { ...dyn.next }
     }
     activateRecord(
+      ctx,
       dyn.next,
-      board,
-      ctx.time,
       sockets,
-      handles,
       node,
-      ctx.followUpdate,
-      ctx.clipLibrary,
-      ctx.clipPoseLibrary,
-      isWrap
     )
     dyn.blendWeight = 0
   }
@@ -695,14 +685,14 @@ export function updateWorkspotHub(
       ctx.time,
       ctx.clipLibrary,
       ctx.clipPoseLibrary,
-      isWrap
+      ctx.isWrapperActive
     )
     advanceFacialTimes(
       dyn,
       ctx.time,
       ctx.clipLibrary,
       ctx.clipPoseLibrary,
-      isWrap
+      ctx.isWrapperActive
     )
   }
 
@@ -723,7 +713,7 @@ export function updateWorkspotHub(
     const globalBlendDuration = featNum(board, P.globalBlendDuration, 0)
     if (
       dyn.globalBlendTime < globalBlendDuration &&
-      ctx.parentPoseUpdate &&
+      ctx.slotHost.updateInput &&
       globalBlendDuration > 0
     ) {
       const blendAmount = dyn.globalBlendTime / globalBlendDuration
@@ -739,8 +729,8 @@ export function updateWorkspotHub(
     }
   }
 
-  if (parentWeight > 0 && ctx.parentPoseUpdate) {
-    ctx.parentPoseUpdate()
+  if (parentWeight > 0 && ctx.slotHost.updateInput) {
+    ctx.slotHost.updateInput()
   }
 
   let alreadyUpdated = -1
@@ -748,7 +738,7 @@ export function updateWorkspotHub(
     const ind = findSocketIndex(sockets, record.entryId)
     const link = resolveSocketLink(handles, sockets, record.entryId)
     if (ind >= 0 && link) {
-      if (alreadyUpdated !== ind) ctx.followUpdate(node, link)
+      if (alreadyUpdated !== ind) ctx.followUpdate(ctx, node, link)
       alreadyUpdated = ind
       return
     }
@@ -756,13 +746,13 @@ export function updateWorkspotHub(
       record,
       board,
       ctx.clipLibrary,
-      isWrap,
+      ctx.isWrapperActive,
       filter,
       eventWeight,
       ctx.isFacial
     )
-    if (!record.hasClip && !record.animName && ctx.parentPoseUpdate) {
-      ctx.parentPoseUpdate()
+    if (!record.hasClip && !record.animName && ctx.slotHost.updateInput) {
+      ctx.slotHost.updateInput()
     }
   }
 
@@ -777,7 +767,7 @@ export function updateWorkspotHub(
       dyn.curr.animName,
       ctx.clipLibrary,
       board,
-      isWrap,
+      ctx.isWrapperActive,
       {
         prevTime: dyn.curr.prevTime,
         currTime: dyn.curr.currTime,
@@ -803,7 +793,7 @@ export function updateWorkspotHub(
       ctx.time,
       ctx.clipLibrary,
       ctx.clipPoseLibrary,
-      isWrap
+      ctx.isWrapperActive
     )
   }
 
@@ -876,7 +866,7 @@ function sampleRecord(
   }
   alreadySampled.index = -1
   if (sampleClipRecord(record, ctx, out)) return true
-  if (ctx.parentPoseSample) return ctx.parentPoseSample(out)
+  if (ctx.slotHost.sampleInput) return ctx.slotHost.sampleInput(out)
   if (sampleIsFacial(ctx)) identityPose(out)
   else writeRefLocal(out, ctx.rig)
   return false
@@ -1042,10 +1032,10 @@ export function sampleWorkspotHub(
   const globalBlendDuration = featNum(ctx.board, P.globalBlendDuration, 0)
   if (
     dyn.globalBlendTime < globalBlendDuration &&
-    ctx.parentPoseSample &&
+    ctx.slotHost.sampleInput &&
     globalBlendDuration > 0
   ) {
-    ctx.parentPoseSample(out)
+    ctx.slotHost.sampleInput(out)
     const work = acquirePose(ctx)
     try {
       sampleRecord(dyn.curr, node, ctx, work, already, sampleLink)

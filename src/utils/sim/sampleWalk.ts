@@ -3,20 +3,58 @@
  */
 
 import type { AnimgraphNode } from '../graph/animgraphTypes'
+import { SampleCtx as SimGraphRunnerSampleCtx } from './SimGraphRunner.types'
 import {
   BLEND_BY_MASK_DYNAMIC_ACTIVATION,
   blendByMaskDynamicBlendActive,
   blendOverrideInputActive,
 } from './engineParity'
-import type { ClipPoseLibrary } from './clipPoseLibrary'
-import type { ClipClockState } from './clipClock'
-import type { ClipLibrary } from './clipLibrary'
 import {
+  evalAnimMathExpression,
+  getCompiledMathExpr
+} from './evalAnimMathExpression'
+import {
+  evalAnimMathExpressionFloatMixed,
+  IDENTITY_QUAT_VEC4,
+  ZERO_VEC4,
+  type SimVec4,
+} from './evalAnimMathExpressionVector'
+import { evalCurveFloatData, mapProgressByBlendTypeLBC } from './floatDyn'
+import {
+  applyFloorIkPartial,
+  FLOOR_IK_PARTIAL_MSG,
+  readFloorIkStaticWeight,
+} from './floorIkSim'
+import { sampleFppCamera } from './fppCameraSample'
+import { applyHumanIk } from './humanIkSim'
+import { applyIk2 } from './ik2Solver'
+import {
+  ensureIkTargetsController,
+  IK_GRAPH_REQUEST_ID,
+  interpolateIkTargetsMaps,
+  resolveGenerateIkChainSettings,
+  resolveHumanIkChainSettings,
+} from './ikTargetsControllerSim'
+import { sampleInertialization } from './inertializationSim'
+import {
+  applyLookAtBoneAim,
+  readLookAtBoneAimStatic,
+} from './lookAtBoneAimSim'
+import {
+  DEFAULT_LOOKAT_SPACE_CTX,
+  sampleLookAtController
+} from './lookAtControllerSim'
+import { sampleLookAtPose360 } from './lookAtPose360Sim'
+import { sampleLookAtVehicleRestrictions } from './lookAtVehicleRestrictionsSim'
+import { sampleMixerSlot } from './mixerSlotSim'
+import { evaluateSmTransitionBlendAlpha } from './nodes/SimStateMachine/transitions'
+import { smShouldUseFrozenPose } from './nodes/SimStateMachine/utils'
+import {
+  applyExtraTrackLayout,
   applyOverrideBlendBones,
   blendAdditiveLocal,
   blendByMask,
   blendOverrideBoneBranch,
-  applyExtraTrackLayout,
   clearStack,
   clearTrackStack,
   convertAbsoluteToAdditiveFromRig,
@@ -38,64 +76,25 @@ import {
   type OverrideBoneWeight,
   type Pose,
 } from './pose'
-import type { BoneOpFrameCache, MathExprPoseFrameCache } from './boneOpDyn'
-import {
-  evalAnimMathExpression,
-  getCompiledMathExpr,
-  type MathExprCompileCache,
-} from './evalAnimMathExpression'
-import {
-  evalAnimMathExpressionFloatMixed,
-  IDENTITY_QUAT_VEC4,
-  type SimVec4,
-  ZERO_VEC4,
-} from './evalAnimMathExpressionVector'
-import { evalCurveFloatData, mapProgressByBlendTypeLBC } from './floatDyn'
-import { applyIk2 } from './ik2Solver'
-import {
-  applySnapToTerrainIkFlat,
-  SNAP_TO_TERRAIN_PARTIAL_MSG,
-} from './snapToTerrainIk'
-import { applyHumanIk } from './humanIkSim'
-import {
-  ensureIkTargetsController,
-  IK_GRAPH_REQUEST_ID,
-  interpolateIkTargetsMaps,
-  resolveGenerateIkChainSettings,
-  resolveHumanIkChainSettings,
-} from './ikTargetsControllerSim'
-import {
-  applyFloorIkPartial,
-  FLOOR_IK_PARTIAL_MSG,
-  readFloorIkStaticWeight,
-} from './floorIkSim'
-import {
-  applyLookAtBoneAim,
-  readLookAtBoneAimStatic,
-} from './lookAtBoneAimSim'
-import { sampleInertialization } from './inertializationSim'
-import type { FppCameraDyn } from './fppCameraDyn'
-import { sampleFppCamera } from './fppCameraSample'
 import {
   applyAimConstraint,
   applyDirectConnConstraint,
   applyFloatTrackDirectConn,
   applyMultipleParentConstraint,
   applyOrientConstraint,
-  applyPointConstraint,
   applyParentConstraint,
-  IDENTITY_QS,
-  preprocessPointWeights,
-  type MultipleParentInfo,
+  applyPointConstraint,
   applyRotationLimitLs,
   applyTransformToTrack,
   applyTranslationLimit,
   eulerDegToQuat,
   getTransformMs,
+  IDENTITY_QS,
   offsetBoneInSpace,
   parseSnapMethod,
   parseTransformAxis,
   parseTransformChannel,
+  preprocessPointWeights,
   quatToEulerDeg,
   readBoneLs,
   readQsTransform,
@@ -109,279 +108,55 @@ import {
   snapBoneToTarget,
   translateBoneLocal,
   writeBoneLs,
+  type MultipleParentInfo,
   type Qs,
   type SnapMethod,
 } from './poseFk'
+import { createPoseScratchPool, PoseScratchPool } from './poseScratchPool'
 import { getRigPartMask, type RigEntry } from './rigResource'
-import type { InstanceStore } from '../InstanceStore'
-import type { SimInputBoard } from './SimInputBoard'
-import {
-  DEFAULT_LOOKAT_SPACE_CTX,
-  sampleLookAtController,
-  type LookAtSpaceCtx,
-} from './lookAtControllerSim'
-import { sampleLookAtVehicleRestrictions } from './lookAtVehicleRestrictionsSim'
-import { sampleLookAtPose360 } from './lookAtPose360Sim'
-import { sampleMixerSlot } from './mixerSlotSim'
-import { sampleWorkspotHub } from './workspotHubSim'
-import {
-  evaluateSmTransitionBlendAlpha,
-  smShouldUseFrozenPose,
-  type SimStateMachineRuntime,
-} from './SimStateMachine'
+import { IkTargetSnap, SampleResult } from './sample.types'
 import { handleType, readBool, readCName, readNumber, resolveHandle } from './simDataUtils'
 import {
-  simSampleLogLine,
-  type SimSampleLog,
+  simSampleLogLine
 } from './simSampleLog'
-import type { SimNodeState, SimSampleWarning } from './simTypes'
 import { SIM_SAMPLE_WARNINGS_MAX } from './simSnapshot'
+import type { SimSampleWarning } from './simTypes'
+import {
+  applySnapToTerrainIkFlat,
+  SNAP_TO_TERRAIN_PARTIAL_MSG,
+} from './snapToTerrainIk'
+import { sampleWorkspotHub } from './workspotHubSim'
 
-/** AnimNode_BlendFromPose instance buffer. */
-export type BlendFromPoseDynState = {
-  timer: number
-  poseSet: boolean
-  isBlendRequested: boolean
-  cached: Pose | null
-}
-
-/** SM frozen pose slot (AnimNode_StateFrozen i_cachedPose). */
-export type SmFrozenPoseSlot = {
-  pose: Pose
-  valid: boolean
-}
-
-/**
- * Offline stand-in for engine SharedMetaPoseContext (inject bag).
- * Keys are part-local bone / track names (easy variant); engine uses meta-mapped indices.
- */
-export type SharedMetaPoseCtx = {
-  /** Shared bone LS from MetaPose (name → Qs). */
-  parentTransforms: Map<string, Qs>
-  /** Shared float tracks from MetaPose. */
-  parentTracks: Map<string, number>
-  /** A-pose LS for SharedMetaPoseAdditive (convertParentPoseToAdditive). */
-  aTransforms?: Map<string, Qs>
-  /** Reference tracks for SharedMetaPoseAdditive. */
-  referenceTracks?: Map<string, number>
-  /** TrajectoryFromMetaPose / facial trajectory LS. */
-  trajectoryLs?: Qs
-}
-
-export function createEmptySharedMetaPose(): SharedMetaPoseCtx {
-  return {
-    parentTransforms: new Map(),
-    parentTracks: new Map(),
-  }
-}
-
-/**
- * Sample support: follows Update `updateSucc` only (no Data pose rediscovery).
- * Leaves (SkAnim / Identity) may have 0 successors.
- */
-
-export type SampleCtx = {
-  handles: Map<string, AnimgraphNode>
-  board: SimInputBoard
-  /** Per-node instance bags (LookAtController, …). */
-  instanceStore?: InstanceStore
-  nodes: Record<string, SimNodeState>
-  clipClocks: Map<string, ClipClockState>
-  clipPoseLibrary: ClipPoseLibrary
-  clipLibrary: ClipLibrary | null
-  rig: RigEntry
-  staticSwitchResults?: Map<string, boolean>
-  /** SM runtimes from Update this frame */
-  runtimes?: Map<string, SimStateMachineRuntime>
-  /** Nested GraphSlot pose after nested Update+Sample */
-  sampleNested?: (slotName: string) => Pose | null
-  /** Parent GraphSlot.inputLink sample for GraphSlotInput */
-  parentPoseSample?: (out: Pose) => boolean
-  /** Transform Shrinker handleId → remove count (bind-time tag pairing) */
-  shrinkRemoveCountByHandleId?: Map<string, number>
-  /** Track Shrinker handleId → remove count */
-  trackShrinkRemoveCountByHandleId?: Map<string, number>
-  /**
-   * HandleIds whose full pose should be snapshotted after Sample of that node (HUD).
-   * Survives later Shrinker / blends on the path to root.
-   */
-  stackCaptureHandleIds?: Set<string>
-  /** Copy live pose for a capture handle (runner-owned buffers). */
-  captureStack?: (handleId: string, pose: Pose) => void
-  /**
-   * LIFO pose scratch pool for blend temps (acquirePose / releasePose).
-   * Shared across nested samplePoseFromNode — depth is saved/restored.
-   */
-  poseScratch: PoseScratchPool
-  /** Anim names that resolved clip but had no glb (mutated during walk) */
-  missingGlb?: string[]
-  /** Optional Sample-path debug (see simSampleLog.ts). */
-  sampleLog?: SimSampleLog | null
-  /** All handles entered this Sample ctx (incl. side-sample / fresh visited sets). */
-  sampleVisitedAll?: Set<string>
-  /**
-   * Update-traversal successors (parent → child ids in visit/role order).
-   * When present, Sample follows this instead of rediscovering Data pins.
-   */
-  updateSucc?: Map<string, string[]>
-  /**
-   * When true, Sample appends diagnostics into `warnings` (null-pose blends, …).
-   * Off → zero cost beyond lastWrittenNull bookkeeping used only if enabled.
-   */
-  warningsEnabled?: boolean
-  /** Append-only Sample warnings for this frame (shared with nested samples). */
-  warnings?: SimSampleWarning[]
-  /**
-   * Set by every Sample write into the current `out` buffer: true = null/zero local pose.
-   * Not on Pose (shared buffers). Default false; read after each child sample when warningsEnabled.
-   */
-  lastWrittenNull: boolean
-  /** Update→Sample values for procedural bone ops (Rotate/Translate/SetPosition/…). */
-  boneOpCache?: BoneOpFrameCache
-  /** FPPCamera dyn from Update (shared with Sample). */
-  fppCameraDyn?: Map<string, FppCameraDyn>
-  /**
-   * AdditionalFloatTrack local time (engine i_time), advanced on Update.
-   * Cleared when the node leaves the active Update path.
-   */
-  additionalFloatTrackTimes?: Map<string, number>
-  /** Per-runner math expression compile cache (shared with Update). */
-  mathExprCache?: MathExprCompileCache
-  /** MathExpressionPose float-socket link snapshots from Update. */
-  mathExprPoseCache?: MathExprPoseFrameCache
-  /**
-   * Parent-transform stack (name → MS Qs). ParentTransform Sample reads this;
-   * falls back to pose unified MS when missing.
-   */
-  parentTransforms?: Map<string, Qs>
-  /**
-   * Engine AnimNodeSampleContext.m_sharedMetaPose — SharedMetaPose / Additive / TrajectoryFromMetaPose.
-   * Filled by caller (inject). Empty → node is passthrough after inputLink.
-   *
-   * TODO(hard): no AnimatedObject / MetaPose / part↔meta mapping — engine fills this from
-   * entity MetaPose + parentTransformsMapping before child-part Sample. Need multi-part hierarchy.
-   */
-  sharedMetaPose?: SharedMetaPoseCtx
-  /**
-   * Engine AnimNode_Join: sample once per frame, replay cached pose on diamond re-entry.
-   * `sampled` cleared each Sample; `poses` may be reused across frames.
-   */
-  joinPoseCache?: { sampled: Set<string>; poses: Map<string, Pose> }
-  /**
-   * Engine SampleOutput.m_ikTargets — shared for one Sample pass (Add/ReadIkRequest).
-   * Cleared at sampleGraphPose begin. Blend2/BlendMultiple merge via interpolateIkTargetsMaps.
-   */
-  ikTargets?: Map<string, IkTargetSnap>
-  /** BlendFromPose dyn state from Update. */
-  blendFromPoseDyn?: Map<string, BlendFromPoseDynState>
-  /** BlendFromPose → owning SM handleId. */
-  blendFromPoseSmBind?: Map<string, string>
-  /** Per-SM frozen pose (filled after SM Sample when ShouldUseFrozenPose). */
-  smFrozenPoses?: Map<string, SmFrozenPoseSlot>
-  /**
-   * UpdateContext inertialization request (latched for Sample).
-   * Inertialization node Sample TBD — plumbing only.
-   */
-  inertialization?: {
-    isInertializationRequested: boolean
-    inertializationDuration: number
-  }
-  /** LookAt WS↔MS / facial Eyes coupling (engine AnimNodeSampleContext). */
-  lookAtSpace?: LookAtSpaceCtx
-}
-
-/** Offline IK request snap (AddIkRequest → ReadIkRequest / controller graph ingest). */
-export type IkTargetSnap = {
-  chain: string
-  /** Negative graph id; default IK_GRAPH_REQUEST_ID. */
-  id?: number
-  posMs: { x: number; y: number; z: number }
-  rotMs: { x: number; y: number; z: number; w: number }
-  weightPosition: number
-  weightRotation: number
-  priority: number
-  poleMs?: { x: number; y: number; z: number }
-  poleOverrideWeight?: number
-  transitionIn?: number
-  transitionOut?: number
-}
-
-export type SampleResult = {
-  ok: boolean
-  reason?: 'no-rig' | 'no-root' | 'empty'
-  sampleMs: number
-  bonesSampled: number
-  missingGlb?: string[]
-  warnings?: SimSampleWarning[]
-}
-
-function noteWrittenNull(ctx: SampleCtx, isNull: boolean): void {
+function noteWrittenNull(ctx: SimGraphRunnerSampleCtx, isNull: boolean): void {
   if (ctx.warningsEnabled) ctx.lastWrittenNull = isNull
 }
 
-function pushSampleWarning(ctx: SampleCtx, w: SimSampleWarning): void {
+function pushSampleWarning(ctx: SimGraphRunnerSampleCtx, w: SimSampleWarning): void {
   if (!ctx.warningsEnabled || !ctx.warnings) return
   if (ctx.warnings.length >= SIM_SAMPLE_WARNINGS_MAX) return
   ctx.warnings.push(w)
 }
 
-function writeNullPose(ctx: SampleCtx, out: Pose): void {
+function writeNullPose(ctx: SimGraphRunnerSampleCtx, out: Pose): void {
   identityPose(out)
   noteWrittenNull(ctx, true)
 }
 
-function writeRefPose(ctx: SampleCtx, out: Pose): void {
+function writeRefPose(ctx: SimGraphRunnerSampleCtx, out: Pose): void {
   identityFromRig(out, ctx.rig)
   noteWrittenNull(ctx, false)
 }
 
-function noteMissingGlb(ctx: SampleCtx, animName: string): void {
+function noteMissingGlb(ctx: SimGraphRunnerSampleCtx, animName: string): void {
   if (!ctx.missingGlb) return
   if (ctx.missingGlb.includes(animName)) return
   ctx.missingGlb.push(animName)
 }
 
 const EMPTY_SUCC: string[] = []
-const DEFAULT_POSE_SCRATCH_SLOTS = 2
-
-/** Growable LIFO pool of pose temps (reuse across frames). */
-export type PoseScratchPool = {
-  stack: Pose[]
-  depth: number
-  boneCount: number
-  trackCount: number
-  stackCapacity: number
-  trackStackCapacity: number
-  extraTrackCapacity: number
-}
-
-export function createPoseScratchPool(
-  boneCount: number,
-  trackCount: number,
-  stackCapacity = DEFAULT_STACK_CAPACITY,
-  trackStackCapacity = DEFAULT_STACK_CAPACITY,
-  extraTrackCapacity = 0,
-  initialSlots = DEFAULT_POSE_SCRATCH_SLOTS
-): PoseScratchPool {
-  const n = Math.max(0, boneCount | 0)
-  const t = Math.max(0, trackCount | 0)
-  const sc = Math.max(0, stackCapacity | 0)
-  const tsc = Math.max(0, trackStackCapacity | 0)
-  const etc = Math.max(0, extraTrackCapacity | 0)
-  const slots = Math.max(1, initialSlots | 0)
-  return {
-    stack: Array.from({ length: slots }, () => createPose(n, t, sc, tsc, etc)),
-    depth: 0,
-    boneCount: n,
-    trackCount: t,
-    stackCapacity: sc,
-    trackStackCapacity: tsc,
-    extraTrackCapacity: etc,
-  }
-}
 
 /** Push a temp pose (may grow the pool). Pair with releasePose in reverse order. */
-export function acquirePose(ctx: SampleCtx): Pose {
+export function acquirePose(ctx: SimGraphRunnerSampleCtx): Pose {
   const pool = ctx.poseScratch
   if (pool.depth >= pool.stack.length) {
     pool.stack.push(
@@ -398,17 +173,17 @@ export function acquirePose(ctx: SampleCtx): Pose {
 }
 
 /** Pop the last acquirePose. Must mirror acquire order (LIFO). */
-export function releasePose(ctx: SampleCtx): void {
+export function releasePose(ctx: SimGraphRunnerSampleCtx): void {
   if (ctx.poseScratch.depth > 0) ctx.poseScratch.depth--
 }
 
-function updateKids(ctx: SampleCtx, handleId: string): string[] {
+function updateKids(ctx: SimGraphRunnerSampleCtx, handleId: string): string[] {
   return ctx.updateSucc?.get(handleId) ?? EMPTY_SUCC
 }
 
 /** Debug-only (when `__SIM_SAMPLE_LOG`); no console.warn — leaves vs holes share 0-succ. */
 function logMissingUpdateSucc(
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   node: AnimgraphNode,
   detail: string
 ): void {
@@ -420,7 +195,7 @@ function logMissingUpdateSucc(
 
 function sampleByHandleId(
   handleId: string | undefined,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -434,7 +209,7 @@ function sampleByHandleId(
 /** Require ≥1 Update successor; no Data rediscovery. */
 function sampleRequiredSucc(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -452,8 +227,8 @@ function sampleRequiredSucc(
  * Sample active pose path into `out` (must match active rig bone count).
  */
 export function sampleGraphPose(
+  ctx: SimGraphRunnerSampleCtx,
   root: AnimgraphNode | null,
-  ctx: SampleCtx,
   out: Pose
 ): SampleResult {
   const t0 =
@@ -518,7 +293,7 @@ export function sampleGraphPose(
  */
 export function samplePoseFromNode(
   node: AnimgraphNode | null,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose
 ): boolean {
   if (!ctx.missingGlb) ctx.missingGlb = []
@@ -550,7 +325,7 @@ export function allocSampleScratch(
 
 function sampleNode(
   node: AnimgraphNode | null,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -583,7 +358,7 @@ function sampleNode(
 
 function sampleNodeDispatch(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -602,8 +377,8 @@ function sampleNodeDispatch(
       return sampleStateMachine(node, ctx, out, visited)
 
     case 'animAnimNode_GraphSlotInput':
-      if (ctx.parentPoseSample) {
-        return ctx.parentPoseSample(out)
+      if (ctx.slotHost.sampleInput) {
+        return ctx.slotHost.sampleInput(out)
       }
       writeRefPose(ctx, out)
       return false
@@ -797,7 +572,7 @@ function sampleNodeDispatch(
 
 function sampleStateMachine(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -810,7 +585,7 @@ function sampleStateMachine(
     const rt = ctx.runtimes?.get(node.HandleId)
     const linear = rt?.transitionProgress ?? 0
     const alpha = rt
-      ? evaluateSmTransitionBlendAlpha(node, rt, ctx.handles, linear)
+      ? evaluateSmTransitionBlendAlpha(ctx.handles, node, rt, linear)
       : linear
     const a = acquirePose(ctx)
     const b = acquirePose(ctx)
@@ -839,7 +614,7 @@ function sampleStateMachine(
   const activeIdx = rt?.activeStateIndex ?? 0
   if (
     ctx.smFrozenPoses &&
-    smShouldUseFrozenPose(node, activeIdx, ctx.handles)
+    smShouldUseFrozenPose(ctx.handles, node, activeIdx)
   ) {
     let slot = ctx.smFrozenPoses.get(node.HandleId)
     if (
@@ -868,13 +643,13 @@ function sampleStateMachine(
 /** AnimNode_Inertialization::OnSample — child pose + quintic residual decay. */
 function sampleInertializationNode(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
   const ok = sampleOnePoseChild(node, ctx, out, visited, 'Inertialization')
-  if (!ctx.instanceStore) return ok
-  sampleInertialization(node, ctx.instanceStore, out, ctx.rig)
+  if (!ctx.transientStore) return ok
+  sampleInertialization(node, ctx.transientStore, out, ctx.rig)
   return ok
 }
 
@@ -883,7 +658,7 @@ function sampleInertializationNode(
  */
 function sampleBlendFromPose(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -942,7 +717,7 @@ function sampleBlendFromPose(
 
 function sampleGraphSlot(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -950,8 +725,17 @@ function sampleGraphSlot(
   const slotName = readCName(d.name)
   const dontDeactivate = readBool(d.dontDeactivateInput)
   const kids = updateKids(ctx, node.HandleId)
-  if (slotName && ctx.sampleNested) {
-    const nested = ctx.sampleNested(slotName)
+  if (slotName) {
+    const inputLink = resolveHandle(ctx.handles, d.inputLink)
+    const sampleInput = dontDeactivate && inputLink
+      ? (out: Pose) => sampleByHandleId(inputLink.HandleId, ctx, out, new Set(visited))
+      : undefined
+
+    const nested = ctx.slotHost.sampleNested(
+      slotName,
+      sampleInput
+    )
+
     if (nested && nested.boneCount > 0 && out.boneCount > 0) {
       const extraNames = out.extraTrackNames.slice(0, out.extraTrackCount)
       copyPose(out, nested)
@@ -1001,7 +785,7 @@ function sampleGraphSlot(
   return sampleByHandleId(kids[0], ctx, out, visited)
 }
 
-function sampleSkAnim(node: AnimgraphNode, ctx: SampleCtx, out: Pose): boolean {
+function sampleSkAnim(node: AnimgraphNode, ctx: SimGraphRunnerSampleCtx, out: Pose): boolean {
   const clock = ctx.clipClocks.get(node.HandleId)
   const animName =
     clock?.animName ||
@@ -1042,7 +826,7 @@ function sampleSkAnim(node: AnimgraphNode, ctx: SampleCtx, out: Pose): boolean {
  */
 function sampleSkOneShotAnim(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1104,7 +888,7 @@ function sampleSkOneShotAnim(
  */
 function sampleSkFrameAnimByTrack(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1161,7 +945,7 @@ function sampleSkFrameAnimByTrack(
 /** Sample child with a private ikTargets map (engine per-SampleOutput list). */
 function sampleChildIkIsolated(
   handleId: string,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): Map<string, IkTargetSnap> {
@@ -1178,7 +962,7 @@ function sampleChildIkIsolated(
 
 /** Write merged ikTargets into parent ctx map (replace contents). */
 function assignIkTargetsMap(
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   merged: Map<string, IkTargetSnap>
 ): void {
   if (!ctx.ikTargets) {
@@ -1191,7 +975,7 @@ function assignIkTargetsMap(
 
 function sampleBlend2(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1244,7 +1028,7 @@ function sampleBlend2(
 
 function sampleBlendMultiple(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1277,7 +1061,7 @@ function sampleBlendMultiple(
 
 function sampleSwitch(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1293,7 +1077,7 @@ function sampleSwitch(
 
 function sampleBoolSwitch(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>,
   _isStatic: boolean
@@ -1307,7 +1091,7 @@ function sampleBoolSwitch(
 
 function sampleBlendAdditive(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1345,7 +1129,7 @@ function sampleBlendAdditive(
  */
 function sampleBlendOverride(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1374,7 +1158,7 @@ function sampleBlendOverride(
 
 function applyBlendOverrideMethods(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   baseOut: Pose,
   overridePose: Pose,
   alpha: number
@@ -1453,7 +1237,7 @@ function readMaskListEntryName(maskEntry: unknown): string {
 
 function sampleBlendByMaskDynamic(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1582,7 +1366,7 @@ function readTransformIndexFromRaw(raw: unknown): string {
   return readCName(ti.name) || readCName(ti.bone) || ''
 }
 
-function warnBoneMissing(ctx: SampleCtx, handleId: string, boneName: string): void {
+function warnBoneMissing(ctx: SimGraphRunnerSampleCtx, handleId: string, boneName: string): void {
   pushSampleWarning(ctx, {
     code: 'bone-op-missing',
     handleId,
@@ -1592,7 +1376,7 @@ function warnBoneMissing(ctx: SampleCtx, handleId: string, boneName: string): vo
 
 function sampleOnePoseChild(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>,
   label: string
@@ -1609,7 +1393,7 @@ function sampleOnePoseChild(
 /** OnePoseInput → aim named bone at target MS (engine AnimNode_LookAt). */
 function sampleLookAtBoneAim(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1633,7 +1417,7 @@ function sampleLookAtBoneAim(
 /** Child pose → MixerSlot blends idle/normal/override/additive on top. */
 function sampleMixerSlotNode(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1647,7 +1431,7 @@ function sampleMixerSlotNode(
 /** WorkspotHub — clip / parallel socket / facial (no inputLink). */
 function sampleWorkspotHubNode(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1665,7 +1449,7 @@ function sampleWorkspotHubNode(
 /** Child pose → refresh sphere bones → rebuild Eyes.* (engine OnSample). */
 function sampleLookAtControllerNode(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1686,7 +1470,7 @@ function sampleLookAtControllerNode(
 /** Child pose → clamp board (group,name) look target (engine OnSample). */
 function sampleLookAtVehicleRestrictionsNode(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1712,10 +1496,10 @@ function sampleLookAtVehicleRestrictionsNode(
 /** Leaf: sample 360 look clip at damped animTime + Trajectory yaw. */
 function sampleLookAtPose360Node(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose
 ): boolean {
-  if (!ctx.instanceStore) {
+  if (!ctx.transientStore) {
     writeNullPose(ctx, out)
     return false
   }
@@ -1731,7 +1515,7 @@ function sampleLookAtPose360Node(
   }
   const ok = sampleLookAtPose360(
     node,
-    ctx.instanceStore,
+    ctx.transientStore,
     out,
     ctx.rig,
     ctx.clipLibrary,
@@ -1753,7 +1537,7 @@ function sampleLookAtPose360Node(
  */
 function sampleJoin(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1796,7 +1580,7 @@ function sampleJoin(
 
 function sampleSetBoneTransform(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1831,7 +1615,7 @@ function sampleSetBoneTransform(
 
 function sampleSetBonePosition(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1850,7 +1634,7 @@ function sampleSetBonePosition(
 
 function sampleSetBoneOrientation(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1869,7 +1653,7 @@ function sampleSetBoneOrientation(
 
 function sampleRotateBone(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1892,7 +1676,7 @@ function sampleRotateBone(
 /** Engine AnimNode_TransformRotator::OnSample — axis-angle post-multiply in LS. */
 function sampleTransformRotator(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1929,7 +1713,7 @@ function sampleTransformRotator(
  */
 function sampleFloatTrackModifier(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1980,7 +1764,7 @@ function sampleFloatTrackModifier(
  */
 function sampleTrackSetter(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -1997,7 +1781,7 @@ function sampleTrackSetter(
 
 function sampleRotateBoneByQuaternion(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2016,7 +1800,7 @@ function sampleRotateBoneByQuaternion(
 
 function sampleTranslateBone(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2076,7 +1860,7 @@ function readFloatClamp(raw: unknown): {
 
 function sampleRotationLimit(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2102,7 +1886,7 @@ function sampleRotationLimit(
 
 function sampleTranslationLimit(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2306,7 +2090,7 @@ function writeDrivenChannel(
 
 function sampleSetDrivenKey(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2335,7 +2119,7 @@ function readHandleStubId(raw: unknown): string {
 
 function sampleAdditionalTransform(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2398,7 +2182,7 @@ function sampleAdditionalTransform(
  */
 function sampleAdditionalFloatTrack(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2473,7 +2257,7 @@ function parseInterpolationType(raw: unknown): 'Slerp' | 'Lerp' {
 
 function sampleParentConstraint(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2526,7 +2310,7 @@ function sampleParentConstraint(
  */
 function sampleFloatTrackDirectConn(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2574,7 +2358,7 @@ function sampleFloatTrackDirectConn(
  */
 function sampleDirectConnConstraint(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2622,7 +2406,7 @@ function sampleDirectConnConstraint(
  */
 function sampleFppCameraNode(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2639,7 +2423,7 @@ function sampleFppCameraNode(
  */
 function sampleTransformToTrack(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2681,7 +2465,7 @@ function sampleTransformToTrack(
 
 function resolveConstraintWeight(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   pose: Pose
 ): number {
   const d = node.Data ?? {}
@@ -2708,7 +2492,7 @@ function resolveConstraintWeight(
 function peelWeightedChannelEntry(
   raw: unknown,
   pose: Pose,
-  ctx: SampleCtx
+  ctx: SimGraphRunnerSampleCtx
 ): { boneName: string; boneIdx: number; weight: number } | null {
   const e = resolveEmbeddedData(raw, ctx.handles)
   if (!e) return null
@@ -2731,7 +2515,7 @@ function peelWeightedChannelEntry(
 
 function sampleOrientConstraint(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2790,7 +2574,7 @@ function sampleOrientConstraint(
 function resolveParentInfoWeight(
   e: Record<string, unknown>,
   pose: Pose,
-  ctx: SampleCtx
+  ctx: SimGraphRunnerSampleCtx
 ): number {
   const mode = String(e.parentWeightMode ?? '')
   const trackName = readNamedTrackFieldName(e.parentTrackWeight)
@@ -2809,7 +2593,7 @@ function resolveParentInfoWeight(
 
 function sampleMultipleParentConstraint(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2895,7 +2679,7 @@ function sampleMultipleParentConstraint(
 
 function samplePointConstraint(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -2965,7 +2749,7 @@ type AimUpPointResult =
 
 function resolveAimUpPoint(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   pose: Pose,
   boneIdx: number
 ): AimUpPointResult {
@@ -3166,7 +2950,7 @@ function resolveAimUpPoint(
 function resolveSourceChannelVector(
   raw: unknown,
   pose: Pose,
-  ctx: SampleCtx
+  ctx: SimGraphRunnerSampleCtx
 ): { ok: true; x: number; y: number; z: number } | { ok: false } {
   const ch = resolveEmbeddedData(raw, ctx.handles)
   if (!ch) return { ok: false }
@@ -3187,7 +2971,7 @@ function resolveSourceChannelVector(
 function resolveWeightedQuatChannel(
   raw: unknown,
   pose: Pose,
-  ctx: SampleCtx
+  ctx: SimGraphRunnerSampleCtx
 ): { weight: number; qx: number; qy: number; qz: number; qw: number } {
   const e = resolveEmbeddedData(raw, ctx.handles)
   if (!e) return { weight: 0, qx: 0, qy: 0, qz: 0, qw: 1 }
@@ -3212,7 +2996,7 @@ function resolveWeightedQuatChannel(
 
 function sampleIk2(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3307,7 +3091,7 @@ function sampleIk2(
 
 function sampleIk2Constraint(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3367,7 +3151,7 @@ function sampleIk2Constraint(
 
 function sampleAddIkRequest(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3422,7 +3206,7 @@ function sampleAddIkRequest(
 /** Flat-ground subset + always warn incomplete parity. */
 function sampleAddSnapToTerrainIkRequest(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3439,7 +3223,7 @@ function sampleAddSnapToTerrainIkRequest(
 
 function runIkTargetsControllerSample(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   settings: ReturnType<typeof resolveGenerateIkChainSettings>
 ): void {
@@ -3466,7 +3250,7 @@ function runIkTargetsControllerSample(
 /** GenerateIkAnimFeatureData: controller update + board publish; pose passthrough. */
 function sampleGenerateIkAnimFeatureData(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3489,7 +3273,7 @@ function sampleGenerateIkAnimFeatureData(
 /** HumanIk: controller publish → 4-limb Ik2 from board. */
 function sampleHumanIk(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3510,7 +3294,7 @@ function sampleHumanIk(
  */
 function sampleFloorIk(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3528,7 +3312,7 @@ function sampleFloorIk(
 
 function sampleReadIkRequest(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3562,7 +3346,7 @@ function sampleReadIkRequest(
 
 function sampleAimConstraint(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3627,7 +3411,7 @@ function sampleAimConstraint(
 
 function sampleParentTransform(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3707,7 +3491,7 @@ function sampleParentTransform(
 /** Engine AnimNode_SharedMetaPose::Execute — overwrite / slerp shared MetaPose bones+tracks. */
 function sampleSharedMetaPose(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3748,7 +3532,7 @@ function sampleSharedMetaPose(
  */
 function sampleSharedMetaPoseAdditive(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3878,7 +3662,7 @@ function sampleSharedMetaPoseAdditive(
 /** Engine AnimNode_TrajectoryFromMetaPose — write shared trajectory onto named bone. */
 function sampleTrajectoryFromMetaPose(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -3919,7 +3703,7 @@ function readNamedTrackFieldName(raw: unknown): string {
 
 function sampleMathExpressionPose(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -4090,7 +3874,7 @@ function sampleMathExpressionPose(
 
 function sampleStackTracksExtender(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -4119,7 +3903,7 @@ function sampleStackTracksExtender(
 
 function sampleStackTracksShrinker(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -4137,7 +3921,7 @@ function sampleStackTracksShrinker(
 
 function sampleStackTransformsExtender(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -4214,7 +3998,7 @@ function sampleStackTransformsExtender(
 
 function sampleStackTransformsShrinker(
   node: AnimgraphNode,
-  ctx: SampleCtx,
+  ctx: SimGraphRunnerSampleCtx,
   out: Pose,
   visited: Set<string>
 ): boolean {
@@ -4230,7 +4014,7 @@ function sampleStackTransformsShrinker(
   return ok
 }
 
-function maybeCapturePose(node: AnimgraphNode, ctx: SampleCtx, out: Pose): void {
+function maybeCapturePose(node: AnimgraphNode, ctx: SimGraphRunnerSampleCtx, out: Pose): void {
   if (!ctx.stackCaptureHandleIds?.has(node.HandleId)) return
   simSampleLogLine(
     ctx.sampleLog,

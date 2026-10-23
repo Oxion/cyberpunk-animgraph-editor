@@ -68,7 +68,7 @@ import {
 } from './graph/portalTopology'
 import { OPEN_SCOPE_BTN_TEXT_LABEL, PixiDiagramNode, PixiDiagramNodeCtx } from './pixi/PixiDiagramNode'
 import { NodeElsContainer, PixiRenderStats } from './PixiGraphrenderer.types'
-import { SimNodeState, SimSnapshot } from './sim'
+import { SimNodeState, SimSnapshot, SimSnapshotUpdate } from './sim'
 
 
 type NodeGroup = Container
@@ -1954,7 +1954,7 @@ export class PixiGraphRenderer {
         this.graphData,
       ),
       bodyModel: presentNodeBody(diagramNode, this.graphData),
-      simNodeState: this._lookupSimNodeState(this._simOverlayData?.nodes, diagramNode),
+      simNodeState: this._lookupSimNodeState(this._simOverlayData?.update.simNodeStateByHandleId, diagramNode),
     })
     pixiDiagramNode.setup()
     pixiDiagramNode.update()
@@ -2483,7 +2483,7 @@ export class PixiGraphRenderer {
   }
 
   private _lookupSimNodeState(
-    animgraphHandleIdToSimNodeState?: SimSnapshot['nodes'],
+    animgraphHandleIdToSimNodeState?: SimSnapshotUpdate['simNodeStateByHandleId'],
     diagramNode?: RenderNode,
   ): SimNodeState | undefined {
     if (!animgraphHandleIdToSimNodeState) return
@@ -2496,7 +2496,7 @@ export class PixiGraphRenderer {
   }
 
   private _applySimOverlayFull(
-    animgraphHandleIdToSimNodeState?: SimSnapshot['nodes']
+    animgraphHandleIdToSimNodeState?: SimSnapshotUpdate['simNodeStateByHandleId'],
   ): void {
     if (!animgraphHandleIdToSimNodeState) {
       for (const [_diagramNodeId, pixiDiagramNode] of this._diagramNodeIdToPixiDiagramNodeMap) {
@@ -2516,8 +2516,8 @@ export class PixiGraphRenderer {
   }
 
   private _applySimOverlayDelta(
-    animgraphHandleIdToSimNodeState: SimSnapshot['nodes'],
-    delta: NonNullable<SimSnapshot['nodeDelta']>
+    animgraphHandleIdToSimNodeState: SimSnapshotUpdate['simNodeStateByHandleId'],
+    delta: NonNullable<SimSnapshotUpdate['nodeDelta']>
   ): void {
     this._applySimOverlayForSimKeys(
       animgraphHandleIdToSimNodeState, 
@@ -2527,7 +2527,7 @@ export class PixiGraphRenderer {
   }
 
   private _applySimOverlayForSimKeys(
-    animgraphHandleIdToSimNodeState: SimSnapshot['nodes'],
+    animgraphHandleIdToSimNodeState: SimSnapshotUpdate['simNodeStateByHandleId'],
     ...simKeysList: readonly string[][]
   ): void {
     const index = this._ensureSimOverlayKeyIndex()
@@ -2580,13 +2580,14 @@ export class PixiGraphRenderer {
     // Suspended / not ready: keep lastSimOverlay for resume / tile remount.
     if (!this.ready || this._suspended) return
 
-    if (!!prevSimSnapshot && !!simSnapshot && !!simSnapshot.nodeDelta) {
-      if (Object.keys(simSnapshot.nodeDelta.changes).length === 0 && simSnapshot.nodeDelta.removed.length === 0) return
-      this._applySimOverlayDelta(simSnapshot.nodes, simSnapshot.nodeDelta)
+    const simSnapshotUpdate = simSnapshot?.update
+    if (!!prevSimSnapshot && !!simSnapshotUpdate && !!simSnapshotUpdate.nodeDelta) {
+      if (Object.keys(simSnapshotUpdate.nodeDelta.changes).length === 0 && simSnapshotUpdate.nodeDelta.removed.length === 0) return
+      this._applySimOverlayDelta(simSnapshotUpdate.simNodeStateByHandleId, simSnapshotUpdate.nodeDelta)
       return
     }
 
-    this._applySimOverlayFull(simSnapshot?.nodes)
+    this._applySimOverlayFull(simSnapshotUpdate?.simNodeStateByHandleId)
   }
 
   // #endregion API: Simulation

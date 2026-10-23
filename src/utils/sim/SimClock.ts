@@ -42,6 +42,16 @@ export class SimClock {
     return dt
   }
 
+  /** Live bridge: one game frame as-is (no editor speed — game dt is authoritative). */
+  tickGame(gameDt: number, gameRawDt = gameDt): number {
+    const rawDt = gameRawDt > 0 ? gameRawDt : gameDt
+    const dt = gameDt > 0 ? gameDt : rawDt
+    this.lastRawDt = rawDt
+    this.lastDt = dt
+    this.time += dt
+    return dt
+  }
+
   step(): number {
     const rawDt = this.stepDt
     const dt = rawDt * this.speed

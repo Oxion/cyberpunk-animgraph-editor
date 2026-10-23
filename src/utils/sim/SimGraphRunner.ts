@@ -1,13 +1,49 @@
-import type { AnimgraphNode } from '../graph/animgraphTypes'
-import type { RenderData } from '../graph/diagramTypes'
-import { NodeDefinitionRegistry } from '../NodeDefinition'
 import { isAnimType } from '../animTypes/registry'
+import { calcSlotNameHash } from '../cnameHash'
+import type { AnimgraphNode } from '../graph/animgraphTypes'
+import { ANIM_NODE_TYPE_STATE_MACHINE } from '../graph/animNodeTypes'
+import type { RenderData } from '../graph/diagramTypes'
+import { InstanceStore } from '../InstanceStore'
+import { NodeDefinitionRegistry } from '../NodeDefinition'
+import { TypedStore } from '../TypedStore'
+import {
+  readAnimDatabaseDepotPath,
+  resolveAnimDatabaseName,
+  resolveAnimDatabaseRow,
+  type AnimDatabaseLibrary,
+} from './animDatabase'
+import {
+  clearBoneOpFrameCache,
+  clearMathExprPoseFrameCache,
+  createBoneOpFrameCache,
+  createMathExprPoseFrameCache,
+  IDENTITY_QUAT_STATE,
+  mulQuatState,
+  nlerpQuatState,
+  type BoneOpQuatState,
+  type BoneOpRotateState,
+  type BoneOpTranslateState,
+  type MathExprPoseFloatSocketSnap,
+  type MathExprPoseQuatSocketSnap,
+  type MathExprPoseVectorSocketSnap,
+} from './boneOpDyn'
 import {
   checkRuntimeCondition,
-  checkStaticCondition,
-  normalizeCompareFunc,
-  type CheckConditionCtx,
+  checkStaticCondition
 } from './checkCondition'
+import {
+  advanceClipClock,
+  beginClipClockStep,
+  clipWindow,
+  deactivateClipClock,
+  ensureClipClock,
+  resolvePhaseClipPads,
+  scrubClipClock,
+  type ClipClockState,
+} from './clipClock'
+import type { ClipLibrary } from './clipLibrary'
+import { DEFAULT_ANIM_FPS } from './clipLibrary'
+import type { ClipPoseLibrary } from './clipPoseLibrary'
 import { SimConditionDyn } from './conditionDyn'
 import {
   blend2WeightFromInput,
@@ -18,10 +54,8 @@ import {
   buildBlendMultipleSlots,
   clearInertializationRequest,
   createInertializationRequestSink,
-  mergeInertializationRequest,
   requestInertialization,
   selectBlendMultipleInputs,
-  type InertializationRequestSink,
 } from './engineParity'
 import {
   evalAnimMathExpression,
@@ -35,23 +69,7 @@ import {
   ZERO_VEC4,
   type SimVec4,
 } from './evalAnimMathExpressionVector'
-import {
-  clearBoneOpFrameCache,
-  clearMathExprPoseFrameCache,
-  createBoneOpFrameCache,
-  createMathExprPoseFrameCache,
-  IDENTITY_QUAT_STATE,
-  mulQuatState,
-  nlerpQuatState,
-  type BoneOpFrameCache,
-  type BoneOpQuatState,
-  type BoneOpRotateState,
-  type BoneOpTranslateState,
-  type MathExprPoseFloatSocketSnap,
-  type MathExprPoseFrameCache,
-  type MathExprPoseQuatSocketSnap,
-  type MathExprPoseVectorSocketSnap,
-} from './boneOpDyn'
+import { ExtraFloatTrackCollector } from './extraTrackCollector'
 import {
   clampValueBySpeed,
   createFloatRandomState,
@@ -73,6 +91,61 @@ import {
   type FloatRandomState,
   type FloatSinusState,
 } from './floatDyn'
+import { FLOOR_IK_PARTIAL_MSG } from './floorIkSim'
+import { createFppCameraDyn, type FppCameraDyn } from './fppCameraDyn'
+import { FPP_CAMERA_PITCH } from './fppCameraKeys'
+import { activateFppCamera, updateFppCamera } from './fppCameraUpdate'
+import {
+  ensureIkTargetsController,
+  resolveGenerateIkChainSettings,
+  resolveHumanIkChainSettings,
+} from './ikTargetsControllerSim'
+import { InertializationDynDef } from './inertializationDyn'
+import { updateInertialization } from './inertializationSim'
+import { updateLookAtController } from './lookAtControllerSim'
+import {
+  IDENTITY_SPHERE_XF,
+  type LookAtSphereXf,
+} from './lookAtMath'
+import {
+  evalLookAtPose360Direction,
+  updateLookAtPose360,
+} from './lookAtPose360Sim'
+import { updateLookAtVehicleRestrictions } from './lookAtVehicleRestrictionsSim'
+import {
+  computeMixerSlotWeights,
+  prepareMixerSlotState,
+  restoreAnimEventFrame,
+  snapshotAnimEventFrame,
+  updateMixerSlot,
+} from './mixerSlotSim'
+import { updateGraphSlot } from './nodes/GraphSlot/update'
+import { SimStateMachineRuntime } from './nodes/SimStateMachine/runtime'
+import { findStateOutput } from './nodes/SimStateMachine/state'
+import { updateSm } from './nodes/SimStateMachine/update'
+import { bindBlendFromPoseToStateMachines, findStateMachineHandles } from './nodes/SimStateMachine/utils'
+import {
+  applyExtraTrackLayout,
+  copyPose,
+  createPose,
+  DEFAULT_STACK_CAPACITY,
+  type Pose,
+} from './pose'
+import type { Qs } from './poseFk'
+import {
+  IDENTITY_QS,
+  lerpQs,
+  qsFromPosRotScale,
+  slerpQs,
+} from './poseFk'
+import { PoseScratchPool } from './poseScratchPool'
+import type { RigEntry } from './rigResource'
+import { BlendFromPoseDynState, SmFrozenPoseSlot } from './sample.types'
+import {
+  allocSampleScratch,
+  sampleGraphPose,
+} from './sampleWalk'
+import { createEmptySharedMetaPose } from './sharedMetaPose'
 import {
   createSignalState,
   readSignalParams,
@@ -81,21 +154,11 @@ import {
   type SignalDynState,
 } from './signalDyn'
 import {
-  advanceClipClock,
-  beginClipClockStep,
-  clipWindow,
-  deactivateClipClock,
-  ensureClipClock,
-  resolvePhaseClipPads,
-  scrubClipClock,
-  type ClipClockState,
-} from './clipClock'
-import {
-  readAnimDatabaseDepotPath,
-  resolveAnimDatabaseName,
-  resolveAnimDatabaseRow,
-  type AnimDatabaseLibrary,
-} from './animDatabase'
+  compileSimGraph,
+  dispatchCompiledServiceEvents,
+  type SimCompiledGraph,
+} from './simCompile'
+import { compileSimNode } from './simCompileNodes'
 import {
   handleType,
   isLogicOpOr,
@@ -107,125 +170,37 @@ import {
   readVector4,
   resolveHandle,
 } from './simDataUtils'
-import { calcSlotNameHash } from '../cnameHash'
-import type { ClipLibrary } from './clipLibrary'
-import { DEFAULT_ANIM_FPS } from './clipLibrary'
-import type { ClipPoseLibrary } from './clipPoseLibrary'
-import type { RigEntry } from './rigResource'
-import type { Qs } from './poseFk'
-import {
-  IDENTITY_QS,
-  lerpQs,
-  qsFromPosRotScale,
-  slerpQs,
-} from './poseFk'
-import {
-  applyExtraTrackLayout,
-  copyPose,
-  createPose,
-  DEFAULT_STACK_CAPACITY,
-  type Pose,
-} from './pose'
-import {
-  allocSampleScratch,
-  createEmptySharedMetaPose,
-  sampleGraphPose,
-  samplePoseFromNode,
-  type BlendFromPoseDynState,
-  type PoseScratchPool,
-  type SmFrozenPoseSlot,
-} from './sampleWalk'
-import { SNAP_TO_TERRAIN_PARTIAL_MSG } from './snapToTerrainIk'
-import { FLOOR_IK_PARTIAL_MSG } from './floorIkSim'
+import type { FloatEvalCtx, SampleCtx, WalkCtx as SimGraphRunnerWalkCtx, SimGraphSampleSlotHost, SimGraphUpdateSlotHost } from './SimGraphRunner.types'
+import type { SimInputBoard } from './SimInputBoard'
 import {
   createSimSampleLog,
   flushSimSampleLog,
   simSampleLogLine,
 } from './simSampleLog'
-import { buildStackPairing } from './stackPairing'
-import { ExtraFloatTrackCollector } from './extraTrackCollector'
-import type { SimInputBoard } from './SimInputBoard'
-import { TypedStore } from '../TypedStore'
-import { InstanceStore } from '../InstanceStore'
-import { createFppCameraDyn, type FppCameraDyn } from './fppCameraDyn'
-import { FPP_CAMERA_PITCH } from './fppCameraKeys'
-import { activateFppCamera, updateFppCamera } from './fppCameraUpdate'
-import { updateLookAtController } from './lookAtControllerSim'
-import {
-  computeMixerSlotWeights,
-  prepareMixerSlotState,
-  restoreAnimEventFrame,
-  snapshotAnimEventFrame,
-  updateMixerSlot,
-} from './mixerSlotSim'
-import { updateWorkspotHub } from './workspotHubSim'
-import {
-  IDENTITY_SPHERE_XF,
-  type LookAtSphereXf,
-} from './lookAtMath'
-import { updateLookAtVehicleRestrictions } from './lookAtVehicleRestrictionsSim'
-import {
-  compileSimGraph,
-  dispatchCompiledServiceEvents,
-  type SimCompiledGraph,
-} from './simCompile'
-import { compileSimNode } from './simCompileNodes'
-import {
-  ensureIkTargetsController,
-  resolveGenerateIkChainSettings,
-  resolveHumanIkChainSettings,
-} from './ikTargetsControllerSim'
-import { LookAtPose360DynDef } from './lookAtPose360Dyn'
-import {
-  evalLookAtPose360Direction,
-  updateLookAtPose360,
-} from './lookAtPose360Sim'
-import { SwitchInertializationDynDef } from './switchInertializationDyn'
-import { InertializationDynDef } from './inertializationDyn'
-import { updateInertialization } from './inertializationSim'
 import type { SimPreSampleHook, SimServiceEvent } from './simServiceEvents'
 import {
-  applySmEntryConditions,
-  bindBlendFromPoseToStateMachines,
-  evaluateSmTransitionBlendAlpha,
-  findStateMachineHandles,
-  findStateOutput,
-  SimStateMachineRuntime,
-  updateStateMachineTransitions,
-} from './SimStateMachine'
+  diffSimNodeStates,
+  resolveSimActiveClips,
+  SIM_UPDATE_WARNINGS_MAX,
+} from './simSnapshot'
 import type {
   SimNodeState,
   SimSnapshot,
-  SimActiveClip,
-  SimClipResolve,
-  SimSampleWarning,
-  SimUpdateWarning,
+  SimSnapshotUpdate,
+  SimUpdateWarning
 } from './simTypes'
-import {
-  diffSimNodeStates,
-  emptySimSnapshot,
-  SIM_UPDATE_WARNINGS_MAX,
-} from './simSnapshot'
-
-/** Classify SkAnim clip lookup for HUD (ok / empty / no-lib / missing / gated). */
-function classifyClipResolve(
-  animName: string,
-  library: ClipLibrary | null,
-  isWrapperActive: (name: string) => boolean
-): SimClipResolve {
-  if (!animName || animName === 'None') return 'empty'
-  if (!library || library.entryCount === 0) return 'no-lib'
-  if (library.resolveClip(animName, isWrapperActive)) return 'ok'
-  if (library.hasClipAnywhere(animName)) return 'gated'
-  return 'missing'
-}
+import { compareNumber } from './simUtils'
+import { SNAP_TO_TERRAIN_PARTIAL_MSG } from './snapToTerrainIk'
+import { buildStackPairing } from './stackPairing'
+import { SwitchInertializationDynDef } from './switchInertializationDyn'
+import { updateWorkspotHub } from './workspotHubSim'
 
 /** Engine SkAnim::RefreshWhenDirty + applyInertializationOnAnimSetSwap (0.5s). */
 const ANIM_SET_SWAP_INERTIALIZATION_DURATION = 0.5
 
 function noteAnimSetSwapInertialization(
   node: AnimgraphNode,
-  ctx: WalkCtx,
+  ctx: SimGraphRunnerWalkCtx,
   animSetSwapped: boolean
 ): void {
   if (!animSetSwapped) return
@@ -241,7 +216,7 @@ function noteAnimSetSwapInertialization(
  * Mark SkAnim clock for HUD; advance only when a ClipLibrary is loaded
  * (avoids AnimEnd spam with empty library).
  */
-function runSkAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
+function runSkAnimClipClock(node: AnimgraphNode, ctx: SimGraphRunnerWalkCtx): number {
   const d = (node.Data ?? {}) as Record<string, unknown>
   const fields = readSkAnimClockFields(d)
   const clock = ensureClipClock(ctx.clipClocks, node.HandleId)
@@ -266,7 +241,7 @@ function runSkAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
 }
 
 /** SkSpeedAnim / SkSyncedMasterAnim: currTime += Speed * dt. */
-function runSkSpeedAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
+function runSkSpeedAnimClipClock(node: AnimgraphNode, ctx: SimGraphRunnerWalkCtx): number {
   const d = (node.Data ?? {}) as Record<string, unknown>
   const speedH = resolveHandle(ctx.handles, resolveSpeedLinkRaw(d))
   if (speedH) updateFromNode(speedH, ctx)
@@ -300,7 +275,7 @@ function runSkSpeedAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
  */
 function runSkPhaseAnimClipClock(
   node: AnimgraphNode,
-  ctx: WalkCtx,
+  ctx: SimGraphRunnerWalkCtx,
   mode: 'phase' | 'duration' | 'speed'
 ): number {
   const d = (node.Data ?? {}) as Record<string, unknown>
@@ -358,7 +333,7 @@ function runSkPhaseAnimClipClock(
  * SkOneShotAnim clock only (caller Updates input pose link).
  * Returns shot blend weight for markActive (0..1).
  */
-function runSkOneShotAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
+function runSkOneShotAnimClipClock(node: AnimgraphNode, ctx: SimGraphRunnerWalkCtx): number {
   const d = (node.Data ?? {}) as Record<string, unknown>
   const clock = ensureClipClock(ctx.clipClocks, node.HandleId)
   if (!clock.wasActive) clock.oneShotRunning = true
@@ -408,7 +383,7 @@ function runSkOneShotAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
  * SkDurationAnim: stretch playback so clipped clip fits durationLink seconds.
  * No durationLink → same as SkAnim. Registers clip clock for status HUD.
  */
-function runSkDurationAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
+function runSkDurationAnimClipClock(node: AnimgraphNode, ctx: SimGraphRunnerWalkCtx): number {
   const d = (node.Data ?? {}) as Record<string, unknown>
   const durationH = resolveHandle(ctx.handles, d.durationLink)
   if (durationH) updateFromNode(durationH, ctx)
@@ -459,7 +434,7 @@ function runSkDurationAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
  * SkFrameAnim: scrub by progressLink (0..1) / timeLink (sec) / frameLink (frame).
  * Still registers a clip clock so HUD status lists the anim (unlike time-driven SkAnim).
  */
-function runSkFrameAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
+function runSkFrameAnimClipClock(node: AnimgraphNode, ctx: SimGraphRunnerWalkCtx): number {
   const d = (node.Data ?? {}) as Record<string, unknown>
   for (const key of ['progressLink', 'timeLink', 'frameLink'] as const) {
     const h = resolveHandle(ctx.handles, d[key])
@@ -519,7 +494,7 @@ function runSkFrameAnimClipClock(node: AnimgraphNode, ctx: WalkCtx): number {
 }
 
 /** Resolve AnimDatabase CSV row → animation CName, then run clip clock. */
-function runAnimDatabaseClipClock(node: AnimgraphNode, ctx: WalkCtx) {
+function runAnimDatabaseClipClock(node: AnimgraphNode, ctx: SimGraphRunnerWalkCtx) {
   const d = (node.Data ?? {}) as Record<string, unknown>
   const depot = readAnimDatabaseDepotPath(d)
   const db = ctx.animDbLibrary?.findByDepotPath(depot)
@@ -639,125 +614,12 @@ function markActive(
   s.alpha = alpha
 }
 
-/** Shared float-eval context (board + stateful damp/spring/latch/signal). */
-type FloatEvalCtx = {
-  board: SimInputBoard
-  handles: Map<string, AnimgraphNode>
-  dt: number
-  /** Undilated dt (rawTimeDelta); defaults to dt when omitted. */
-  rawDt: number
-  floatDyn: Map<string, FloatDynState>
-  floatUpdated: Set<string>
-  /** VectorLatch / DampVector latched or damped Vector4. */
-  vectorDyn: Map<string, SimVec4>
-  /** TransformLatch latched Qs. */
-  transformDyn: Map<string, Qs>
-  randomDyn: Map<string, FloatRandomState>
-  sinusDyn: Map<string, FloatSinusState>
-  signalDyn: Map<string, SignalDynState>
-  signalUpdated: Set<string>
-  clipLibrary: ClipLibrary | null
-  /** GLB pose curves — MixerSlot / SkAnim Sample; optional on Update for duration. */
-  clipPoseLibrary: ClipPoseLibrary | null
-  /** Per-runner math expression compile cache (idents + scalar/mixed). */
-  mathExprCache: MathExprCompileCache
-  /** Instance shared vars (fppCamera.sharedVar, …). */
-  sharedVars: TypedStore
-  /** Engine AnimNodeUpdateContext eyes look-at temps (LookAtController → Pose360). */
-  eyesLookAtDirection: number
-  eyesLookAtDirectionEnabled: boolean
-  /** Engine context.m_isFacial — Eyes enableFloatTrack coupling. */
-  isFacial: boolean
-  /** Engine context.m_eyesLookAtEnabled (body Eyes writes; facial Eyes reads). */
-  eyesLookAtEnabled: number
-  /** Entity / parent world xforms for LookAt WS↔MS / parent-space. */
-  entityLocalToWorld: LookAtSphereXf
-  parentObjectLocalToWorld: LookAtSphereXf
-}
-
-type WalkCtx = FloatEvalCtx & {
-  nodes: Record<string, SimNodeState>
-  /** Previous frame overlay — resetOnActivation for bone ops. */
-  prevNodes: Record<string, SimNodeState> | null
-  visited: Set<string>
-  runtimes: Map<string, SimStateMachineRuntime>
-  condCtx: CheckConditionCtx
-  clipClocks: Map<string, ClipClockState>
-  animDbLibrary: AnimDatabaseLibrary | null
-  /** Cached StaticSwitch Init results (handleId → useTrue). */
-  staticSwitchResults: Map<string, boolean>
-  /** BlendFromPose instance buffers (timer / request / cached additive). */
-  blendFromPoseDyn: Map<string, BlendFromPoseDynState>
-  /** BlendFromPose handleId → owning SM handleId (TEMP_Bind). */
-  blendFromPoseSmBind: Map<string, string>
-  /**
-   * Engine UpdateContext inertialization request (SM / Switch / nested merge).
-   * Cleared each frame; Inertialization node Sample (TBD) consumes it.
-   */
-  inertialization: InertializationRequestSink
-  /** Frame meta for nested GraphSlot runners. */
-  time: number
-  playing: boolean
-  speed: number
-  /**
-   * Project GraphSlot attach: resolve slot name → child diagram runner.
-   * Nested updates share the board; child owns its own dyn/SM state.
-   */
-  slotHost?: SimGraphSlotHost
-  /** GraphSlotInput → Update parent slot inputLink (engine m_parentGraphLink). */
-  parentPoseUpdate?: () => void
-  /** GraphSlotInput → Sample parent slot inputLink pose. */
-  parentPoseSample?: (out: Pose) => boolean
-  /**
-   * Build parentPoseSample for a nested GraphSlot step (samples inputLink
-   * with this runner's Sample buffers / libraries).
-   */
-  makeParentPoseSample?: (inputLink: AnimgraphNode) => (out: Pose) => boolean
-  /** AdditionalFloatTrack local time (engine i_time), shared with Sample. */
-  additionalFloatTrackTimes: Map<string, number>
-  /**
-   * Update-traversal successors this frame: parentHandleId → childHandleIds
-   * in visit order (role order for blends: base/first then blend/second).
-   * Value/weight links are not recorded — only followUpdate targets.
-   */
-  updateSucc: Map<string, string[]>
-  /** Bound followUpdate for node sims that recurse without a call-site lambda. */
-  followUpdate: (
-    parent: AnimgraphNode,
-    child: AnimgraphNode | null | undefined
-  ) => void
-  boneOpCache: BoneOpFrameCache
-  boneRotateDyn: Map<string, BoneOpRotateState>
-  boneQuatDyn: Map<string, BoneOpQuatState>
-  boneTranslateDyn: Map<string, BoneOpTranslateState>
-  mathExprPoseCache: MathExprPoseFrameCache
-  /** FPPCamera per-node dyn. */
-  fppCameraDyn: Map<string, FppCameraDyn>
-  /** Per-node instance store (LookAtController, …). */
-  instanceStore: InstanceStore
-  /**
-   * Custom-param / ServiceEvent list for this frame (after preSample hooks).
-   * Consumers filter by kind; fan-out — do not mutate/remove entries.
-   */
-  serviceEvents: readonly SimServiceEvent[]
-  /** Engine ExtraDataCollector — MarkExtraFloatTrack during Update. */
-  extraTracks: ExtraFloatTrackCollector
-  /** When true, Update appends diagnostics into updateWarnings. */
-  updateWarningsEnabled?: boolean
-  updateWarnings?: SimUpdateWarning[]
-  /**
-   * Engine AnimNodeUpdateContext.m_keepFullUpdate — OR true only (workspot sleep gate).
-   * Set by GenerateIk / HumanIk when controller HasAnyActiveIK.
-   */
-  keepFullUpdate: boolean
-}
-
 const CLIP_ZERO_SPEED_EPS = 1e-8
 
-function pushUpdateWarning(ctx: WalkCtx, w: SimUpdateWarning): void {
-  if (!ctx.updateWarningsEnabled || !ctx.updateWarnings) return
+function pushUpdateWarning(ctx: SimGraphRunnerWalkCtx, warning: SimUpdateWarning): void {
+  if (!ctx.updateWarningsEnabled) return
   if (ctx.updateWarnings.length >= SIM_UPDATE_WARNINGS_MAX) return
-  ctx.updateWarnings.push(w)
+  ctx.updateWarnings.push(warning)
 }
 
 /** Engine AdditionalFloatTrackContainer::CollectExtraTracks. */
@@ -804,7 +666,7 @@ function markAdditionalFloatTrackExtras(
 }
 
 /** Speed≈0 freezes clip time — AnimEnd / loop events never fire. */
-function noteClipZeroSpeed(ctx: WalkCtx, node: AnimgraphNode, speed: number): void {
+function noteClipZeroSpeed(ctx: SimGraphRunnerWalkCtx, node: AnimgraphNode, speed: number): void {
   if (!Number.isFinite(speed) || Math.abs(speed) >= CLIP_ZERO_SPEED_EPS) return
   const anim = readCName((node.Data ?? {}).animation) || 'None'
   pushUpdateWarning(ctx, {
@@ -813,43 +675,6 @@ function noteClipZeroSpeed(ctx: WalkCtx, node: AnimgraphNode, speed: number): vo
     speed,
     message: `Clip speed≈0 (${anim}, #${node.HandleId}) — AnimEnd unreachable`,
   })
-}
-
-/** Project GraphSlot attach: resolve slot name → nested diagram Update. */
-export type SimGraphSlotHost = {
-  /**
-   * Run nested diagram Update (shared board, no endFrame).
-   * Returns null when slot name missing, unknown, or cycle.
-   */
-  stepNested(
-    slotName: string,
-    parentPoseUpdate?: () => void,
-    parentPoseSample?: (out: Pose) => boolean
-  ): {
-    diagramId: string
-    snap: SimSnapshot
-    /** Nested UpdateContext inertialization request (graphWrapper up-copy). */
-    inertialization: InertializationRequestSink
-    /** Nested keepFullUpdate (OR into parent). */
-    keepFullUpdate: boolean
-  } | null
-  /** Latest nested Sample pose for slot (after stepNested this frame). */
-  getNestedPose(slotName: string): Pose | null
-}
-
-export type SimStepOptions = {
-  /** When false, caller owns board.endFrame (multi-runner / nested publish). Default true. */
-  endBoardFrame?: boolean
-  slotHost?: SimGraphSlotHost
-  parentPoseUpdate?: () => void
-  parentPoseSample?: (out: Pose) => boolean
-  /** Monotonic publish generation stamped onto the returned snapshot. */
-  poseGen?: number
-  /**
-   * Undilated frame dt (engine rawTimeDelta). When omitted, treated as equal to
-   * scaled `dt` (dilatation factor = 1).
-   */
-  rawDt?: number
 }
 
 export function isGraphSlotType(t: string | null | undefined): boolean {
@@ -877,20 +702,8 @@ export function collectGraphSlotNames(
   return out
 }
 
-/**
- * GraphSlot OnUpdate: WorkspotInertialization.duration + hit.hitType.
- * Engine: request when duration > 0 && hitType == 0, then clear duration.
- */
-function noteGraphSlotWorkspotInertialization(ctx: WalkCtx): void {
-  const duration = ctx.board.getFeature('WorkspotInertialization', 'duration') ?? 0
-  const hitType = ctx.board.getFeature('hit', 'hitType') ?? 0
-  if (!(duration > 0) || hitType !== 0) return
-  requestInertialization(ctx.inertialization, duration)
-  ctx.board.setFeature('WorkspotInertialization', 'duration', 0)
-}
-
 /** Record Update walk edge (deduped). Not for weight/value links. */
-function recordUpdateSucc(ctx: WalkCtx, parentId: string, childId: string): void {
+function recordUpdateSucc(ctx: SimGraphRunnerWalkCtx, parentId: string, childId: string): void {
   let arr = ctx.updateSucc.get(parentId)
   if (!arr) {
     arr = []
@@ -904,7 +717,7 @@ function recordUpdateSucc(ctx: WalkCtx, parentId: string, childId: string): void
 function followUpdate(
   parent: AnimgraphNode,
   child: AnimgraphNode | null | undefined,
-  ctx: WalkCtx
+  ctx: SimGraphRunnerWalkCtx
 ): void {
   if (!child) return
   recordUpdateSucc(ctx, parent.HandleId, child.HandleId)
@@ -1055,26 +868,6 @@ function linkOrConst(
   const h = resolveHandle(fctx.handles, link)
   if (h) return readFloatSource(h, fctx, fallback, depth + 1)
   return readNumber(constVal, fallback)
-}
-
-function compareFloatOp(a: number, b: number, operation: unknown): boolean {
-  const eps = Number.EPSILON * 8
-  switch (normalizeCompareFunc(operation)) {
-    case 'equal':
-      return Math.abs(a - b) <= eps
-    case 'notequal':
-      return Math.abs(a - b) > eps
-    case 'less':
-      return a < b
-    case 'lessequal':
-      return a <= b
-    case 'greater':
-      return a > b
-    case 'greaterequal':
-      return a >= b
-    default:
-      return Math.abs(a - b) <= eps
-  }
 }
 
 function evalFloatMathOp(a: number, b: number, operationType: unknown): number {
@@ -1606,11 +1399,11 @@ function resolvePoseInputLink(
   )
 }
 
-function wasBoneOpActive(ctx: WalkCtx, handleId: string): boolean {
+function wasBoneOpActive(ctx: SimGraphRunnerWalkCtx, handleId: string): boolean {
   return !!ctx.prevNodes?.[handleId]?.active
 }
 
-function walkFloatValueInputs(node: AnimgraphNode, ctx: WalkCtx): void {
+function walkFloatValueInputs(node: AnimgraphNode, ctx: SimGraphRunnerWalkCtx): void {
   forEachLinkedInput(node, ctx.handles, (linked) => updateFromNode(linked, ctx))
 }
 
@@ -1772,8 +1565,9 @@ function readTransformSource(
 /** True when latch should (re)sample — first create or OnActivated edge. */
 function latchShouldSample(fctx: FloatEvalCtx, id: string, hasState: boolean): boolean {
   if (!hasState) return true
+  // @TODO there should be full SimGraphRunnerWalkCtx
   // WalkCtx carries prevNodes; re-sample on activation even if clock-tick latched early.
-  const prev = (fctx as WalkCtx).prevNodes
+  const prev = (fctx as SimGraphRunnerWalkCtx).prevNodes
   if (prev) return !prev[id]?.active
   return false
 }
@@ -1938,7 +1732,7 @@ function readFloatSource(
   if (t === 'animAnimNode_FloatComparator') {
     const a = linkOrConst(d.firstInputLink, d.firstValue, fctx, 0, depth)
     const b = linkOrConst(d.secondInputLink, d.secondValue, fctx, 0, depth)
-    const ok = compareFloatOp(a, b, d.operation)
+    const ok = compareNumber(a, b, d.operation)
     return ok
       ? linkOrConst(d.trueInputLink, d.trueValue, fctx, 0, depth)
       : linkOrConst(d.falseInputLink, d.falseValue, fctx, 0, depth)
@@ -2446,7 +2240,7 @@ function findRootHandle(
  * Game-like Update walk: AnimGraph::Update → m_rootNode->Update, following pose links.
  * Sample (numeric pose) runs after Update in SimGraphRunner.step.
  */
-function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
+function updateFromNode(node: AnimgraphNode | null, ctx: SimGraphRunnerWalkCtx): void {
   if (!node) return
   if (ctx.visited.has(node.HandleId)) return
   ctx.visited.add(node.HandleId)
@@ -2477,44 +2271,12 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   if (t === 'animAnimNode_GraphSlotInput') {
     // Engine: m_parentGraphLink->Update() — parent GraphSlot.inputLink pose path.
     markActive(nodes, node.HandleId)
-    ctx.parentPoseUpdate?.()
+    ctx.slotHost.updateInput?.()
     return
   }
 
   if (isGraphSlotType(t)) {
-    const slotName = readCName(d.name)
-    const inputLink = resolveHandle(handles, d.inputLink)
-    const dontDeactivate = readBool(d.dontDeactivateInput)
-    const parentPoseSample =
-      inputLink && ctx.makeParentPoseSample
-        ? ctx.makeParentPoseSample(inputLink)
-        : undefined
-    const nested =
-      slotName && ctx.slotHost
-        ? ctx.slotHost.stepNested(
-            slotName,
-            () => {
-              followUpdate(node, inputLink, ctx)
-            },
-            parentPoseSample
-          )
-        : null
-
-    if (nested) {
-      mergeInertializationRequest(ctx.inertialization, nested.inertialization)
-      if (nested.keepFullUpdate) ctx.keepFullUpdate = true
-      markActive(nodes, node.HandleId, undefined, 1)
-      // Engine: when dontDeactivateInput, also Update inputLink from the slot itself.
-      if (dontDeactivate) followUpdate(node, inputLink, ctx)
-      // Engine: after nested/input Update — WorkspotInertialization + hit gate.
-      noteGraphSlotWorkspotInertialization(ctx)
-      return
-    }
-
-    // No attached graph — passthrough inputLink (engine fallback).
-    markActive(nodes, node.HandleId)
-    followUpdate(node, inputLink, ctx)
-    noteGraphSlotWorkspotInertialization(ctx)
+    updateGraphSlot(ctx, node)
     return
   }
 
@@ -2548,69 +2310,8 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     return
   }
 
-  if (t === 'animAnimNode_StateMachine') {
-    const def = readNumber(d.defaultStateIndex, 0)
-    let rt = ctx.runtimes.get(node.HandleId)
-    if (!rt) {
-      rt = new SimStateMachineRuntime(node.HandleId, def)
-      ctx.runtimes.set(node.HandleId, rt)
-    } else if (!wasBoneOpActive(ctx, node.HandleId)) {
-      // Engine OnActivated (e.g. Switch re-selects this SM): default + entry check.
-      rt.reset(def)
-    }
-    const states = Array.isArray(d.states) ? d.states : []
-
-    // Engine OnUpdate: entry → Update current state (full subgraph, nested SMs
-    // included) → CheckTransitions. Nested CheckTransitions run inside that
-    // Update, before parent sees AnimEnd / decides transitions.
-    applySmEntryConditions(node, rt, board, handles, nodes, ctx.condCtx)
-
-    if (!rt.isInTransition) {
-      const pre = resolveHandle(handles, states[rt.activeStateIndex])
-      if (pre) {
-        const out = findStateOutput(pre, handles)
-        if (out) updateFromNode(out, ctx)
-      }
-    }
-
-    updateStateMachineTransitions(
-      node,
-      rt,
-      ctx.dt,
-      board,
-      handles,
-      nodes,
-      ctx.condCtx,
-      ctx.inertialization
-    )
-
-    const active = resolveHandle(handles, states[rt.activeStateIndex])
-    if (active) {
-      markActive(nodes, active.HandleId)
-      const out = findStateOutput(active, handles)
-      // Already Updated above when !inTransition; followUpdate no-ops via visited.
-      followUpdate(node, out, ctx)
-    }
-    if (rt.isInTransition && rt.targetStateIndex != null) {
-      const target = resolveHandle(handles, states[rt.targetStateIndex])
-      if (target) {
-        markActive(nodes, target.HandleId)
-        const out = findStateOutput(target, handles)
-        followUpdate(node, out, ctx)
-      }
-    }
-    if (rt.firingTransitionHandleId) {
-      const blendAlpha = evaluateSmTransitionBlendAlpha(
-        node,
-        rt,
-        handles,
-        rt.transitionProgress
-      )
-      markActive(nodes, rt.firingTransitionHandleId, blendAlpha, blendAlpha)
-    }
-    for (const id of rt.eligibleTransitionIds) {
-      markActive(nodes, id)
-    }
+  if (t === ANIM_NODE_TYPE_STATE_MACHINE) {
+    updateSm(ctx, node)
     return
   }
 
@@ -2737,14 +2438,14 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
   }
 
   if (t === 'animAnimNode_State' || t === 'animAnimNode_StateFrozen') {
-    const out = findStateOutput(node, handles)
+    const out = findStateOutput(handles, node)
     followUpdate(node, out, ctx)
     return
   }
 
   // AnimNode_Stage — container forwards to Output (nodes[0]); entries pull inputPoses.
   if (t === 'animAnimNode_Stage') {
-    followUpdate(node, findStateOutput(node, handles), ctx)
+    followUpdate(node, findStateOutput(handles, node), ctx)
     return
   }
 
@@ -3151,12 +2852,12 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
     updateInertialization(
       node,
-      ctx.instanceStore,
+      ctx.transientStore,
       ctx.inertialization,
       ctx.dt,
       !wasBoneOpActive(ctx, node.HandleId)
     )
-    const dyn = ctx.instanceStore.get(InertializationDynDef, node.HandleId)
+    const dyn = ctx.transientStore.get(InertializationDynDef, node.HandleId)
     markActive(
       nodes,
       node.HandleId,
@@ -3348,7 +3049,7 @@ function updateFromNode(node: AnimgraphNode | null, ctx: WalkCtx): void {
     }
     const angle = updateLookAtPose360(
       node,
-      ctx.instanceStore,
+      ctx.transientStore,
       ctx,
       ctx.dt,
       ctx.clipLibrary,
@@ -3652,11 +3353,12 @@ export class SimGraphRunner {
   /** GraphSlot name → child runner id. */
   slotRunnerIds = new Map<string, string>()
 
-  private runtimes = new Map<string, SimStateMachineRuntime>()
+  private _snapshot?: SimSnapshot
+  private _simStateMachineRuntimes = new Map<string, SimStateMachineRuntime>()
   private handles: Map<string, AnimgraphNode> = new Map()
   private originalAnimgraph: RenderData['originalAnimgraph'] | null = null
   /** Previous step node overlay — used to emit nodeDelta. */
-  private prevNodes: Record<string, SimNodeState> | null = null
+  private _prevNodes?: Record<string, SimNodeState>
   /** Per-handle damp / spring / latch state (cleared on bind/reset / deactivate). */
   private floatDyn = new Map<string, FloatDynState>()
   /** VectorLatch / DampVector state. */
@@ -3677,7 +3379,9 @@ export class SimGraphRunner {
   /** FPPCamera instance data by handle. */
   private fppCameraDyn = new Map<string, FppCameraDyn>()
   /** Typed per-node instance bags (LookAtController, …). */
-  private instanceStore = new InstanceStore()
+  private _instanceStore = new InstanceStore()
+  /** Typed per-node per-activation instance bags (LookAtPose360, …). */
+  private _transientStore = new InstanceStore()
   /** Engine entity / parent LocalToWorld for LookAt (default identity). */
   entityLocalToWorld: LookAtSphereXf = { ...IDENTITY_SPHERE_XF }
   parentObjectLocalToWorld: LookAtSphereXf = { ...IDENTITY_SPHERE_XF }
@@ -3756,13 +3460,13 @@ export class SimGraphRunner {
   /** Track Shrinker handleId → remove count. */
   private trackShrinkRemoveCountByHandleId = new Map<string, number>()
   /** Pooled full-pose snapshots for capture handles. */
-  private capturedPoses = new Map<string, Pose>()
+  private _handleIdToCapturedPoseMap = new Map<string, Pose>()
   /** Handles captured this Sample pass. */
-  private capturedPoseThisFrame = new Set<string>()
+  private _capturedPoseThisFrameHandleIdsSet = new Set<string>()
   /** Loaded motion databases for AnimDatabase nodes. */
   private animDbLibrary: AnimDatabaseLibrary | null = null
   /** Per-SkAnim playback clocks */
-  private clipClocks = new Map<string, ClipClockState>()
+  private _clipClocks = new Map<string, ClipClockState>()
   /** AdditionalFloatTrack i_time (cleared when node leaves active Update path). */
   private additionalFloatTrackTimes = new Map<string, number>()
   /** MathExpression compile cache (idents + scalar/mixed); cleared on bind/reset. */
@@ -3821,27 +3525,31 @@ export class SimGraphRunner {
    * Use `forgetSlotDiagram` when pruning a GraphSlot name from the parent graph.
    */
   setSlotDiagramId(slotName: string, diagramId: string | null): void {
-    const want = slotName.trim()
-    if (!want || want === 'None') return
-    this.slotInitialized.add(want)
-    const next = (diagramId ?? '').trim()
-    if (!next) {
-      this.slotDiagramIds.delete(want)
-      const lower = want.toLowerCase()
-      if (lower !== want) this.slotDiagramIds.delete(lower)
-      return
+    const _slotName = slotName.trim()
+    if (!_slotName || _slotName === 'None') return
+
+    const lowerCaseSlotName = _slotName.toLowerCase()
+
+    this.slotInitialized.add(_slotName)
+    this.slotInitialized.add(lowerCaseSlotName)
+
+    if (!diagramId) {
+      this.slotDiagramIds.delete(_slotName)
+      this.slotDiagramIds.delete(lowerCaseSlotName)
+    } else {
+      this.slotDiagramIds.set(_slotName, diagramId)
+      this.slotDiagramIds.set(lowerCaseSlotName, diagramId)
     }
-    this.slotDiagramIds.set(want, next)
   }
 
   /** Remove slot config entirely (GraphSlot pruned from parent diagram). */
   forgetSlotDiagram(slotName: string): void {
-    const want = slotName.trim()
-    if (!want) return
-    this.clearSlotInitialized(want)
-    this.slotDiagramIds.delete(want)
-    const lower = want.toLowerCase()
-    if (lower !== want) this.slotDiagramIds.delete(lower)
+    if (!slotName || slotName === 'None') return
+
+    this.clearSlotInitialized(slotName)
+
+    this.slotDiagramIds.delete(slotName)
+    this.slotDiagramIds.delete(slotName.toLowerCase())
   }
 
   getSlotRunnerId(slotName: string): string | undefined {
@@ -3853,15 +3561,15 @@ export class SimGraphRunner {
   }
 
   setSlotRunnerId(slotName: string, runnerId: string | null): void {
-    const want = slotName.trim()
-    if (!want || want === 'None') return
-    if (runnerId == null || runnerId === '') {
-      this.slotRunnerIds.delete(want)
-      const lower = want.toLowerCase()
-      if (lower !== want) this.slotRunnerIds.delete(lower)
-      return
+    if (!slotName || slotName === 'None') return
+
+    if (!runnerId) {
+      this.slotRunnerIds.delete(slotName)
+      this.slotRunnerIds.delete(slotName.toLowerCase())
+    } else {
+      this.slotRunnerIds.set(slotName, runnerId)
+      this.slotRunnerIds.set(slotName.toLowerCase(), runnerId)
     }
-    this.slotRunnerIds.set(want, runnerId)
   }
 
   setClipLibrary(library: ClipLibrary | null): void {
@@ -3930,8 +3638,8 @@ export class SimGraphRunner {
    * Not for reactive Vue binding.
    */
   getCapturedPose(handleId: string): Pose | null {
-    if (!handleId || !this.capturedPoseThisFrame.has(handleId)) return null
-    return this.capturedPoses.get(handleId) ?? null
+    if (!handleId || !this._capturedPoseThisFrameHandleIdsSet.has(handleId)) return null
+    return this._handleIdToCapturedPoseMap.get(handleId) ?? null
   }
 
   /** Active rig used for Sample buffers (pooled reference). */
@@ -3951,15 +3659,15 @@ export class SimGraphRunner {
       const s = typeof id === 'string' ? id.trim() : ''
       if (s) this.stackCaptureHandleIds.add(s)
     }
-    for (const key of [...this.capturedPoses.keys()]) {
-      if (!this.stackCaptureHandleIds.has(key)) this.capturedPoses.delete(key)
+    for (const key of [...this._handleIdToCapturedPoseMap.keys()]) {
+      if (!this.stackCaptureHandleIds.has(key)) this._handleIdToCapturedPoseMap.delete(key)
     }
   }
 
   private ensureCapturePose(handleId: string): Pose | null {
     const rig = this.activeRig
     if (!rig) return null
-    let pose = this.capturedPoses.get(handleId)
+    let pose = this._handleIdToCapturedPoseMap.get(handleId)
     if (
       !pose ||
       pose.boneCount !== rig.boneNames.length ||
@@ -3974,20 +3682,20 @@ export class SimGraphRunner {
         this.trackStackCapacity,
         this.extraTrackCapacity
       )
-      this.capturedPoses.set(handleId, pose)
+      this._handleIdToCapturedPoseMap.set(handleId, pose)
     }
     return pose
   }
 
-  private beginPoseCaptures(): void {
-    this.capturedPoseThisFrame.clear()
+  private _beginPoseCaptures(): void {
+    this._capturedPoseThisFrameHandleIdsSet.clear()
   }
 
-  private capturePoseFromSample(handleId: string, pose: Pose): void {
+  private _capturePoseFromSample(handleId: string, pose: Pose): void {
     const dest = this.ensureCapturePose(handleId)
     if (!dest) return
     copyPose(dest, pose)
-    this.capturedPoseThisFrame.add(handleId)
+    this._capturedPoseThisFrameHandleIdsSet.add(handleId)
   }
 
   /** Force StaticSwitch Init re-eval (entity tags / HasAnimation context changed). */
@@ -4005,7 +3713,7 @@ export class SimGraphRunner {
     this.handles = new Map()
     this.originalAnimgraph = null
     this.compiled = null
-    this.runtimes.clear()
+    this._simStateMachineRuntimes.clear()
     this.floatDyn.clear()
     this.vectorDyn.clear()
     this.transformDyn.clear()
@@ -4017,7 +3725,7 @@ export class SimGraphRunner {
     this.boneTranslateDyn.clear()
     this.blendFromPoseDyn.clear()
     this.fppCameraDyn.clear()
-    this.instanceStore.clear()
+    this._instanceStore.clear()
     this.serviceEvents.length = 0
     this.sharedVars.clear()
     this.blendFromPoseSmBind = new Map()
@@ -4029,15 +3737,15 @@ export class SimGraphRunner {
     this.sharedMetaPose = createEmptySharedMetaPose()
     this.joinPoseCache.sampled.clear()
     this.joinPoseCache.poses.clear()
-    this.clipClocks.clear()
+    this._clipClocks.clear()
     this.additionalFloatTrackTimes.clear()
     this.mathExprCache.clear()
     this.conditionDyn.clear()
     this.staticSwitchResults.clear()
     this.staticSwitchDirty = true
-    this.prevNodes = null
-    this.capturedPoses.clear()
-    this.capturedPoseThisFrame.clear()
+    this._prevNodes = undefined
+    this._handleIdToCapturedPoseMap.clear()
+    this._capturedPoseThisFrameHandleIdsSet.clear()
     this.shrinkRemoveCountByHandleId.clear()
     this.trackShrinkRemoveCountByHandleId.clear()
     this.updateSucc.clear()
@@ -4084,19 +3792,19 @@ export class SimGraphRunner {
     if (this.activeRig) this.reallocSampleBuffers()
     for (const sm of findStateMachineHandles(this.handles)) {
       const def = readNumber(sm.Data?.defaultStateIndex, 0)
-      this.runtimes.set(sm.HandleId, new SimStateMachineRuntime(sm.HandleId, def))
+      this._simStateMachineRuntimes.set(sm.HandleId, new SimStateMachineRuntime(sm.HandleId, def))
     }
     // Compile may seed board feature defaults (WorkspotHub, …).
     this.compiled = compileSimGraph(
       this.handles,
-      this.instanceStore,
+      this._instanceStore,
       compileSimNode,
       board
     )
   }
 
   reset(): void {
-    this.prevNodes = null
+    this._prevNodes = undefined
     this.floatDyn.clear()
     this.vectorDyn.clear()
     this.transformDyn.clear()
@@ -4108,7 +3816,7 @@ export class SimGraphRunner {
     this.boneTranslateDyn.clear()
     this.blendFromPoseDyn.clear()
     this.fppCameraDyn.clear()
-    this.instanceStore.clear()
+    this._instanceStore.clear()
     this.serviceEvents.length = 0
     this.sharedVars.clear()
     for (const slot of this.smFrozenPoses.values()) slot.valid = false
@@ -4120,17 +3828,17 @@ export class SimGraphRunner {
     this.sharedMetaPose = createEmptySharedMetaPose()
     this.joinPoseCache.sampled.clear()
     this.joinPoseCache.poses.clear()
-    this.clipClocks.clear()
+    this._clipClocks.clear()
     this.additionalFloatTrackTimes.clear()
     this.mathExprCache.clear()
     this.conditionDyn.clear()
     this.staticSwitchResults.clear()
     this.staticSwitchDirty = true
     for (const sm of findStateMachineHandles(this.handles)) {
-      const rt = this.runtimes.get(sm.HandleId)
+      const rt = this._simStateMachineRuntimes.get(sm.HandleId)
       const def = readNumber(sm.Data?.defaultStateIndex, 0)
       if (rt) rt.reset(def)
-      else this.runtimes.set(sm.HandleId, new SimStateMachineRuntime(sm.HandleId, def))
+      else this._simStateMachineRuntimes.set(sm.HandleId, new SimStateMachineRuntime(sm.HandleId, def))
     }
   }
 
@@ -4146,7 +3854,7 @@ export class SimGraphRunner {
     }
   }
 
-  private recomputeStaticSwitches(board: SimInputBoard): void {
+  private _recomputeStaticSwitches(board: SimInputBoard): void {
     this.staticSwitchResults.clear()
     for (const h of this.handles.values()) {
       if (handleType(h) !== 'animAnimNode_StaticSwitch') continue
@@ -4162,111 +3870,86 @@ export class SimGraphRunner {
     this.staticSwitchDirty = false
   }
 
-  private buildCondCtx(board: SimInputBoard): CheckConditionCtx {
-    const ctx: CheckConditionCtx = { conditionDyn: this.conditionDyn }
-    const lib = this.clipLibrary
-    if (lib && lib.entryCount > 0) {
-      ctx.hasAnimation = (animationName: string) =>
-        lib.hasAnimation(animationName, (n) => board.isWrapperActive(n))
-    }
-    return ctx
+  private _updateStaticSwitches(board: SimInputBoard): void {
+    if (this.staticSwitchDirty) this._recomputeStaticSwitches(board)
   }
 
-  step(
-    dt: number,
-    board: SimInputBoard,
+  private _buildHasAnimation(board: SimInputBoard): (animationName: string) => boolean {
+    const lib = this.clipLibrary
+    if (lib && lib.entryCount > 0) {
+      return (animationName: string) => lib.hasAnimation(animationName, (n) => board.isWrapperActive(n))
+    }
+    return () => false
+  }
+
+  update(props: {
+    /** Monotonic publish generation stamped onto the returned snapshot. */
+    poseGen: number
+    dt: number
+    /**
+     * Undilated frame dt (engine rawTimeDelta). When omitted, treated as equal to
+     * scaled `dt` (dilatation factor = 1).
+     */
+    rawDt?: number
     time: number,
     playing: boolean,
     speed: number,
-    options?: SimStepOptions
-  ): SimSnapshot {
-    const endBoardFrame = options?.endBoardFrame !== false
-    const nodes: Record<string, SimNodeState> = {}
-    this.conditionDyn.beginStep()
-    beginClipClockStep(this.clipClocks)
-    // Captures may happen during nested parentPoseSample (Update) and Root Sample —
-    // clear once at frame start so mid-step captures are not wiped before Root Sample.
-    this.beginPoseCaptures()
-    if (this.staticSwitchDirty) this.recomputeStaticSwitches(board)
-    const floatUpdated = new Set<string>()
-    const signalUpdated = new Set<string>()
-    const condCtx = { ...this.buildCondCtx(board), dt }
-    const sampleLog = createSimSampleLog(`diagram=${this.diagramId ?? '?'}`)
-    const sampleVisitedAll = sampleLog ? new Set<string>() : undefined
-    const sampleWarnings: SimSampleWarning[] | undefined = this.sampleWarningsEnabled
-      ? []
-      : undefined
-    const updateWarnings: SimUpdateWarning[] | undefined = this.updateWarningsEnabled
-      ? []
-      : undefined
+    board: SimInputBoard,
+    /** Update slot host for nested graphs. */
+    slotHost: SimGraphUpdateSlotHost
+  }): SimSnapshot {
+    const {
+      poseGen,
+      dt, 
+      rawDt, 
+      time, 
+      playing, 
+      speed, 
+      board, 
+      slotHost, 
+    } = props
+
+    this.extraTracks.clear()
     this.updateSucc.clear()
+    this.conditionDyn.beginStep()
+    
+    this._updateStaticSwitches(board)
+
+    beginClipClockStep(this._clipClocks)
     clearInertializationRequest(this.inertializationRequest)
     clearBoneOpFrameCache(this.boneOpCache)
     clearMathExprPoseFrameCache(this.mathExprPoseCache)
+
+    const simNodeStateByHandleId: Record<string, SimNodeState> = {}
+    const floatUpdated = new Set<string>()
+    const signalUpdated = new Set<string>()
+    const sampleLog = createSimSampleLog(`diagram=${this.diagramId ?? '?'}`)
+    
     if (sampleLog) {
       const caps = [...this.stackCaptureHandleIds]
       const known = caps.filter((id) => this.hasHandle(id))
       simSampleLogLine(
         sampleLog,
-        `begin diagram=${this.diagramId ?? '?'} captures=[${caps.join(',')}] knownInGraph=[${known.join(',')}] slotHost=${options?.slotHost ? 1 : 0}`
+        `begin diagram=${this.diagramId ?? '?'} captures=[${caps.join(',')}] knownInGraph=[${known.join(',')}]`
       )
     }
 
-    const makeParentPoseSample = (inputLink: AnimgraphNode) => (out: Pose): boolean => {
-      const rig = this.activeRig
-      const poseScratch = this.poseScratch
-      if (!rig || !this.clipPoseLibrary || !poseScratch) {
-        return false
-      }
-      simSampleLogLine(
-        sampleLog,
-        `parentPoseSample inputLink=${inputLink.HandleId}`
-      )
-      return samplePoseFromNode(
-        inputLink,
-        {
-          handles: this.handles,
-          board,
-          instanceStore: this.instanceStore,
-          nodes,
-          clipClocks: this.clipClocks,
-          clipPoseLibrary: this.clipPoseLibrary,
-          clipLibrary: this.clipLibrary,
-          rig,
-          staticSwitchResults: this.staticSwitchResults,
-          runtimes: this.runtimes,
-          sampleNested: (slotName) => options?.slotHost?.getNestedPose(slotName) ?? null,
-          parentPoseSample: options?.parentPoseSample,
-          shrinkRemoveCountByHandleId: this.shrinkRemoveCountByHandleId,
-          trackShrinkRemoveCountByHandleId: this.trackShrinkRemoveCountByHandleId,
-          stackCaptureHandleIds: this.stackCaptureHandleIds,
-          captureStack: (handleId, pose) => this.capturePoseFromSample(handleId, pose),
-          poseScratch,
-          sampleLog,
-          sampleVisitedAll,
-          updateSucc: this.updateSucc,
-          warningsEnabled: this.sampleWarningsEnabled,
-          warnings: sampleWarnings,
-          lastWrittenNull: false,
-          boneOpCache: this.boneOpCache,
-          additionalFloatTrackTimes: this.additionalFloatTrackTimes,
-          mathExprCache: this.mathExprCache,
-          mathExprPoseCache: this.mathExprPoseCache,
-          parentTransforms: this.parentTransforms,
-          sharedMetaPose: this.sharedMetaPose,
-          joinPoseCache: this.joinPoseCache,
-          fppCameraDyn: this.fppCameraDyn,
-        },
-        out
-      )
+    // Pre sample hooks
+    const hookCtx = {
+      dt,
+      time,
+      push: (e: SimServiceEvent) => {
+        this.serviceEvents.push(e)
+      },
     }
+    for (const hook of this.preSampleHooks) hook(hookCtx)
 
-    const rawDt = options?.rawDt ?? dt
-    const walkBase: Omit<WalkCtx, 'nodes' | 'visited' | 'followUpdate'> = {
+    const walkCtx: SimGraphRunnerWalkCtx = {
+      poseGen,
       handles: this.handles,
       board,
       dt,
-      rawDt,
+      rawDt: rawDt ?? dt,
       floatDyn: this.floatDyn,
       floatUpdated,
       vectorDyn: this.vectorDyn,
@@ -4275,11 +3958,10 @@ export class SimGraphRunner {
       sinusDyn: this.sinusDyn,
       signalDyn: this.signalDyn,
       signalUpdated,
-      runtimes: this.runtimes,
-      condCtx,
+      runtimes: this._simStateMachineRuntimes,
       clipLibrary: this.clipLibrary,
       clipPoseLibrary: this.clipPoseLibrary,
-      clipClocks: this.clipClocks,
+      clipClocks: this._clipClocks,
       animDbLibrary: this.animDbLibrary,
       staticSwitchResults: this.staticSwitchResults,
       blendFromPoseDyn: this.blendFromPoseDyn,
@@ -4288,14 +3970,11 @@ export class SimGraphRunner {
       time,
       playing,
       speed,
-      slotHost: options?.slotHost,
-      parentPoseUpdate: options?.parentPoseUpdate,
-      parentPoseSample: options?.parentPoseSample,
-      makeParentPoseSample,
+      slotHost,
       additionalFloatTrackTimes: this.additionalFloatTrackTimes,
       mathExprCache: this.mathExprCache,
       updateSucc: this.updateSucc,
-      prevNodes: this.prevNodes,
+      prevNodes: this._prevNodes,
       boneOpCache: this.boneOpCache,
       eyesLookAtDirection: 0,
       eyesLookAtDirectionEnabled: false,
@@ -4309,41 +3988,36 @@ export class SimGraphRunner {
       mathExprPoseCache: this.mathExprPoseCache,
       sharedVars: this.sharedVars,
       fppCameraDyn: this.fppCameraDyn,
-      instanceStore: this.instanceStore,
-      serviceEvents: this.serviceEvents,
+      conditionDyn: this.conditionDyn,
+      instanceStore: this._instanceStore,
+      transientStore: this._transientStore,
       extraTracks: this.extraTracks,
       updateWarningsEnabled: this.updateWarningsEnabled,
-      updateWarnings,
+      updateWarnings: [],
       keepFullUpdate: false,
-    }
-
-    this.extraTracks.clear()
-
-    // Service-event bus: hooks push custom params, then Update consumers read the list.
-    const hookCtx = {
-      dt,
-      time,
-      push: (e: SimServiceEvent) => {
-        this.serviceEvents.push(e)
-      },
-    }
-    for (const hook of this.preSampleHooks) hook(hookCtx)
-
-    // DispatchEvent fan-out before Update (opens Switch gated on Head/Eyes.isEnabled).
-    dispatchCompiledServiceEvents(this.compiled, this.serviceEvents, walkBase)
-
-
-    const walkCtx: WalkCtx = {
-      ...walkBase,
-      nodes,
+      nodes: simNodeStateByHandleId,
       visited: new Set(),
-      followUpdate(parent, child) {
-        followUpdate(parent, child, walkCtx)
+      isWrapperActive: (name: string) => {
+        return board.isWrapperActive(name)
+      },
+      hasAnimation: this._buildHasAnimation(board),
+      updateFromNode: (ctx, node) => {
+        updateFromNode(node, ctx)
+      },
+      followUpdate: (ctx, parent, child) => {
+        followUpdate(parent, child, ctx)
       },
     }
-    const root = findRootHandle(this.handles, this.originalAnimgraph)
-    if (root) {
-      updateFromNode(root, walkCtx)
+
+    // Dispatch compiled service events (opens Switch gated on Head/Eyes.isEnabled).
+    dispatchCompiledServiceEvents(this.compiled, this.serviceEvents, walkCtx)
+    // Unconsumed service events do not carry across frames.
+    this.serviceEvents.length = 0
+
+    // Update the graph
+    const rootAnimgraphNode = findRootHandle(this.handles, this.originalAnimgraph)
+    if (rootAnimgraphNode) {
+      updateFromNode(rootAnimgraphNode, walkCtx)
     } else {
       // Fallback: no root — update all SMs (legacy)
       for (const sm of findStateMachineHandles(this.handles)) {
@@ -4352,15 +4026,14 @@ export class SimGraphRunner {
     }
 
     // Persist Eyes enable for facial graphs / next frame (engine context field).
-    this.eyesLookAtEnabled = walkBase.eyesLookAtEnabled
+    this.eyesLookAtEnabled = walkCtx.eyesLookAtEnabled
     this.lastKeepFullUpdate = walkCtx.keepFullUpdate
-
-    // Unconsumed custom params do not carry across frames.
-    this.serviceEvents.length = 0
 
     // Drop dyn state for nodes not updated this frame (deactivated → re-init on reactivate)
     for (const id of [...this.floatDyn.keys()]) {
       if (floatUpdated.has(id)) continue
+      
+      // @TODO: code smell - special case for ValueBySpeed
       const node = this.handles.get(id)
       if (node && handleType(node) === 'animAnimNode_ValueBySpeed') {
         const d = node.Data ?? {}
@@ -4368,6 +4041,7 @@ export class SimGraphRunner {
           d.resetOnActivation === undefined ? true : readBool(d.resetOnActivation)
         if (!resetOnAct) continue
       }
+
       this.floatDyn.delete(id)
     }
     for (const id of [...this.vectorDyn.keys()]) {
@@ -4387,202 +4061,214 @@ export class SimGraphRunner {
     }
     // Reset AdditionalFloatTrack i_time when node leaves active Update path (OnActivated).
     for (const id of [...this.additionalFloatTrackTimes.keys()]) {
-      if (!nodes[id]?.active) this.additionalFloatTrackTimes.delete(id)
+      if (!simNodeStateByHandleId[id]?.active) this.additionalFloatTrackTimes.delete(id)
     }
     for (const id of [...this.fppCameraDyn.keys()]) {
-      if (!nodes[id]?.active) this.fppCameraDyn.delete(id)
-    }
-    // LookAtController / VehicleRestrictions dyn persist for compile-time listeners
-    // (engine keeps instance buffer + DispatchEvent while Update path is inactive).
-    {
-      const bucket = this.instanceStore.bucket(LookAtPose360DynDef)
-      if (bucket) {
-        for (const id of [...bucket.keys()]) {
-          if (!nodes[id]?.active) bucket.delete(id)
-        }
-      }
-    }
-    // Inertialization OnDeactivated — drop pose caches when leaving active path.
-    {
-      const bucket = this.instanceStore.bucket(InertializationDynDef)
-      if (bucket) {
-        for (const id of [...bucket.keys()]) {
-          if (!nodes[id]?.active) bucket.delete(id)
-        }
-      }
+      if (!simNodeStateByHandleId[id]?.active) this.fppCameraDyn.delete(id)
     }
     // BlendFromPose OnDeactivated — drop cached additive when node leaves active path.
     for (const id of [...this.blendFromPoseDyn.keys()]) {
-      if (!nodes[id]?.active) this.blendFromPoseDyn.delete(id)
+      if (!simNodeStateByHandleId[id]?.active) this.blendFromPoseDyn.delete(id)
+    }
+    // Cleanup transient store for nodes not updated this frame
+    for (const bucket of this._transientStore.buckets()) {
+      for (const id of [...bucket.keys()]) {
+        if (!simNodeStateByHandleId[id]?.active) bucket.delete(id)
+      }
     }
     // Deactivate clip clocks that were not stepped (left the active pose path)
-    for (const [, clock] of this.clipClocks) {
+    for (const [, clock] of this._clipClocks) {
       if (!clock.stepped && clock.wasActive) deactivateClipClock(clock)
     }
 
-    if (endBoardFrame) board.endFrame()
+    const nodeDelta = diffSimNodeStates(simNodeStateByHandleId, this._prevNodes)
+    this._prevNodes = simNodeStateByHandleId
 
-    const sms: SimSnapshot['sms'] = {}
-    const clips: SimActiveClip[] = []
-    const isWrap = (n: string) => board.isWrapperActive(n)
-    for (const [id, c] of this.clipClocks) {
-      if (!c.stepped) continue
-      let progress = 0
-      const nodeW = nodes[id]?.weight
-      if (typeof nodeW === 'number' && Number.isFinite(nodeW)) progress = nodeW
-      const animName = c.animName || 'None'
-      const resolve =
-        c.resolveHint ?? classifyClipResolve(animName, this.clipLibrary, isWrap)
-      clips.push({
-        handleId: id,
-        animName,
-        time: resolve === 'ok' ? c.currTime : 0,
-        progress: resolve === 'ok' ? progress : 0,
-        resolve,
-      })
+    const simSmStateByHandleId: SimSnapshotUpdate['simSmStateByHandleId'] = {}
+    for (const [handleId, simStateMachineRuntime] of this._simStateMachineRuntimes) {
+      simSmStateByHandleId[handleId] = simStateMachineRuntime.toState()
     }
 
-    for (const [id, rt] of this.runtimes) {
-      sms[id] = rt.toState()
+    return this._snapshot = {
+      poseGen,
+      playing,
+      time,
+      speed,
+      update: {
+        rootHandleId: rootAnimgraphNode?.HandleId,
+        clips: resolveSimActiveClips(
+          this._clipClocks, 
+          simNodeStateByHandleId, 
+          walkCtx.isWrapperActive, 
+          this.clipLibrary,
+        ),
+        simSmStateByHandleId,
+        simNodeStateByHandleId,
+        nodeDelta,
+        warnings: walkCtx.updateWarnings,
+      }
+    }
+  }
+
+  sample(props: {
+    /** Monotonic publish generation stamped onto the returned snapshot. */
+    poseGen: number
+    dt: number
+    /**
+     * Undilated frame dt (engine rawTimeDelta). When omitted, treated as equal to
+     * scaled `dt` (dilatation factor = 1).
+     */
+    rawDt?: number
+    playing: boolean,
+    time: number,
+    speed: number,
+    board: SimInputBoard,
+    /** Sample slot host for nested graphs. */
+    slotHost: SimGraphSampleSlotHost
+  }): Pose | undefined {
+    const {
+      poseGen,
+      dt,
+      rawDt,
+      playing,
+      time,
+      speed,
+      board,
+      slotHost,
+    } = props
+
+    if (!this._snapshot || this._snapshot.poseGen !== poseGen) {
+      throw new Error('Invalid snapshot - sample() called before update()')
     }
 
-    const nodeDelta = this.prevNodes ? diffSimNodeStates(this.prevNodes, nodes) : null
-    this.prevNodes = nodes
+    const sampleLog = createSimSampleLog(`sample diagram="${this.diagramId ?? '?'}"`)
 
-    let poseStats: SimSnapshot['poseStats'] = null
     const rig = this.activeRig
-    if (rig && this.clipPoseLibrary && this.sampleOut && this.poseScratch) {
-      const extraNames = this.extraTracks.getNames()
-      if (extraNames.length > this.extraTrackCapacity) {
-        this.extraTrackCapacity = extraNames.length
-        this.reallocSampleBuffers()
-      }
-      if (this.sampleOut) applyExtraTrackLayout(this.sampleOut, extraNames)
-
-      simSampleLogLine(sampleLog, '--- root Sample ---')
-      if (sampleLog) {
-        let edges = 0
-        for (const arr of this.updateSucc.values()) edges += arr.length
-        simSampleLogLine(
-          sampleLog,
-          `updateSucc parents=${this.updateSucc.size} edges=${edges}`
-        )
-      }
-      this.joinPoseCache.sampled.clear()
-      const result = sampleGraphPose(
-        root,
-        {
-          handles: this.handles,
-          board,
-          instanceStore: this.instanceStore,
-          nodes,
-          clipClocks: this.clipClocks,
-          clipPoseLibrary: this.clipPoseLibrary,
-          clipLibrary: this.clipLibrary,
-          rig,
-          staticSwitchResults: this.staticSwitchResults,
-          runtimes: this.runtimes,
-          sampleNested: (slotName) => options?.slotHost?.getNestedPose(slotName) ?? null,
-          parentPoseSample: options?.parentPoseSample,
-          shrinkRemoveCountByHandleId: this.shrinkRemoveCountByHandleId,
-          trackShrinkRemoveCountByHandleId: this.trackShrinkRemoveCountByHandleId,
-          stackCaptureHandleIds: this.stackCaptureHandleIds,
-          captureStack: (handleId, pose) => this.capturePoseFromSample(handleId, pose),
-          poseScratch: this.poseScratch,
-          missingGlb: [],
-          sampleLog,
-          sampleVisitedAll,
-          updateSucc: this.updateSucc,
-          warningsEnabled: this.sampleWarningsEnabled,
-          warnings: sampleWarnings,
-          lastWrittenNull: false,
-          boneOpCache: this.boneOpCache,
-          additionalFloatTrackTimes: this.additionalFloatTrackTimes,
-          mathExprCache: this.mathExprCache,
-          mathExprPoseCache: this.mathExprPoseCache,
-          parentTransforms: this.parentTransforms,
-          sharedMetaPose: this.sharedMetaPose,
-          joinPoseCache: this.joinPoseCache,
-          blendFromPoseDyn: this.blendFromPoseDyn,
-          blendFromPoseSmBind: this.blendFromPoseSmBind,
-          smFrozenPoses: this.smFrozenPoses,
-          inertialization: this.inertializationRequest,
-          fppCameraDyn: this.fppCameraDyn,
-          lookAtSpace: {
-            entityLocalToWorld: this.entityLocalToWorld,
-            parentObjectLocalToWorld: this.parentObjectLocalToWorld,
-            isFacial: this.isFacial,
-            eyesLookAtEnabled: this.eyesLookAtEnabled,
-            setEyesLookAtEnabled: (v) => {
-              this.eyesLookAtEnabled = v
-            },
-          },
-        },
-        this.sampleOut
-      )
-      for (const id of this.stackCaptureHandleIds) {
-        simSampleLogLine(
-          sampleLog,
-          `after-root capture ${id}: ${this.capturedPoseThisFrame.has(id) ? 'YES' : 'NO'}`
-        )
-      }
-      flushSimSampleLog(sampleLog)
-      poseStats = {
-        ok: result.ok,
-        reason: result.reason,
-        boneCount: rig.boneNames.length,
-        trackCount: rig.trackNames.length,
-        sampleMs: result.sampleMs,
-        missingGlb: result.missingGlb,
-        warnings: result.warnings,
-        updateWarnings,
-      }
-    } else {
+    const clipLibrary = this.clipLibrary
+    const clipPoseLibrary = this.clipPoseLibrary
+    const poseScratch = this.poseScratch
+    const sampleOut = this.sampleOut
+    if (!rig || !clipPoseLibrary || !poseScratch || !sampleOut) {
       simSampleLogLine(
         sampleLog,
         `skip root Sample reason=${!rig ? 'no-rig' : !this.clipPoseLibrary ? 'no-glb' : 'no-buffers'}`
       )
       flushSimSampleLog(sampleLog)
-      poseStats = {
+
+      this._snapshot.sample = {
         ok: false,
         reason: !rig ? 'no-rig' : !this.clipPoseLibrary ? 'no-glb' : 'no-buffers',
         boneCount: rig?.boneNames.length ?? 0,
         trackCount: rig?.trackNames.length ?? 0,
         sampleMs: 0,
-        updateWarnings,
+        missingGlb: [],
+        warnings: [],
       }
+      return
+    }
+    
+    this.joinPoseCache.sampled.clear()
+
+    this._beginPoseCaptures()
+    
+    // Extra track layout (engine FillExtraDataMapping).
+    const extraNames = this.extraTracks.getNames()
+    if (extraNames.length > this.extraTrackCapacity) {
+      this.extraTrackCapacity = extraNames.length
+      this.reallocSampleBuffers()
+    }
+    applyExtraTrackLayout(sampleOut, extraNames)
+
+    simSampleLogLine(sampleLog, '--- root Sample ---')
+    if (sampleLog) {
+      let edges = 0
+      for (const arr of this.updateSucc.values()) edges += arr.length
+      simSampleLogLine(
+        sampleLog,
+        `updateSucc parents=${this.updateSucc.size} edges=${edges}`
+      )
     }
 
-    return {
-      time,
+    // Sampling graph
+    const sampleCtx: SampleCtx = {
+      handles: this.handles,
+      board,
+      dt,
+      rawDt: rawDt ?? dt,
       playing,
+      time,
       speed,
-      poseGen: options?.poseGen ?? 0,
-      sms,
-      nodes,
-      nodeDelta,
-      status: {
-        rootHandleId: root?.HandleId ?? null,
-        clips,
+      instanceStore: this._instanceStore,
+      transientStore: this._transientStore,
+      nodes: this._snapshot.update.simNodeStateByHandleId,
+      clipClocks: this._clipClocks,
+      clipPoseLibrary,
+      clipLibrary,
+      rig,
+      staticSwitchResults: this.staticSwitchResults,
+      runtimes: this._simStateMachineRuntimes,
+      slotHost,
+      shrinkRemoveCountByHandleId: this.shrinkRemoveCountByHandleId,
+      trackShrinkRemoveCountByHandleId: this.trackShrinkRemoveCountByHandleId,
+      stackCaptureHandleIds: this.stackCaptureHandleIds,
+      captureStack: (handleId, pose) => {
+        this._capturePoseFromSample(handleId, pose)
       },
-      poseStats,
+      poseScratch,
+      missingGlb: [],
+      sampleLog,
+      sampleVisitedAll: sampleLog ? new Set<string>() : undefined,
+      updateSucc: this.updateSucc,
+      warningsEnabled: this.sampleWarningsEnabled,
+      warnings: [],
+      lastWrittenNull: false,
+      boneOpCache: this.boneOpCache,
+      additionalFloatTrackTimes: this.additionalFloatTrackTimes,
+      mathExprCache: this.mathExprCache,
+      mathExprPoseCache: this.mathExprPoseCache,
+      parentTransforms: this.parentTransforms,
+      sharedMetaPose: this.sharedMetaPose,
+      joinPoseCache: this.joinPoseCache,
+      blendFromPoseDyn: this.blendFromPoseDyn,
+      blendFromPoseSmBind: this.blendFromPoseSmBind,
+      smFrozenPoses: this.smFrozenPoses,
+      inertialization: this.inertializationRequest,
+      fppCameraDyn: this.fppCameraDyn,
+      lookAtSpace: {
+        entityLocalToWorld: this.entityLocalToWorld,
+        parentObjectLocalToWorld: this.parentObjectLocalToWorld,
+        isFacial: this.isFacial,
+        eyesLookAtEnabled: this.eyesLookAtEnabled,
+        setEyesLookAtEnabled: (v) => {
+          this.eyesLookAtEnabled = v
+        },
+      },
     }
-  }
 
-  getSnapshotEmpty(
-    time: number,
-    playing: boolean,
-    speed: number,
-    poseGen = 0
-  ): SimSnapshot {
-    const snap = emptySimSnapshot()
-    snap.time = time
-    snap.playing = playing
-    snap.speed = speed
-    snap.poseGen = poseGen
-    for (const [id, rt] of this.runtimes) {
-      snap.sms[id] = rt.toState()
+    const result = sampleGraphPose(
+      sampleCtx,
+      findRootHandle(this.handles, this.originalAnimgraph),
+      sampleOut,
+    )
+    for (const id of this.stackCaptureHandleIds) {
+      simSampleLogLine(
+        sampleLog,
+        `after-root capture ${id}: ${this._capturedPoseThisFrameHandleIdsSet.has(id) ? 'YES' : 'NO'}`
+      )
     }
-    return snap
+
+    this._snapshot.sample = {
+      ok: result.ok,
+      reason: result.reason,
+      boneCount: rig.boneNames.length,
+      trackCount: rig.trackNames.length,
+      sampleMs: result.sampleMs,
+      missingGlb: result.missingGlb ?? [],
+      warnings: result.warnings ?? [],
+    }
+
+    flushSimSampleLog(sampleLog)
+
+    return sampleOut
   }
 }
