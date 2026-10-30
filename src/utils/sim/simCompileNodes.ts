@@ -4,10 +4,10 @@
 
 import type { AnimgraphNode } from '../graph/animgraphTypes'
 import type { SimCompileCtx } from './simCompile'
+import { compileHumanIkNode } from './humanIkSim'
 import {
   compileIkTargetsControllerNode,
   resolveGenerateIkChainSettings,
-  resolveHumanIkChainSettings,
 } from './ikTargetsControllerSim'
 import { compileLookAtControllerNode } from './lookAtControllerSim'
 import { compileLookAtVehicleRestrictionsNode } from './lookAtVehicleRestrictionsSim'
@@ -44,10 +44,6 @@ export function compileSimNode(
     return
   }
   if (t === 'animAnimNode_HumanIk') {
-    compileIkTargetsControllerNode(
-      node,
-      ctx,
-      resolveHumanIkChainSettings(node, ctx.board)
-    )
+    compileHumanIkNode(node, ctx)
   }
 }

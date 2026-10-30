@@ -58,8 +58,8 @@
         </div>
 
         <HeaderNodeSearch
-          v-if="hasProject && activeDiagramId"
-          :diagram-id="activeDiagramId"
+          v-if="hasProject && activeDiagramIdRef"
+          :diagram-id="activeDiagramIdRef"
         />
 
         <div class="header-right">
@@ -117,7 +117,7 @@
               :key="diagramId"
               :ref="(el) => bindDiagramCanvasEl(diagramId, el)"
               class="graph-canvas"
-              v-show="activeDiagramId === diagramId"
+              v-show="activeDiagramIdRef === diagramId"
             />
 
             <DiagramLoadingOverlay v-if="hasProject && !diagramViewReadyRef" />
@@ -217,87 +217,7 @@
               :max-height="sidebarPanelMaxHeights.sim"
               @close="toggleSimCard"
             >
-              <SimPanel
-                :snapshot="simSnapshotRef"
-                :active="simActive"
-                :discovered="simDiscovered"
-                :event-draft="simEventDraft"
-                :event-value-draft="simEventValueDraft"
-                :feature-drafts="simFeatureDrafts"
-                :vector-feature-drafts="simVectorFeatureDrafts"
-                :quat-feature-drafts="simQuatFeatureDrafts"
-                :bool-feature-drafts="simBoolFeatureDrafts"
-                :string-feature-drafts="simStringFeatureDrafts"
-                :float-vars="simFloatVarDrafts"
-                :vector-vars="simVectorVarDrafts"
-                :quat-vars="simQuatVarDrafts"
-                :bool-vars="simBoolVarDrafts"
-                :int-vars="simIntVarDrafts"
-                :tag-values="simTagValueDrafts"
-                :entity-tags="simEntityTagDrafts"
-                :wrapper-weights="simWrapperWeightDrafts"
-                :clip-stats="simClipStats"
-                :clip-names="simClipNames"
-                :setup-entries="simSetupEntries"
-                :anim-db-stats="simAnimDbStats"
-                :anim-databases="simAnimDatabases"
-                :rig-entries="simRigEntries"
-                :active-rig-bones="simActiveRigBones"
-                :active-rig-parts="simActiveRigParts"
-                :clip-pose-sets="simClipPoseSets"
-                :get-clip-glb-info="simGetClipGlbInfo"
-                :list-glb-anim-names="simListGlbAnimNames"
-                :resolve-clip="simGetClip"
-                :lookup-clip="simLookupClip"
-                :get-clip-in-entry="simGetClipInEntry"
-                :is-clip-active="simIsClipActive"
-                :list-clip-sets="simListClipSets"
-                :load-animset-json="simLoadAnimsetJson"
-                :load-animset-glb="simLoadAnimsetGlb"
-                :clear-animset-glb="simClearAnimsetGlb"
-                :load-rig-json="simLoadRigJson"
-                :remove-rig="simRemoveRig"
-                :set-active-rig="simSetActiveRig"
-                :sample-warnings-enabled="simSampleWarningsEnabled"
-                :set-sample-warnings-enabled="simSetSampleWarningsEnabled"
-                :update-warnings-enabled="simUpdateWarningsEnabled"
-                :set-update-warnings-enabled="simSetUpdateWarningsEnabled"
-                :load-anim-database-json="simLoadAnimDatabaseJson"
-                :remove-anim-database="simRemoveAnimDatabase"
-                :update-setup-entry="simUpdateSetupEntry"
-                :remove-setup-entry="simRemoveSetupEntry"
-                :apply-feature="simSetFeature"
-                :apply-bool-feature="simSetBoolFeature"
-                :apply-string-feature="simSetStringFeature"
-                :apply-vector-feature-axis="simSetVectorFeatureAxis"
-                :apply-quat-feature-axis="simSetQuatFeatureAxis"
-                :apply-float-var="simSetFloatVar"
-                :apply-vector-var-axis="simSetVectorVarAxis"
-                :resolve-vector-var-value="simDraftVectorVarValue"
-                :apply-quat-var-axis="simSetQuatVarAxis"
-                :resolve-quat-var-value="simDraftQuatVarValue"
-                :apply-bool-var="simSetBoolVar"
-                :apply-int-var="simSetIntVar"
-                :apply-tag-value="simSetTagValue"
-                :apply-entity-tag="simSetEntityTag"
-                :remove-entity-tag="simRemoveEntityTag"
-                :apply-wrapper-weight="simSetWrapperWeight"
-                :resolve-feature-value="simDraftFeatureValue"
-                :resolve-bool-feature-value="simDraftBoolFeatureValue"
-                :resolve-string-feature-value="simDraftStringFeatureValue"
-                :resolve-vector-feature-value="simDraftVectorFeatureValue"
-                :resolve-quat-feature-value="simDraftQuatFeatureValue"
-                @update:event-draft="simEventDraft = $event"
-                @update:event-value-draft="simEventValueDraft = $event"
-                @toggle="simToggle"
-                @toggle-active="simToggleActive"
-                @step="simStep"
-                @reset="simReset"
-                @set-speed="simSetSpeed"
-                @fire-external="simFireExternal"
-                @fire-anim-event="simFireAnimEvent"
-                @fire-anim-end="simFireAnimEnd"
-              />
+              <SimPanel/>
             </SidebarPanel>
 
             <ToolsPanel
@@ -509,12 +429,8 @@
     </div>
 
     <AppTaskbar
-      :diagram-items="diagramTaskbarItems"
-      :body-items="bodyViewTaskbarItems"
       :window-items="taskbarItems"
-      :sim-active="simActive"
-      :overlay-diagram-id="activeDiagramId"
-      v-model:overlay-runner-id="simOverlayRunnerId"
+      v-model:overlay-runner-id="simOverlayRunnerIdRef"
       @select="onTaskbarSelect"
       @select-diagram="onTaskbarSelectDiagram"
     />
@@ -646,94 +562,10 @@ import StateLinksViewContent from './components/StateLinksViewContent.vue'
 import StateMachineRingWindowContent from './components/StateMachineRingWindowContent.vue'
 import ToolsPanel from './components/ToolsPanel.vue'
 import {
+  sim,
   disposeAnimgraphSim,
-  simActive,
-  simActiveRigBones,
-  simActiveRigParts,
-  simAnimDatabases,
-  simAnimDbStats,
   simApplyProjectSimResources,
-  simBoolFeatureDrafts,
-  simBoolVarDrafts,
-  simDraftStringFeatureValue,
-  simSetStringFeature,
-  simStringFeatureDrafts,
-  simClearAnimsetGlb,
-  simClipNames,
-  simClipPoseSets,
-  simClipStats,
-  simDeactivate,
-  simDiscovered,
-  simDraftBoolFeatureValue,
-  simDraftFeatureValue,
-  simDraftQuatFeatureValue,
-  simDraftQuatVarValue,
-  simDraftVectorFeatureValue,
-  simDraftVectorVarValue,
-  simEntityTagDrafts,
-  simEventDraft,
-  simEventValueDraft,
-  simFeatureDrafts,
-  simFireAnimEnd,
-  simFireAnimEvent,
-  simFireExternal,
-  simFloatVarDrafts,
-  simGetClip,
-  simGetClipGlbInfo,
-  simGetCachedClipPoseCompactText,
   simGetProjectSimResources,
-  simGetSkeletonViewPose,
-  simIntVarDrafts,
-  simIsClipActive,
-  simListClipSets,
-  simListGlbAnimNames,
-  simLoadAnimDatabaseJson,
-  simLoadAnimsetGlb,
-  simLoadAnimsetJson,
-  simLoadRigJson,
-  simGetClipInEntry,
-  simLookupClip,
-  simQuatFeatureDrafts,
-  simQuatVarDrafts,
-  simRebind,
-  simRemoveAnimDatabase,
-  simRemoveEntityTag,
-  simRemoveRig,
-  simRemoveSetupEntry,
-  simReset,
-  simRigEntries,
-  simSampleWarningsEnabled,
-  simSetActiveRig,
-  simSetBoolFeature,
-  simSetBoolVar,
-  simSetEntityTag,
-  simSetFeature,
-  simSetFloatVar,
-  simSetIntVar,
-  simSetQuatFeatureAxis,
-  simSetQuatVarAxis,
-  simSetSampleWarningsEnabled,
-  simSetSpeed,
-  simSetStackCaptureHandleIds,
-  simSetTagValue,
-  simSetUpdateWarningsEnabled,
-  simSetupEntries,
-  simSetVectorFeatureAxis,
-  simSetVectorVarAxis,
-  simSetWrapperWeight,
-  simSnapshot as simSnapshotRef,
-  simSnapshotForDiagram,
-  simSnapshotForRunner,
-  simSnapshotsByRunner,
-  simStep,
-  simTagValueDrafts,
-  simToggle,
-  simToggleActive,
-  simUpdateSetupEntry,
-  simUpdateWarningsEnabled,
-  simVectorFeatureDrafts,
-  simVectorVarDrafts,
-  simWrapperWeightDrafts,
 } from './stores/animgraphSim'
 import './stores/simDriverConsoles'
 import {
@@ -852,7 +684,7 @@ import {
   setSelectionClearedHandler,
 } from './stores/graphSession'
 import {
-  activeDiagramId,
+  activeDiagramId as activeDiagramIdRef,
   getActiveRenderData,
   getRenderData,
   hasDiagramId,
@@ -1007,8 +839,9 @@ import {
 } from './utils/views/viewRegistry'
 import { getGraphViewPresentOps } from './utils/windows/presentOps'
 import { isFocusLeavingHost } from './utils/dom/focusDiagramHost'
+import { SimSnapshot } from './utils/sim/simTypes.ts'
 
-const { bodyViewTaskbarItems } = useWorkspace()
+useWorkspace()
 
 const bodyViewBreadcrumbItems = (body: DiagramBodyView) => bodyViewBreadcrumbs(body)
 
@@ -1039,26 +872,16 @@ const resolveMainDiagramId = () => {
   if (isDiagramRootBody(body)) {
     return bodyViewRoot(body).projectDiagramId
   }
-  return activeDiagramId.value ?? MAIN_BODY_ID
+  return activeDiagramIdRef.value ?? MAIN_BODY_ID
 }
 
-const diagramTaskbarItems = computed(() =>
-  listDiagramIds.value.map((id) => ({
-    id,
-    title: id,
-    type: 'diagram',
-    minimized: false,
-    active: activeDiagramId.value === id,
-  }))
-)
-
 const visibleWindows = computed(() =>
-  windows.value.filter((w) => isWindowForActiveDiagram(w, activeDiagramId.value))
+  windows.value.filter((w) => isWindowForActiveDiagram(w, activeDiagramIdRef.value))
 )
 
 const windowDiagramId = (windowId: string) =>
   getWindowStackTop(windowId)?.projectDiagramId ??
-  activeDiagramId.value ??
+  activeDiagramIdRef.value ??
   MAIN_BODY_ID
 
 const windowRenderData = (windowId: string): RenderData | null =>
@@ -1170,17 +993,10 @@ const suppressNextGraphInteraction = ref(false)
 const graphCanvas = computed(() => focusHostEl.value)
     
 
-watch(
-  () => {
-    const node = selectedNodeRef.value
-    const handleId = (node?.data?.originalNodeId as string | undefined) ?? ''
-    return handleId || null
-  },
-  (handleId) => {
-    simSetStackCaptureHandleIds(handleId ? [handleId] : [])
-  },
-  { immediate: true }
-)
+watch(() => selectedNodeRef.value, (selectedDiagramNode) => {
+  const captureHandleId = selectedDiagramNode?.data?.originalNodeId
+  sim.setStackCaptureHandleIds(captureHandleId ? [captureHandleId] : [])
+}, { immediate: true })
 
 const directChildrenLayoutMode = ref<DirectChildrenLayoutMode>('tidy-tree')
 
@@ -1210,7 +1026,7 @@ const canMoveSmStateUp = computed(() => {
   historyRevisionRef.value
   const id = selectedNodeRef.value?.id
   const data = getActiveRenderData()
-  const diagramId = activeDiagramId.value
+  const diagramId = activeDiagramIdRef.value
   if (!id || !data || !diagramId) return false
   return canMoveSmStateByDelta(data, id, -1)
 })
@@ -1228,7 +1044,7 @@ const canLayoutSmStatesGroupSelected = computed(() => {
   if (!whenEnabled('graphEditable')) return false
   historyRevisionRef.value
   const id = selectedNodeRef.value?.id
-  const diagramId = activeDiagramId.value
+  const diagramId = activeDiagramIdRef.value
   if (!id || !diagramId) return false
   return canLayoutSmStatesGroup(diagramId, id)
 })
@@ -1392,12 +1208,13 @@ const openRenderStatsForActive = () => {
   openRenderStatsWindow(target)
 }
 
+/** @TODO move to skeleton window? */
 const getSimSkeletonPose = (
   source: 'full' | 'selected' | 'atNode',
   selectedRunnerId?: string | null
 ) => {
   const handleId = (selectedNodeRef.value?.data?.originalNodeId as string | undefined) ?? null
-  return simGetSkeletonViewPose(source, {
+  return sim.getSkeletonViewPose(source, {
     activeDiagramId: requireActiveDiagramIdSafe(),
     selectedRunnerId,
     captureHandleId: handleId,
@@ -1429,23 +1246,26 @@ const showSimCard = ref(false)
 const showAboutDialog = ref(false)
 
 /** Taskbar picker: which runner paints overlay on the active diagram. */
-const simOverlayRunnerId = ref('')
+const simOverlayRunnerIdRef = ref('')
 
 const simOverlaySnapForDiagram = (diagramId: string) => {
-  if (
-    diagramId === activeDiagramId.value &&
-    simOverlayRunnerId.value.trim()
-  ) {
-    return (
-      simSnapshotForRunner(simOverlayRunnerId.value) ??
-      simSnapshotForDiagram(diagramId)
-    )
+  const activeDiagramId = activeDiagramIdRef.value
+  const simOverlayRunnerId = simOverlayRunnerIdRef.value
+
+  let snapshot: SimSnapshot | undefined = undefined
+  if (diagramId === activeDiagramId && simOverlayRunnerId) {
+    snapshot = sim.snapshotForRunner(simOverlayRunnerId)
   }
-  return simSnapshotForDiagram(diagramId)
+
+  if (!snapshot) {
+    snapshot = sim.snapshotForDiagram(diagramId)
+  }
+
+  return snapshot
 }
 
 const applySimOverlayToAllRenderers = () => {
-  const live = simActive.value
+  const live = sim.active.value
 
   // Soft-suspended Main canvases keep their own diagram snapshot.
   forEachMainDiagramRenderer((renderer, diagramId) => {
@@ -1468,12 +1288,11 @@ const bindWindowDiagramRef = (viewId: string, el: unknown) => {
 watch(
   () =>
     [
-      simSnapshotRef.value,
-      simSnapshotsByRunner.value,
+      sim.snapshotsByRunner.value,
+      sim.active.value,
       showSimCard.value,
-      simActive.value,
-      simOverlayRunnerId.value,
-      activeDiagramId.value,
+      simOverlayRunnerIdRef.value,
+      activeDiagramIdRef.value,
     ] as const,
   () => {
     // Sync: Play publishes from rAF; deferred overlay raced and skipped frames.
@@ -1778,7 +1597,7 @@ const simRingHighlightFor = (smNodeId: string | undefined | null) => {
     (node?.data?.originalNodeId as string | undefined) ??
     smNodeId
     
-  const runnerSnapshot = simSnapshotForRunner(simOverlayRunnerId.value)
+  const runnerSnapshot = sim.snapshotForRunner(simOverlayRunnerIdRef.value)
   if (!runnerSnapshot) return null
 
   const simSmState = runnerSnapshot.update.simSmStateByHandleId[handleId]
@@ -1813,10 +1632,6 @@ const toggleGraphInfoCard = () => {
 
 const toggleSimCard = () => {
   showSimCard.value = !showSimCard.value
-  if (!showSimCard.value) {
-    simDeactivate()
-    applySimOverlayToAllRenderers()
-  }
 }
 
 // Node selection methods
@@ -2313,10 +2128,10 @@ bindGraphDocument({
   openLensForNode: (node, host) => openLensForNode(resolveMainDiagramId(), node, host),
   handlePinConnect: (payload) => handlePinConnect(resolveMainDiagramId(), payload),
   handlePinRewire: (payload) => handlePinRewire(resolveMainDiagramId(), payload),
-  simReset,
-  simRebind,
+  simReset: sim.reset,
+  simRebind: sim.rebind,
+  getCachedClipPoseCompactText: sim.getCachedClipPoseCompactText,
   getProjectSimResources: simGetProjectSimResources,
-  getCachedClipPoseCompactText: simGetCachedClipPoseCompactText,
   applyProjectSimResources: simApplyProjectSimResources,
 })
 bindGraphNavigation({})

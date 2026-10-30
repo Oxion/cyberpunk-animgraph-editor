@@ -3,41 +3,45 @@
     <div class="flex shrink-0 flex-wrap items-center gap-1.5">
       <Button
         type="button"
+        :disabled="animgraphSimLiveBridgeActiveComputed"
         size="sm"
-        :variant="simPlaying ? 'default' : 'secondary'"
+        :variant="simPlayingRef ? 'default' : 'secondary'"
         class="h-7 rounded-sm px-2.5 text-xs"
-        :aria-pressed="simPlaying"
-        @click="emit('toggle')"
+        :aria-pressed="simPlayingRef"
+        @click="sim.toggle"
       >
-        {{ simPlaying ? 'Pause' : 'Play' }}
+        {{ simPlayingRef ? 'Pause' : 'Play' }}
       </Button>
       <Button
         type="button"
+        :disabled="animgraphSimLiveBridgeActiveComputed"
         size="sm"
         variant="secondary"
         class="h-7 rounded-sm px-2.5 text-xs"
-        @click="emit('step')"
+        @click="sim.step"
       >
         Step
       </Button>
       <Button
         type="button"
+        :disabled="animgraphSimLiveBridgeActiveComputed"
         size="sm"
         variant="secondary"
         class="h-7 rounded-sm px-2.5 text-xs"
-        @click="emit('reset')"
+        @click="sim.reset"
       >
         Reset
       </Button>
       <div class="ml-auto flex shrink-0 items-center gap-1">
         <Button
           type="button"
+          :disabled="animgraphSimLiveBridgeActiveComputed"
           size="sm"
-          :variant="active ? 'default' : 'secondary'"
+          :variant="simActiveRef ? 'default' : 'secondary'"
           class="h-7 rounded-sm px-2.5 text-xs"
-          @click="emit('toggle-active')"
+          @click="sim.toggleActivation"
         >
-          {{ active ? 'Deactivate' : 'Activate' }}
+          {{ simActiveRef ? 'Deactivate' : 'Activate' }}
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger as-child>
@@ -54,19 +58,19 @@
           <DropdownMenuContent align="end" class="min-w-48">
             <DropdownMenuItem
               class="gap-2 text-xs"
-              @select="setSampleWarningsEnabled?.(!sampleWarningsEnabled)"
-            >
-              <TriangleAlert class="size-3.5" />
-              Sample warnings
-              <Check v-if="sampleWarningsEnabled" class="ml-auto size-3.5 opacity-80" />
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              class="gap-2 text-xs"
-              @select="setUpdateWarningsEnabled?.(!updateWarningsEnabled)"
+              @select="onToggleUpdateWarningsEnabled"
             >
               <TriangleAlert class="size-3.5" />
               Update warnings
-              <Check v-if="updateWarningsEnabled" class="ml-auto size-3.5 opacity-80" />
+              <Check v-if="simUpdateWarningsEnabledRef" class="ml-auto size-3.5 opacity-80" />
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              class="gap-2 text-xs"
+              @select="onToggleSampleWarningsEnabled"
+            >
+              <TriangleAlert class="size-3.5" />
+              Sample warnings
+              <Check v-if="simSampleWarningsEnabledRef" class="ml-auto size-3.5 opacity-80" />
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -74,10 +78,11 @@
     </div>
 
     <div class="flex shrink-0 flex-wrap items-center gap-2 text-muted-foreground">
-      <span class="font-data shrink-0">t={{ snapshot.time.toFixed(2) }}s · f={{ simFrame }}</span>
+      <span class="font-data shrink-0">t={{ simSnapshotRef.time.toFixed(2) }}s · f={{ simFrame }}</span>
       <PropertyNumberSlider
         class="min-w-[140px] flex-1"
         label="Speed (fps)"
+        :disabled="animgraphSimLiveBridgeActiveComputed"
         :model-value="simSpeedFps"
         :value-min="0"
         :value-max="DEFAULT_SIM_FPS * 100"
@@ -143,7 +148,7 @@
 
     <Separator />
 
-    <Tabs v-model="activeTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
+    <Tabs v-model="activeTabRef" class="flex min-h-0 flex-1 flex-col gap-1.5">
       <div ref="mainTabsRowEl">
         <TabsList class="grid h-8 w-full shrink-0 grid-cols-4 rounded-sm bg-muted/60 p-0.5">
           <TabsTrigger
@@ -237,7 +242,7 @@
         value="control"
         class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden"
       >
-        <Tabs v-model="controlSubTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
+        <Tabs v-model="controlSubTabRef" class="flex min-h-0 flex-1 flex-col gap-1.5">
           <div ref="controlTabsRowEl">
             <TabsList class="grid h-8 w-full shrink-0 grid-cols-2 rounded-sm bg-muted/60 p-0.5">
               <TabsTrigger
@@ -269,20 +274,19 @@
               <Button
                 type="button"
                 size="sm"
-                :variant="eventValueEnabled ? 'default' : 'secondary'"
+                :variant="eventValueEnabledRef ? 'default' : 'secondary'"
                 class="h-7 w-7 shrink-0 rounded-sm px-0"
                 title="Toggle anim event value"
                 aria-label="Toggle anim event value"
-                :aria-pressed="eventValueEnabled"
-                @click="eventValueEnabled = !eventValueEnabled"
+                :aria-pressed="eventValueEnabledRef"
+                @click="eventValueEnabledRef = !eventValueEnabledRef"
               >
                 <SlidersHorizontal class="size-3.5" :size="14" />
               </Button>
               <Input
                 class="h-7 min-w-[80px] flex-1 rounded-sm text-xs"
                 placeholder="event name"
-                :model-value="eventDraft"
-                @update:model-value="(v) => emit('update:eventDraft', String(v ?? ''))"
+                v-model="eventNameDraftRef"
               />
               <ButtonGroup class="shrink-0">
                 <Button
@@ -290,7 +294,7 @@
                   size="sm"
                   variant="secondary"
                   class="h-7 rounded-sm px-2 text-xs"
-                  @click="emit('fireExternal')"
+                  @click="onFireExternalEvent"
                 >
                   Ext
                 </Button>
@@ -308,25 +312,24 @@
                   size="sm"
                   variant="secondary"
                   class="h-7 rounded-sm px-2 text-xs"
-                  @click="emit('fireAnimEnd')"
+                  @click="sim.fireAnimEnd()"
                 >
                   AnimEnd
                 </Button>
               </ButtonGroup>
             </div>
             <PropertyNumberSlider
-              v-if="eventValueEnabled"
+              v-if="eventValueEnabledRef"
               class="w-full shrink-0"
               label="Anim value"
-              :model-value="eventValueDraft"
+              v-model="eventValueDraftRef"
               :slider-min="0"
               :slider-max="1"
               :step="0.01"
               :decimals="3"
-              @update:model-value="(v) => emit('update:eventValueDraft', v)"
             />
             <Input
-              v-if="discovered.events.length"
+              v-if="simDiscovered.eventNames.length"
               class="h-7 shrink-0 rounded-sm text-xs"
               placeholder="Filter events"
               v-model="eventsFilter"
@@ -340,15 +343,15 @@
                 :key="ev"
                 type="button"
                 size="xs"
-                :variant="eventDraft === ev ? 'default' : 'outline'"
+                :variant="eventNameDraftRef === ev ? 'default' : 'outline'"
                 class="h-6 rounded-sm px-2 text-[11px]"
-                @click="emit('update:eventDraft', ev)"
+                @click="onEventNameSelect(ev)"
               >
                 {{ ev }}
               </Button>
             </div>
             <p
-              v-else-if="discovered.events.length"
+              v-else-if="simDiscovered.eventNames.length"
               class="m-0 text-[11px] text-muted-foreground"
             >
               No matching events
@@ -366,7 +369,7 @@
       </TabsContent>
 
       <TabsContent value="values" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
-        <Tabs v-model="valuesSubTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
+        <Tabs v-model="valuesSubTabRef" class="flex min-h-0 flex-1 flex-col gap-1.5">
           <div ref="valuesTabsRowEl">
             <TabsList class="grid h-8 w-full shrink-0 grid-cols-4 rounded-sm bg-muted/60 p-0.5">
               <TabsTrigger
@@ -406,10 +409,10 @@
                 <Layers class="size-3.5 shrink-0" :size="14" />
                 <span v-if="!valuesTabsIconOnly" class="truncate">Wrap</span>
                 <span
-                  v-if="discovered.wrappers.length"
+                  v-if="simDiscovered.wrapperNames.length"
                   class="shrink-0 opacity-70"
                   :class="valuesTabsIconOnly ? 'text-[10px]' : 'ml-0.5'"
-                >{{ discovered.wrappers.length }}</span>
+                >{{ simDiscovered.wrapperNames.length }}</span>
               </TabsTrigger>
               <TabsTrigger
                 value="tags"
@@ -449,40 +452,40 @@
                 v-for="f in filteredFeatures"
                 :key="`${f.feature}.${f.property}`.toLowerCase()"
                 :label="`${f.feature}.${f.property}`"
-                :model-value="featureValue(f.feature, f.property)"
+                :model-value="draftNumericFeatureValueGetterComputed(f.feature, f.property)"
                 :decimals="2"
-                @update:model-value="(v) => onFeatureValue(f.feature, f.property, v)"
+                @update:model-value="(v) => onNumericFeatureValueChange(f.feature, f.property, v)"
               />
               <PropertyBoolToggle
                 v-for="f in filteredBoolFeatures"
                 :key="`b-${f.feature}.${f.property}`.toLowerCase()"
                 :label="`${f.feature}.${f.property}`"
-                :model-value="boolFeatureValue(f.feature, f.property)"
-                @update:model-value="(v) => onBoolFeatureValue(f.feature, f.property, v)"
+                :model-value="draftBoolFeatureValueGetterComputed(f.feature, f.property)"
+                @update:model-value="(v) => onBoolFeatureValueChange(f.feature, f.property, v)"
               />
               <PropertyTextField
                 v-for="f in filteredStringFeatures"
                 :key="`s-${f.feature}.${f.property}`.toLowerCase()"
                 :label="`${f.feature}.${f.property}`"
-                :model-value="stringFeatureValue(f.feature, f.property)"
+                :model-value="draftStringFeatureValueGetterComputed(f.feature, f.property)"
                 placeholder="None"
-                @update:model-value="(v) => onStringFeatureValue(f.feature, f.property, v)"
+                @update:model-value="(v) => onStringFeatureValueChange(f.feature, f.property, v)"
               />
               <PropertyVecBlock
                 v-for="f in filteredVectorFeatures"
                 :key="`v-${f.feature}.${f.property}`.toLowerCase()"
                 :label="`${f.feature}.${f.property}`"
                 :axes="vector4Axes"
-                :target="vectorFeatureTarget(f.feature, f.property)"
-                @change="(p) => onVectorFeatureAxis(f.feature, f.property, p.axis, p.value)"
+                :target="draftVectorFeatureValueGetterComputed(f.feature, f.property)"
+                @change="(p) => onVectorFeatureAxisValueChange(f.feature, f.property, p.axis, p.value)"
               />
               <PropertyVecBlock
                 v-for="f in filteredQuatFeatures"
                 :key="`q-${f.feature}.${f.property}`.toLowerCase()"
                 :label="`quat ${f.feature}.${f.property}`"
                 :axes="vector4Axes"
-                :target="quatFeatureTarget(f.feature, f.property)"
-                @change="(p) => onQuatFeatureAxis(f.feature, f.property, p.axis, p.value)"
+                :target="draftQuatFeatureValueGetterComputed(f.feature, f.property)"
+                @change="(p) => onQuatFeatureAxisValueChange(f.feature, f.property, p.axis, p.value)"
               />
             </div>
             <p v-else-if="featuresTabCount" class="m-0 text-[11px] text-muted-foreground">No matching features</p>
@@ -501,40 +504,40 @@
                 v-for="name in filteredFloatVars"
                 :key="`f-${name}`"
                 :label="name"
-                :model-value="floatVars[name] ?? 0"
+                :model-value="draftFloatVarValueGetterComputed(name)"
                 :decimals="2"
-                @update:model-value="(v) => onFloatValue(name, v)"
+                @update:model-value="(v) => onFloatVarValueChange(name, v)"
+              />
+              <PropertyNumberControl
+                v-for="name in filteredIntVars"
+                :key="`i-${name}`"
+                :label="name"
+                :model-value="draftIntVarValueGetterComputed(name)"
+                :decimals="0"
+                @update:model-value="(v) => onIntVarValueChange(name, v)"
+              />
+              <PropertyBoolToggle
+                v-for="name in filteredBoolVars"
+                :key="`b-${name}`"
+                :label="name"
+                :model-value="draftBoolVarValueGetterComputed(name)"
+                @update:model-value="(v) => onBoolVarValueChange(name, v)"
               />
               <PropertyVecBlock
                 v-for="name in filteredVectorVars"
                 :key="`vv-${name}`"
                 :label="`vec ${name}`"
                 :axes="vector4Axes"
-                :target="vectorVarTarget(name)"
-                @change="(p) => onVectorVarAxis(name, p.axis, p.value)"
+                :target="draftVectorVarValueGetterComputed(name)"
+                @change="(p) => onVectorVarAxisValueChange(name, p.axis, p.value)"
               />
               <PropertyVecBlock
                 v-for="name in filteredQuatVars"
                 :key="`qv-${name}`"
                 :label="`quat ${name}`"
                 :axes="vector4Axes"
-                :target="quatVarTarget(name)"
-                @change="(p) => onQuatVarAxis(name, p.axis, p.value)"
-              />
-              <PropertyNumberControl
-                v-for="name in filteredIntVars"
-                :key="`i-${name}`"
-                :label="name"
-                :model-value="intVars[name] ?? 0"
-                :decimals="0"
-                @update:model-value="(v) => onIntValue(name, v)"
-              />
-              <PropertyBoolToggle
-                v-for="name in filteredBoolVars"
-                :key="`b-${name}`"
-                :label="name"
-                :model-value="boolVars[name] === true"
-                @update:model-value="(v) => onBoolValue(name, v)"
+                :target="draftQuatVarValueGetterComputed(name)"
+                @change="(p) => onQuatVarAxisValueChange(name, p.axis, p.value)"
               />
             </div>
             <p v-else-if="hasAnyVars" class="m-0 text-[11px] text-muted-foreground">No matching vars</p>
@@ -543,7 +546,7 @@
 
           <TabsContent value="wrappers" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
             <Input
-              v-if="discovered.wrappers.length"
+              v-if="simDiscovered.wrapperNames.length"
               class="h-7 shrink-0 rounded-sm text-xs"
               placeholder="Filter wrappers"
               v-model="wrappersFilter"
@@ -553,17 +556,17 @@
                 v-for="name in filteredWrappers"
                 :key="name"
                 :label="name"
-                :model-value="wrapperWeights[name] ?? 0"
+                :model-value="draftWrapperWeightValueGetterComputed(name)"
                 :value-min="0"
                 :value-max="1"
                 :slider-min="0"
                 :slider-max="1"
                 :step="0.01"
                 :decimals="2"
-                @update:model-value="(v) => onWrapperWeight(name, v)"
+                @update:model-value="(v) => onWrapperWeightValueChange(name, v)"
               />
             </div>
-            <p v-else-if="discovered.wrappers.length" class="m-0 text-[11px] text-muted-foreground">No matching wrappers</p>
+            <p v-else-if="simDiscovered.wrapperNames.length" class="m-0 text-[11px] text-muted-foreground">No matching wrappers</p>
             <p v-else class="m-0 text-[11px] text-muted-foreground">
               No wrappers from graph or anim setup
             </p>
@@ -581,9 +584,9 @@
                 v-for="name in filteredTagVars"
                 :key="`t-${name}`"
                 :label="name"
-                :model-value="tagValues[name] ?? 0"
+                :model-value="draftTagValueGetterComputed(name)"
                 :decimals="2"
-                @update:model-value="(v) => onTagValue(name, v)"
+                @update:model-value="(v) => onTagValueValueChange(name, v)"
               />
             </div>
             <p v-else-if="hasAnyTagValues" class="m-0 text-[11px] text-muted-foreground">No matching tags</p>
@@ -593,7 +596,7 @@
       </TabsContent>
 
       <TabsContent value="resources" class="mt-0 flex min-h-0 flex-1 flex-col gap-1.5 data-[state=inactive]:hidden">
-        <Tabs v-model="resourcesSubTab" class="flex min-h-0 flex-1 flex-col gap-1.5">
+        <Tabs v-model="resourcesSubTabRef" class="flex min-h-0 flex-1 flex-col gap-1.5">
           <div ref="resourcesTabsRowEl">
             <TabsList class="grid h-8 w-full shrink-0 grid-cols-4 rounded-sm bg-muted/60 p-0.5">
               <TabsTrigger
@@ -605,10 +608,10 @@
                 <Film class="size-3.5 shrink-0" :size="14" />
                 <span v-if="!resourcesTabsIconOnly" class="truncate">Anim sets</span>
                 <span
-                  v-if="clipStats.entryCount"
+                  v-if="simClipStatsRef.entryCount"
                   class="shrink-0 opacity-70"
                   :class="resourcesTabsIconOnly ? 'text-[10px]' : 'ml-0.5'"
-                >{{ clipStats.entryCount }}</span>
+                >{{ simClipStatsRef.entryCount }}</span>
               </TabsTrigger>
               <TabsTrigger
                 value="db"
@@ -619,10 +622,10 @@
                 <Database class="size-3.5 shrink-0" :size="14" />
                 <span v-if="!resourcesTabsIconOnly" class="truncate">Anim DB</span>
                 <span
-                  v-if="animDbStats.dbCount"
+                  v-if="simAnimDbStatsRef.dbCount"
                   class="shrink-0 opacity-70"
                   :class="resourcesTabsIconOnly ? 'text-[10px]' : 'ml-0.5'"
-                >{{ animDbStats.dbCount }}</span>
+                >{{ simAnimDbStatsRef.dbCount }}</span>
               </TabsTrigger>
               <TabsTrigger
                 value="rig"
@@ -633,10 +636,10 @@
                 <Bone class="size-3.5 shrink-0" :size="14" />
                 <span v-if="!resourcesTabsIconOnly" class="truncate">Rig</span>
                 <span
-                  v-if="rigEntries.length"
+                  v-if="simRigEntriesRef.length"
                   class="shrink-0 opacity-70"
                   :class="resourcesTabsIconOnly ? 'text-[10px]' : 'ml-0.5'"
-                >{{ rigEntries.length }}</span>
+                >{{ simRigEntriesRef.length }}</span>
               </TabsTrigger>
               <TabsTrigger
                 value="entity"
@@ -673,8 +676,8 @@
           />
           <div class="flex shrink-0 items-center gap-1.5">
             <p class="font-data m-0 min-w-0 flex-1 text-[11px] text-muted-foreground">
-              {{ clipStats.entryCount }} sets · {{ clipStats.clipCount }} clips ·
-              {{ clipStats.eventCount }} events
+              {{ simClipStatsRef.entryCount }} sets · {{ simClipStatsRef.clipCount }} clips ·
+              {{ simClipStatsRef.eventCount }} events
               <span v-if="clipPoseAnimCount">
                 · {{ clipPoseAnimCount }} glb anims
               </span>
@@ -694,28 +697,28 @@
           <p v-if="clipsError" class="m-0 text-[11px] text-destructive">{{ clipsError }}</p>
 
           <div
-            v-if="setupEntries.length"
+            v-if="simAnimSetEntriesRef.length"
             class="flex max-h-[42%] shrink-0 flex-col gap-1.5 overflow-y-auto"
           >
             <AnimSetupEntryCard
-              v-for="entry in setupEntries"
+              v-for="entry in simAnimSetEntriesRef"
               :key="entry.id"
               :entry="entry"
               :pose="poseForEntry(entry)"
-              :wrapper-draft="wrapperAddDraftById[entry.id] ?? ''"
-              :get-clip-glb-info="getClipGlbInfo"
-              :list-glb-anim-names="listGlbAnimNames"
-              @update:priority="(v) => onEntryPriority(entry.id, v)"
-              @update:wrapper-draft="(v) => setWrapperAddDraft(entry.id, v)"
-              @pick-glb="pickGlbForEntry(entry.id)"
-              @clear-glb="props.clearAnimsetGlb(entry.id)"
-              @add-wrapper="addEntryWrapper(entry.id)"
-              @remove-wrapper="(wn) => removeEntryWrapper(entry.id, wn)"
-              @remove="applyRemoveEntry(entry.id)"
+              :get-clip-glb-info="simGetClipGlbInfo"
+              :list-glb-anim-names="simListGlbAnimNames"
+              @update:priority="(piority) => onAnimSetEntryPriorityUpdate(entry.id, piority)"
+              @remove="onAnimSetEntryRemove(entry.id)"
+              @pick-glb="onAnimSetEntryGLBPickerRequest(entry.id)"
+              @clear-glb="onAnimSetEntryGLBClear(entry.id)"
+              :wrapper-draft="draftWrapperVariableNameByanimSetEntryIdRef[entry.id] ?? ''"
+              @update:wrapper-draft="(newVariableNameDraft) => onAnimSetEntryWrapperNewVariableNameDraft(entry.id, newVariableNameDraft)"
+              @add-wrapper="onAnimSetEntryWrapperVariableAdd(entry.id)"
+              @remove-wrapper="(wrapperVariableName) => onAnimSetEntryWrapperVariableRemove(entry.id, wrapperVariableName)"
             />
           </div>
 
-          <div v-if="clipNames.length" class="flex shrink-0 flex-wrap items-center gap-1.5">
+          <div v-if="simClipNamesRef.length" class="flex shrink-0 flex-wrap items-center gap-1.5">
             <Input
               class="h-7 min-w-[80px] flex-1 rounded-sm text-xs"
               placeholder="Filter clips"
@@ -740,7 +743,7 @@
               v-for="name in filteredClips"
               :key="name"
               class="rounded-sm"
-              :class="expandedClipName === name ? 'bg-muted/40' : ''"
+              :class="expandedClipNameRef === name ? 'bg-muted/40' : ''"
             >
               <button
                 type="button"
@@ -750,12 +753,12 @@
                 <span
                   class="shrink-0 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide"
                   :class="
-                    isClipActive(name)
+                    simIsClipActive(name)
                       ? 'bg-emerald-500/20 text-emerald-400'
                       : 'bg-muted text-muted-foreground'
                   "
                 >
-                  {{ isClipActive(name) ? 'on' : 'off' }}
+                  {{ simIsClipActive(name) ? 'on' : 'off' }}
                 </span>
                 <span class="min-w-0 flex-1 truncate text-[11px]">{{ name }}</span>
                 <span
@@ -770,13 +773,13 @@
                 </span>
               </button>
               <div
-                v-if="expandedClipName === name && expandedClipDetail"
+                v-if="expandedClipNameRef === name && expandedClipDetail"
                 class="mx-1 mb-1 mt-0.5 max-h-[40vh] overflow-y-auto rounded-sm border border-border bg-canvas px-2 py-1.5 text-[10px] text-muted-foreground"
               >
                 <p class="font-data m-0 mb-1 text-foreground">
                   {{ expandedClipDetail.name }} · {{ expandedClipDetail.duration.toFixed(3) }}s
-                  <template v-if="expandedClipSets.length > 1">
-                    · {{ expandedClipSets.length }} sets
+                  <template v-if="expandedClipAnimSetMemberships.length > 1">
+                    · {{ expandedClipAnimSetMemberships.length }} sets
                   </template>
                   <template v-else>
                     · {{ expandedClipDetail.events.length }} evt
@@ -804,12 +807,12 @@
                     no glb
                   </span>
                 </p>
-                <div v-if="expandedClipSets.length" class="mb-1.5 flex flex-col gap-1.5">
+                <div v-if="expandedClipAnimSetMemberships.length" class="mb-1.5 flex flex-col gap-1.5">
                   <p class="m-0 text-[9px] uppercase tracking-wide text-muted-foreground/80">
                     In sets
                   </p>
                   <div
-                    v-for="s in expandedClipSets"
+                    v-for="s in expandedClipAnimSetMemberships"
                     :key="s.entryId"
                     class="flex min-w-0 flex-col gap-0.5"
                   >
@@ -835,13 +838,13 @@
                       <span
                         class="shrink-0 rounded-sm px-1 py-0.5 text-[9px] font-medium uppercase"
                         :class="
-                          getClipGlbInfo(name, s.poseSetId)
+                          simGetClipGlbInfo(name, s.poseSetId)
                             ? 'bg-violet-500/20 text-violet-300'
                             : 'bg-muted text-muted-foreground'
                         "
                       >
-                        <template v-if="getClipGlbInfo(name, s.poseSetId)">
-                          glb {{ getClipGlbInfo(name, s.poseSetId)!.duration.toFixed(2) }}s
+                        <template v-if="simGetClipGlbInfo(name, s.poseSetId)">
+                          glb {{ simGetClipGlbInfo(name, s.poseSetId)!.duration.toFixed(2) }}s
                         </template>
                         <template v-else>no glb</template>
                       </span>
@@ -883,7 +886,7 @@
               </div>
             </div>
           </div>
-          <p v-else-if="!clipNames.length" class="m-0 text-[11px] text-muted-foreground">
+          <p v-else-if="!simClipNamesRef.length" class="m-0 text-[11px] text-muted-foreground">
             Load WolvenKit .anims.json — each file = AnimSetupEntry (priority + variableNames)
           </p>
         </TabsContent>
@@ -899,7 +902,7 @@
           />
           <div class="flex shrink-0 items-center gap-1.5">
             <p class="font-data m-0 min-w-0 flex-1 text-[11px] text-muted-foreground">
-              {{ animDbStats.dbCount }} DB · {{ animDbStats.rowCount }} rows
+              {{ simAnimDbStatsRef.dbCount }} DB · {{ simAnimDbStatsRef.rowCount }} rows
             </p>
             <Button
               type="button"
@@ -916,12 +919,12 @@
           <p v-if="animDbError" class="m-0 text-[11px] text-destructive">{{ animDbError }}</p>
 
           <div
-            v-if="animDatabases.length"
+            v-if="simAnimDatabasesRef.length"
             class="flex shrink-0 flex-col gap-1 overflow-y-auto rounded-sm border border-border bg-canvas p-1.5"
             :class="selectedAnimDb ? 'max-h-[30%]' : 'max-h-[50%]'"
           >
             <button
-              v-for="db in animDatabases"
+              v-for="db in simAnimDatabasesRef"
               :key="db.pathKey"
               type="button"
               class="flex w-full items-center gap-1.5 rounded-sm border px-1.5 py-1 text-left"
@@ -944,7 +947,7 @@
                 variant="ghost"
                 class="h-5 w-5 shrink-0 rounded-sm p-0 text-[10px] text-muted-foreground"
                 title="Remove database"
-                @click.stop="props.removeAnimDatabase(db.pathKey)"
+                @click.stop="onRemoveAnimDatabase(db.pathKey)"
               >
                 ×
               </Button>
@@ -991,7 +994,7 @@
               </p>
             </div>
           </template>
-          <p v-else-if="!animDatabases.length" class="m-0 text-[11px] text-muted-foreground">
+          <p v-else-if="!simAnimDatabasesRef.length" class="m-0 text-[11px] text-muted-foreground">
             Load WolvenKit C2dArray .csv.json (e.g. player_melee_attacks.csv.json)
           </p>
           <p v-else class="m-0 text-[11px] text-muted-foreground">Select a database above</p>
@@ -1008,7 +1011,7 @@
           />
           <div class="flex shrink-0 items-center gap-1.5">
             <p class="font-data m-0 min-w-0 flex-1 text-[11px] text-muted-foreground">
-              {{ rigEntries.length }} loaded · Sample uses active only
+              {{ simRigEntriesRef.length }} loaded · Sample uses active only
             </p>
             <Button
               type="button"
@@ -1023,9 +1026,9 @@
             </Button>
           </div>
           <p v-if="rigError" class="m-0 text-[11px] text-destructive">{{ rigError }}</p>
-          <div v-if="rigEntries.length" class="flex shrink-0 flex-col gap-1 overflow-y-auto max-h-[30%]">
+          <div v-if="simRigEntriesRef.length" class="flex shrink-0 flex-col gap-1 overflow-y-auto max-h-[30%]">
             <div
-              v-for="entry in rigEntries"
+              v-for="entry in simRigEntriesRef"
               :key="entry.id"
               class="flex items-center gap-1.5 rounded-sm border border-border/60 px-1.5 py-1"
             >
@@ -1034,7 +1037,7 @@
                 size="sm"
                 :variant="entry.active ? 'default' : 'secondary'"
                 class="h-6 shrink-0 rounded-sm px-2 text-[10px]"
-                @click="props.setActiveRig(entry.id)"
+                @click="onSetActiveRig(entry.id)"
               >
                 {{ entry.active ? 'active' : 'set' }}
               </Button>
@@ -1050,7 +1053,7 @@
                 variant="ghost"
                 class="h-5 w-5 shrink-0 rounded-sm p-0 text-[10px] text-muted-foreground"
                 title="Remove rig"
-                @click="props.removeRig(entry.id)"
+                @click="onRemoveRig(entry.id)"
               >
                 ×
               </Button>
@@ -1060,7 +1063,7 @@
             Load player_woman_skeleton.rig.json (or other animRig) for Sample / masks.
           </p>
 
-          <template v-if="activeRigBones.length">
+          <template v-if="simActiveRigBonesRef.length">
             <Input
               class="h-7 shrink-0 rounded-sm text-xs"
               placeholder="Filter bones / parts"
@@ -1068,7 +1071,7 @@
             />
             <div class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
               <p class="m-0 text-[9px] uppercase tracking-wide text-muted-foreground/80">
-                Bones ({{ filteredRigBones.length }}/{{ activeRigBones.length }})
+                Bones ({{ filteredRigBones.length }}/{{ simActiveRigBonesRef.length }})
               </p>
               <p
                 v-for="bone in filteredRigBones"
@@ -1078,10 +1081,10 @@
                 {{ bone }}
               </p>
               <p
-                v-if="activeRigParts.length"
+                v-if="simActiveRigPartsRef.length"
                 class="m-0 mt-1 text-[9px] uppercase tracking-wide text-muted-foreground/80"
               >
-                Parts ({{ filteredRigParts.length }}/{{ activeRigParts.length }})
+                Parts ({{ filteredRigParts.length }}/{{ simActiveRigPartsRef.length }})
               </p>
               <p
                 v-for="part in filteredRigParts"
@@ -1100,7 +1103,7 @@
             <Input
               class="h-7 min-w-0 flex-1 rounded-sm text-xs"
               placeholder="Add entity tag"
-              v-model="entityTagDraft"
+              v-model="additionEntityTagNameRef"
               @keydown.enter.prevent="onAddEntityTag"
             />
             <Button
@@ -1140,8 +1143,8 @@
               <div class="min-w-0 flex-1">
                 <PropertyBoolToggle
                   :label="name"
-                  :model-value="entityTags[name] === true"
-                  @update:model-value="(v) => onEntityTag(name, v)"
+                  :model-value="draftEntityTagValueGetterComputed(name)"
+                  @update:model-value="(v) => onEntityTagValueChange(name, v)"
                 />
               </div>
               <Button
@@ -1170,7 +1173,30 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, type Ref } from 'vue'
+import {
+  PropertyBoolToggle,
+  PropertyEnumSelect,
+  PropertyNumberControl,
+  PropertyNumberSlider,
+  PropertyTextField,
+  PropertyVecBlock,
+} from '@/components/nodeDetails'
+import AnimSetupEntryCard from '@/components/sim/AnimSetupEntryCard.vue'
+import SimDriversPanel from '@/components/sim/drivers/SimDriversPanel.vue'
+import { Button } from '@/components/ui/button'
+import { ButtonGroup } from '@/components/ui/button-group'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
+import { Separator } from '@/components/ui/separator'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { makeFeatureKey } from '@/composables/sim/features'
+import { IDENTITY_QUAT_VEC4, ZERO_VEC4 } from '@/utils/sim'
+import { Check, EllipsisVertical, TriangleAlert } from '@lucide/vue'
 import { useResizeObserver } from '@vueuse/core'
 import {
   Activity,
@@ -1194,191 +1220,66 @@ import {
   Variable,
   Zap,
 } from 'lucide-vue-next'
-import type {
-  AnimSetupEntryView,
-  ClipLibraryStats,
-  ClipMeta,
-  ClipSetMembership,
-} from '../utils/sim/clipLibrary'
-import type { ClipPoseSetView } from '../utils/sim/clipPoseLibrary'
-import type { RigEntryView } from '../utils/sim/rigResource'
-import { DEFAULT_SIM_FPS } from '../utils/sim/SimClock'
-import type { AnimDatabase, AnimDatabaseStats } from '../utils/sim/animDatabase'
-import type { SimSnapshot } from '../utils/sim/simTypes'
-import { Check, EllipsisVertical, TriangleAlert } from '@lucide/vue'
+import { computed, ref, watch, type Ref } from 'vue'
+import {
+  addEntityTagName as animgraphSimAddEntityTagName,
+  discovered as animgraphSimDiscovered,
+  liveBridge as animgraphSimLiveBridge,
+  removeEntityTagName as animgraphSimRemoveEntityTagName,
+  draftBoard,
+  eventNameDraftRef,
+  eventValueDraftRef,
+  sim,
+} from '../stores/animgraphSim'
 import {
   openSimSkeletonWindow,
   openSimStatusWindow,
   windowUiStateByType,
   type AppWindowUiState,
 } from '../stores/appWindows'
-import AnimSetupEntryCard from '@/components/sim/AnimSetupEntryCard.vue'
-import SimDriversPanel from '@/components/sim/drivers/SimDriversPanel.vue'
-import {
-  PropertyBoolToggle,
-  PropertyEnumSelect,
-  PropertyNumberControl,
-  PropertyTextField,
-  PropertyNumberSlider,
-  PropertyVecBlock,
-} from '@/components/nodeDetails'
-import { Button } from '@/components/ui/button'
-import { ButtonGroup } from '@/components/ui/button-group'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import {
-  simGetPrimaryRunner,
-  simGetRootRunnerId,
-  simListSlotRunners,
-  simPlaying,
-  simSetRunnerDiagramId,
-  simSetSlotDiagramId,
-  simRunnersRev,
-} from '../stores/animgraphSim'
 import { listDiagramIds, projectRef } from '../stores/graphProject'
+import type {
+  ClipMeta,
+  ClipSetMembership,
+} from '../utils/sim/clipLibrary'
+import type { ClipPoseSetView } from '../utils/sim/clipPoseLibrary'
+import { DEFAULT_SIM_FPS } from '../utils/sim/SimClock'
 
-const props = defineProps<{
-  snapshot: SimSnapshot
-  active: boolean
-  discovered: {
-    features: Array<{ feature: string; property: string }>
-    vectorFeatures?: Array<{ feature: string; property: string }>
-    quatFeatures?: Array<{ feature: string; property: string }>
-    boolFeatures?: Array<{ feature: string; property: string }>
-    stringFeatures?: Array<{ feature: string; property: string }>
-    floatVars: string[]
-    vectorVars?: string[]
-    quatVars?: string[]
-    boolVars: string[]
-    intVars: string[]
-    wrappers: string[]
-    events: string[]
-    tags?: string[]
-    entityTags?: string[]
-  }
-  eventDraft: string
-  eventValueDraft: number
-  featureDrafts: Record<string, number>
-  vectorFeatureDrafts?: Record<string, { x: number; y: number; z: number; w: number }>
-  quatFeatureDrafts?: Record<string, { x: number; y: number; z: number; w: number }>
-  boolFeatureDrafts?: Record<string, boolean>
-  stringFeatureDrafts?: Record<string, string>
-  floatVars: Record<string, number>
-  vectorVars?: Record<string, { x: number; y: number; z: number; w: number }>
-  quatVars?: Record<string, { x: number; y: number; z: number; w: number }>
-  boolVars: Record<string, boolean>
-  intVars: Record<string, number>
-  tagValues: Record<string, number>
-  entityTags: Record<string, boolean>
-  wrapperWeights: Record<string, number>
-  clipStats: ClipLibraryStats
-  clipNames: string[]
-  setupEntries: AnimSetupEntryView[]
-  animDbStats: AnimDatabaseStats
-  animDatabases: AnimDatabase[]
-  rigEntries: RigEntryView[]
-  activeRigBones: string[]
-  activeRigParts: string[]
-  clipPoseSets: ClipPoseSetView[]
-  getClipGlbInfo: (
-    clipName: string,
-    poseSetId?: string | null
-  ) => { name: string; duration: number } | null
-  listGlbAnimNames: (poseSetId: string) => string[]
-  resolveClip: (name: string) => ClipMeta | undefined
-  lookupClip: (name: string) => ClipMeta | undefined
-  getClipInEntry: (name: string, entryId: string) => ClipMeta | undefined
-  isClipActive: (name: string) => boolean
-  listClipSets: (name: string) => ClipSetMembership[]
-  loadAnimsetJson: (
-    json: unknown,
-    sourceLabel?: string,
-    options?: { priority?: number; variableNames?: string[] }
-  ) => { id: string; clipCount: number } | undefined
-  loadAnimsetGlb: (
-    buffer: ArrayBuffer,
-    sourceLabel: string,
-    setupEntryId?: string | null
-  ) => Promise<number> | number
-  clearAnimsetGlb: (setupEntryId: string) => void
-  loadRigJson: (json: unknown, sourceLabel?: string) => string
-  removeRig: (id: string) => void
-  setActiveRig: (id: string | null) => void
-  sampleWarningsEnabled?: boolean
-  setSampleWarningsEnabled?: (on: boolean) => void
-  updateWarningsEnabled?: boolean
-  setUpdateWarningsEnabled?: (on: boolean) => void
-  loadAnimDatabaseJson: (json: object, sourceLabel?: string) => string
-  removeAnimDatabase: (pathKey: string) => void
-  updateSetupEntry: (
-    id: string,
-    patch: { priority?: number; variableNames?: string[]; tags?: string[] }
-  ) => void
-  removeSetupEntry: (id: string) => void
-  applyFeature: (feature: string, property: string, value: number) => void
-  applyBoolFeature?: (feature: string, property: string, value: boolean) => void
-  applyStringFeature?: (feature: string, property: string, value: string) => void
-  applyVectorFeatureAxis?: (
-    feature: string,
-    property: string,
-    axis: 'x' | 'y' | 'z' | 'w',
-    value: number
-  ) => void
-  applyQuatFeatureAxis?: (
-    feature: string,
-    property: string,
-    axis: 'x' | 'y' | 'z' | 'w',
-    value: number
-  ) => void
-  applyFloatVar: (name: string, value: number) => void
-  applyVectorVarAxis?: (name: string, axis: 'x' | 'y' | 'z' | 'w', value: number) => void
-  resolveVectorVarValue?: (name: string) => { x: number; y: number; z: number; w: number }
-  applyQuatVarAxis?: (name: string, axis: 'x' | 'y' | 'z' | 'w', value: number) => void
-  resolveQuatVarValue?: (name: string) => { x: number; y: number; z: number; w: number }
-  applyBoolVar: (name: string, value: boolean) => void
-  applyIntVar: (name: string, value: number) => void
-  applyTagValue: (name: string, value: number) => void
-  applyEntityTag: (name: string, present: boolean) => void
-  removeEntityTag: (name: string) => void
-  applyWrapperWeight: (name: string, value: number) => void
-  resolveFeatureValue: (feature: string, property: string) => number
-  resolveBoolFeatureValue?: (feature: string, property: string) => boolean
-  resolveStringFeatureValue?: (feature: string, property: string) => string
-  resolveVectorFeatureValue?: (
-    feature: string,
-    property: string
-  ) => { x: number; y: number; z: number; w: number }
-  resolveQuatFeatureValue?: (
-    feature: string,
-    property: string
-  ) => { x: number; y: number; z: number; w: number }
-}>()
+const {
+  active: simActiveRef,
+  playing: simPlayingRef,
+  speedRef: simSpeedRef,
+  snapshot: simSnapshotRef,
+  getPrimaryRunner: simGetPrimaryRunner,
+  getRootRunnerId: simGetRootRunnerId,
+  listSlotRunners: simListSlotRunners,
+  setRunnerDiagramId: simSetRunnerDiagramId,
+  setSlotDiagramId: simSetSlotDiagramId,
+  runnersRev: simRunnersRevRef,
+  discovered: simDiscoveredRef,
+  clipStats: simClipStatsRef,
+  clipNames: simClipNamesRef,
+  setupEntries: simAnimSetEntriesRef,
+  animDbStats: simAnimDbStatsRef,
+  animDatabases: simAnimDatabasesRef,
+  rigEntries: simRigEntriesRef,
+  activeRigBones: simActiveRigBonesRef,
+  activeRigParts: simActiveRigPartsRef,
+  clipPoseSets: simClipPoseSetsRef,
+  updateWarningsEnabled: simUpdateWarningsEnabledRef,
+  sampleWarningsEnabled: simSampleWarningsEnabledRef,
+  getClipGlbInfo: simGetClipGlbInfo,
+  listGlbAnimNames: simListGlbAnimNames,
+  isClipActive: simIsClipActive,
+} = sim
 
-const emit = defineEmits<{
-  'update:eventDraft': [string]
-  'update:eventValueDraft': [number]
-  toggle: []
-  'toggle-active': []
-  step: []
-  reset: []
-  setSpeed: [number]
-  fireExternal: [string?]
-  fireAnimEvent: [name?: string, value?: number]
-  fireAnimEnd: []
-}>()
+const animgraphSimLiveBridgeActiveComputed = animgraphSimLiveBridge.activeComputed
 
-const activeTab = ref<'diagrams' | 'control' | 'values' | 'resources'>('diagrams')
-const controlSubTab = ref<'events' | 'drivers'>('events')
-const valuesSubTab = ref<'features' | 'vars' | 'wrappers' | 'tags'>('features')
-const resourcesSubTab = ref<'sets' | 'db' | 'rig' | 'entity'>('sets')
-const eventValueEnabled = ref(false)
+const activeTabRef = ref<'diagrams' | 'control' | 'values' | 'resources'>('diagrams')
+const controlSubTabRef = ref<'events' | 'drivers'>('events')
+const valuesSubTabRef = ref<'features' | 'vars' | 'wrappers' | 'tags'>('features')
+const resourcesSubTabRef = ref<'sets' | 'db' | 'rig' | 'entity'>('sets')
+const eventValueEnabledRef = ref(false)
 
 const DIAGRAM_OPTION_LABELS: Readonly<Record<string, string>> = { '': 'None' }
 const diagramSelectOptions = computed(() => ['', ...listDiagramIds.value])
@@ -1389,7 +1290,7 @@ const bumpDiagramSlots = () => {
 }
 
 watch(
-  [projectRef, listDiagramIds, simRunnersRev],
+  [projectRef, listDiagramIds, simRunnersRevRef],
   () => bumpDiagramSlots(),
   { deep: false }
 )
@@ -1410,7 +1311,7 @@ type DiagramSlotRow = {
 const diagramSlotRows = computed((): DiagramSlotRow[] => {
   void diagramSlotsRev.value
   void projectRef.value
-  void simRunnersRev.value
+  void simRunnersRevRef.value
   const rootId = simGetRootRunnerId()
   const root = simGetPrimaryRunner()
   const rootSlots = root?.diagramId ? simListSlotRunners(rootId) : []
@@ -1439,7 +1340,7 @@ const diagramSlotRows = computed((): DiagramSlotRow[] => {
         parentRunnerId: parentId,
         runnerId: slot.runnerId || undefined,
         slotName: slot.slotName,
-        diagramId: slot.diagramId,
+        diagramId: slot.diagramId ?? '',
         label: slot.slotName,
         title: slot.runnerId
           ? `${slot.slotName} → ${slot.runnerId}`
@@ -1467,12 +1368,19 @@ function onDiagramSlotSelect(row: DiagramSlotRow, diagramId: string) {
   bumpDiagramSlots()
 }
 
+function onEventNameSelect(eventName: string) {
+  eventNameDraftRef.value = eventName
+}
+
+function onFireExternalEvent() {
+  sim.fireExternal(eventNameDraftRef.value)
+}
+
 function onFireAnimEvent() {
-  const value =
-    eventValueEnabled.value && Number.isFinite(props.eventValueDraft)
-      ? props.eventValueDraft
-      : undefined
-  emit('fireAnimEvent', undefined, value)
+  const eventValue = eventValueEnabledRef.value && Number.isFinite(eventValueDraftRef.value)
+    ? eventValueDraftRef.value
+    : undefined
+  sim.fireAnimEvent(eventNameDraftRef.value, eventValue)
 }
 
 /** Below this tabs-row width, show icons only. */
@@ -1507,9 +1415,11 @@ const eventsFilter = ref('')
 const featuresFilter = ref('')
 const varsFilter = ref('')
 const tagsFilter = ref('')
+
 const entityTagsFilter = ref('')
-const entityTagDraft = ref('')
+const additionEntityTagNameRef = ref('')
 const entityTagsEditMode = ref(false)
+
 const wrappersFilter = ref('')
 const clipsFilter = ref('')
 const animDbRowsFilter = ref('')
@@ -1520,7 +1430,7 @@ const clipActiveFilterOptions = [
   { value: 'active' as const, label: 'On' },
   { value: 'inactive' as const, label: 'Off' },
 ]
-const expandedClipName = ref('')
+const expandedClipNameRef = ref('')
 const clipsError = ref('')
 const animDbError = ref('')
 const rigError = ref('')
@@ -1531,22 +1441,24 @@ const glbTargetEntryId = ref<string | null>(null)
 const animDbFileInput = ref<HTMLInputElement | null>(null)
 const rigFileInput = ref<HTMLInputElement | null>(null)
 /** Per-entry draft for adding a wrapper name chip. */
-const wrapperAddDraftById = ref<Record<string, string>>({})
+const draftWrapperVariableNameByanimSetEntryIdRef = ref<Record<string, string>>({})
 
-const clipPoseAnimCount = computed(() =>
-  (props.clipPoseSets ?? []).reduce((n, s) => n + s.animCount, 0)
-)
-
-const poseById = computed(() => {
-  const m = new Map<string, (typeof props.clipPoseSets)[number]>()
-  for (const s of props.clipPoseSets ?? []) {
-    m.set(s.id, s)
-  }
-  return m
+const clipPoseAnimCount = computed(() => {
+  return simClipPoseSetsRef.value.reduce((n, s) => n + s.animCount, 0)
 })
 
-const poseForEntry = (entry: { poseSetId: string | null }) =>
-  entry.poseSetId ? poseById.value.get(entry.poseSetId) : undefined
+const clipPoseSetIdToClipPoseSetViewMapComputed = computed(() => {
+  const clipPoseSetIdToClipPoseSetViewMap = new Map<string, ClipPoseSetView>()
+  for (const clipPoseSetView of simClipPoseSetsRef.value) {
+    clipPoseSetIdToClipPoseSetViewMap.set(clipPoseSetView.id, clipPoseSetView)
+  }
+  return clipPoseSetIdToClipPoseSetViewMap
+})
+
+const poseForEntry = (entry: { poseSetId: string | null }) => {
+  if (!entry.poseSetId) return undefined
+  return clipPoseSetIdToClipPoseSetViewMapComputed.value.get(entry.poseSetId)
+}
 
 const matchesQuery = (text: string, query: string) => {
   const q = query.trim().toLowerCase()
@@ -1555,29 +1467,30 @@ const matchesQuery = (text: string, query: string) => {
 }
 
 /** Sim HUD frame index (matches Step = 1/60s). Anim content stays 30fps separately. */
-const simFrame = computed(() => Math.floor(props.snapshot.time * DEFAULT_SIM_FPS))
+const simFrame = computed(() => Math.floor(simSnapshotRef.value.time * DEFAULT_SIM_FPS))
 
 const localeCmp = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' })
 
-const filteredEvents = computed(() =>
-  props.discovered.events
+const simDiscovered = simDiscoveredRef.value
+
+const filteredEvents = computed(() => {
+  return simDiscovered.eventNames
     .filter((ev) => matchesQuery(ev, eventsFilter.value))
     .slice()
     .sort(localeCmp)
-)
+})
 const vector4Axes = ['X', 'Y', 'Z', 'W'] as const
 
-const featuresTabCount = computed(
-  () =>
-    props.discovered.features.length +
-    (props.discovered.vectorFeatures?.length ?? 0) +
-    (props.discovered.quatFeatures?.length ?? 0) +
-    (props.discovered.boolFeatures?.length ?? 0) +
-    (props.discovered.stringFeatures?.length ?? 0)
-)
+const featuresTabCount = computed(() => {
+  return simDiscovered.floatFeatures.length +
+    simDiscovered.vectorFeatureKeysSet.size +
+    simDiscovered.quatFeatureKeysSet.size +
+    simDiscovered.boolFeatureKeysSet.size +
+    simDiscovered.stringFeatureKeysSet.size
+})
 
-const filteredFeatures = computed(() =>
-  props.discovered.features
+const filteredFeatures = computed(() => {
+  return simDiscovered.floatFeatures
     .filter((f) => matchesQuery(`${f.feature}.${f.property}`, featuresFilter.value))
     .slice()
     .sort((a, b) => {
@@ -1585,10 +1498,10 @@ const filteredFeatures = computed(() =>
       if (byFeat !== 0) return byFeat
       return localeCmp(a.property, b.property)
     })
-)
+})
 
-const filteredBoolFeatures = computed(() =>
-  (props.discovered.boolFeatures ?? [])
+const filteredBoolFeatures = computed(() => {
+  return simDiscovered.boolFeatures
     .filter((f) => matchesQuery(`${f.feature}.${f.property}`, featuresFilter.value))
     .slice()
     .sort((a, b) => {
@@ -1596,10 +1509,10 @@ const filteredBoolFeatures = computed(() =>
       if (byFeat !== 0) return byFeat
       return localeCmp(a.property, b.property)
     })
-)
+})
 
-const filteredStringFeatures = computed(() =>
-  (props.discovered.stringFeatures ?? [])
+const filteredStringFeatures = computed(() => {
+  return simDiscovered.stringFeatures
     .filter((f) => matchesQuery(`${f.feature}.${f.property}`, featuresFilter.value))
     .slice()
     .sort((a, b) => {
@@ -1607,10 +1520,10 @@ const filteredStringFeatures = computed(() =>
       if (byFeat !== 0) return byFeat
       return localeCmp(a.property, b.property)
     })
-)
+})
 
-const filteredVectorFeatures = computed(() =>
-  (props.discovered.vectorFeatures ?? [])
+const filteredVectorFeatures = computed(() => {
+  return simDiscovered.vectorFeatures
     .filter((f) => matchesQuery(`${f.feature}.${f.property}`, featuresFilter.value))
     .slice()
     .sort((a, b) => {
@@ -1618,10 +1531,10 @@ const filteredVectorFeatures = computed(() =>
       if (byFeat !== 0) return byFeat
       return localeCmp(a.property, b.property)
     })
-)
+})
 
-const filteredQuatFeatures = computed(() =>
-  (props.discovered.quatFeatures ?? [])
+const filteredQuatFeatures = computed(() => {
+  return simDiscovered.quatFeatures
     .filter((f) => matchesQuery(`${f.feature}.${f.property}`, featuresFilter.value))
     .slice()
     .sort((a, b) => {
@@ -1629,82 +1542,81 @@ const filteredQuatFeatures = computed(() =>
       if (byFeat !== 0) return byFeat
       return localeCmp(a.property, b.property)
     })
-)
-const filteredFloatVars = computed(() =>
-  props.discovered.floatVars
+})
+
+const filteredFloatVars = computed(() => {
+  return simDiscovered.floatVarNames
     .filter((name) => matchesQuery(name, varsFilter.value))
     .slice()
     .sort(localeCmp)
-)
-const filteredVectorVars = computed(() =>
-  (props.discovered.vectorVars ?? [])
+})
+const filteredVectorVars = computed(() => {
+  return simDiscovered.vectorVarNames
     .filter((name) => matchesQuery(name, varsFilter.value))
     .slice()
     .sort(localeCmp)
-)
-const filteredQuatVars = computed(() =>
-  (props.discovered.quatVars ?? [])
+})
+const filteredQuatVars = computed(() => {
+  return simDiscovered.quatVarNames
     .filter((name) => matchesQuery(name, varsFilter.value))
     .slice()
     .sort(localeCmp)
-)
-const filteredBoolVars = computed(() =>
-  (props.discovered.boolVars ?? [])
+})
+const filteredBoolVars = computed(() => {
+  return simDiscovered.boolVarNames
     .filter((name) => matchesQuery(name, varsFilter.value))
     .slice()
     .sort(localeCmp)
-)
-const filteredIntVars = computed(() =>
-  (props.discovered.intVars ?? [])
+})
+const filteredIntVars = computed(() => {
+  return simDiscovered.intVarNames
     .filter((name) => matchesQuery(name, varsFilter.value))
     .slice()
     .sort(localeCmp)
-)
-const filteredTagVars = computed(() =>
-  (props.discovered.tags ?? [])
+})
+const filteredTagVars = computed(() => {
+  return simDiscovered.tagNames
     .filter((name) => matchesQuery(name, tagsFilter.value))
     .slice()
     .sort(localeCmp)
-)
-const filteredEntityTags = computed(() =>
-  (props.discovered.entityTags ?? [])
-    .filter((name) => matchesQuery(name, entityTagsFilter.value))
-    .slice()
-    .sort(localeCmp)
-)
-const varsCount = computed(
-  () =>
-    props.discovered.floatVars.length +
-    (props.discovered.vectorVars?.length ?? 0) +
-    (props.discovered.quatVars?.length ?? 0) +
-    (props.discovered.boolVars?.length ?? 0) +
-    (props.discovered.intVars?.length ?? 0)
-)
-const hasAnyTagValues = computed(() => (props.discovered.tags?.length ?? 0) > 0)
-const hasAnyEntityTags = computed(() => (props.discovered.entityTags?.length ?? 0) > 0)
-const entityTagsCount = computed(() => props.discovered.entityTags?.length ?? 0)
-const tagsCount = computed(() => props.discovered.tags?.length ?? 0)
-const hasAnyVars = computed(() => varsCount.value > 0)
-const hasFilteredVars = computed(
-  () =>
-    filteredFloatVars.value.length > 0 ||
+})
+const varsCount = computed(() => {
+  return simDiscovered.floatVarNames.length +
+    simDiscovered.vectorVarNames.length +
+    simDiscovered.quatVarNames.length +
+    simDiscovered.boolVarNames.length +
+    simDiscovered.intVarNames.length
+})
+
+const hasAnyTagValues = computed(() => {
+  return simDiscovered.tagNames.length > 0
+})
+const tagsCount = computed(() => {
+  return simDiscovered.tagNames.length
+})
+const hasAnyVars = computed(() => {
+  return varsCount.value > 0
+})
+const hasFilteredVars = computed(() => {
+  return filteredFloatVars.value.length > 0 ||
     filteredVectorVars.value.length > 0 ||
     filteredQuatVars.value.length > 0 ||
     filteredBoolVars.value.length > 0 ||
     filteredIntVars.value.length > 0
-)
-const filteredWrappers = computed(() =>
-  props.discovered.wrappers
+})
+const filteredWrappers = computed(() => {
+  return simDiscovered.wrapperNames
     .filter((name) => matchesQuery(name, wrappersFilter.value))
     .slice()
     .sort(localeCmp)
-)
+})
 const filteredClips = computed(() => {
   const q = clipsFilter.value
-  return props.clipNames.filter((name) => {
+  return simClipNamesRef.value.filter((name) => {
     if (!matchesQuery(name, q)) return false
     if (clipsActiveFilter.value === 'all') return true
-    const on = props.isClipActive(name)
+    
+    const on = simIsClipActive(name)
     return clipsActiveFilter.value === 'active' ? on : !on
   })
 })
@@ -1713,7 +1625,7 @@ const formatAnimDbInputs = (inputs: Array<number | string>) =>
   inputs.map((v) => String(v)).join(',')
 
 const selectedAnimDb = computed(() => {
-  const list = props.animDatabases ?? []
+  const list = simAnimDatabasesRef.value
   if (!list.length) return undefined
   return list.find((d) => d.pathKey === selectedAnimDbKey.value) ?? list[0]
 })
@@ -1733,41 +1645,45 @@ const filteredAnimDbRows = computed(() => {
   })
 })
 
-const expandedClipDetail = computed(() =>
-  expandedClipName.value ? props.lookupClip(expandedClipName.value) : undefined
-)
-const expandedClipIsActive = computed(() =>
-  expandedClipName.value ? props.isClipActive(expandedClipName.value) : false
-)
-const expandedClipSets = computed(() =>
-  expandedClipName.value ? props.listClipSets(expandedClipName.value) : []
-)
+const expandedClipAnimSetMemberships = computed(() => {
+  if (!expandedClipNameRef.value) return []
+  return sim.listClipSets(expandedClipNameRef.value)
+})
+
 const expandedClipGlb = computed(() => {
-  const name = expandedClipName.value
-  if (!name) return null
-  const win = expandedClipSets.value.find((s) => s.resolves)
-  return props.getClipGlbInfo(name, win?.poseSetId ?? null)
+  const name = expandedClipNameRef.value
+  if (!name) return
+
+  const win = expandedClipAnimSetMemberships.value.find((membership) => membership.resolves)
+  return sim.getClipGlbInfo(name, win?.poseSetId ?? null)
+})
+
+const expandedClipDetail = computed(() => {
+  if (!expandedClipNameRef.value) return
+  return sim.lookupClip(expandedClipNameRef.value)
+})
+
+const expandedClipIsActive = computed(() => {
+  if (!expandedClipNameRef.value) return false
+  return sim.isClipActive(expandedClipNameRef.value)
 })
 
 const clipHasGlb = (name: string) => {
-  const win = props.listClipSets(name).find((s) => s.resolves)
-  if (win) return props.getClipGlbInfo(name, win.poseSetId) != null
-  // gated / no winner — any linked set still useful as existence hint
-  return props.getClipGlbInfo(name) != null
+  return sim.getClipGlbInfo(name) != null
 }
 
 const filteredRigBones = computed(() => {
   const q = rigBonesFilter.value
-  return (props.activeRigBones ?? []).filter((b) => matchesQuery(b, q))
+  return simActiveRigBonesRef.value.filter((b) => matchesQuery(b, q))
 })
 
 const filteredRigParts = computed(() => {
   const q = rigBonesFilter.value
-  return (props.activeRigParts ?? []).filter((p) => matchesQuery(p, q))
+  return simActiveRigPartsRef.value.filter((p) => matchesQuery(p, q))
 })
 
 const toggleClipExpand = (name: string) => {
-  expandedClipName.value = expandedClipName.value === name ? '' : name
+  expandedClipNameRef.value = expandedClipNameRef.value === name ? '' : name
 }
 
 /** Button chrome: closed | minimized | open (default / maximized / forward). */
@@ -1797,7 +1713,7 @@ const simStatusBtnTitle = computed(() =>
   windowToggleBtnTitle(simStatusUiState.value, 'Sim status')
 )
 
-const hasActiveRig = computed(() => (props.activeRigBones?.length ?? 0) > 0)
+const hasActiveRig = computed(() => simActiveRigBonesRef.value.length > 0)
 
 const simSkeletonUiState = computed(() => windowUiStateByType('sim-skeleton'))
 const simSkeletonBtnVariant = computed(() => windowToggleBtnVariant(simSkeletonUiState.value))
@@ -1810,8 +1726,8 @@ const simSkeletonBtnTitle = computed(() => {
 })
 
 const goToRigResources = () => {
-  activeTab.value = 'resources'
-  resourcesSubTab.value = 'rig'
+  activeTabRef.value = 'resources'
+  resourcesSubTabRef.value = 'rig'
 }
 
 const onSkeletonClick = () => {
@@ -1819,197 +1735,298 @@ const onSkeletonClick = () => {
   openSimSkeletonWindow()
 }
 
-const featureValue = (feature: string, property: string) =>
-  props.resolveFeatureValue(feature, property)
+// #region Values
 
-const boolFeatureValue = (feature: string, property: string) =>
-  props.resolveBoolFeatureValue?.(feature, property) === true
-
-const stringFeatureValue = (feature: string, property: string) =>
-  props.resolveStringFeatureValue?.(feature, property) ?? ''
-
-const vectorFeatureTarget = (feature: string, property: string) => {
-  const v = props.resolveVectorFeatureValue?.(feature, property) ?? {
-    x: 0,
-    y: 0,
-    z: 0,
-    w: 0,
+const draftNumericFeatureValueGetterComputed = computed(() => {
+  const numericFeatureByKey = draftBoard.numericFeatureByKeyRef.value
+  return (feature: string, property: string) => {
+    return numericFeatureByKey[makeFeatureKey(feature, property)] ?? 0
   }
-  // PropertyVecBlock expects engine-style axis keys (X/Y/Z/W)
-  return { X: v.x, Y: v.y, Z: v.z, W: v.w }
+})
+
+const draftStringFeatureValueGetterComputed = computed(() => {
+  const stringFeatureByKey = draftBoard.stringFeatureByKeyRef.value
+  return (feature: string, property: string) => {
+    return stringFeatureByKey[makeFeatureKey(feature, property)] ?? ''
+  }
+})
+
+const draftBoolFeatureValueGetterComputed = computed(() => {
+  const booleanFeatureByKey = draftBoard.booleanFeatureByKeyRef.value
+  return (feature: string, property: string) => {
+    return booleanFeatureByKey[makeFeatureKey(feature, property)] ?? false
+  }
+})
+
+const draftVectorFeatureValueGetterComputed = computed(() => {
+  const vectorFeatureByKey = draftBoard.vectorFeatureByKeyRef.value
+  return (feature: string, property: string) => {
+    const value = vectorFeatureByKey[makeFeatureKey(feature, property)] ?? ZERO_VEC4
+    return { X: value.x, Y: value.y, Z: value.z, W: value.w }
+  }
+})
+
+const draftQuatFeatureValueGetterComputed = computed(() => {
+  const quatFeatureByKey = draftBoard.quatFeatureByKeyRef.value
+  return (feature: string, property: string) => {
+    const value = quatFeatureByKey[makeFeatureKey(feature, property)] ?? IDENTITY_QUAT_VEC4
+    return { X: value.x, Y: value.y, Z: value.z, W: value.w }
+  }
+})
+
+const onNumericFeatureValueChange = (feature: string, property: string, value: number) => {
+  draftBoard.setNumericFeatureValue(feature, property, value)
 }
 
-const quatFeatureTarget = (feature: string, property: string) => {
-  const v = props.resolveQuatFeatureValue?.(feature, property) ?? {
-    x: 0,
-    y: 0,
-    z: 0,
-    w: 1,
-  }
-  return { X: v.x, Y: v.y, Z: v.z, W: v.w }
+const onStringFeatureValueChange = (feature: string, property: string, raw: string) => {
+  draftBoard.setStringFeatureValue(feature, property, raw)
 }
+
+const onBoolFeatureValueChange = (feature: string, property: string, value: boolean) => {
+  draftBoard.setBooleanFeatureValue(feature, property, value)
+}
+
+const onVectorFeatureAxisValueChange = (
+  feature: string,
+  property: string,
+  axis: string,
+  value: number
+) => {
+  const key = axis.toLowerCase()
+  if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
+  draftBoard.setVectorFeatureAxisValue(feature, property, key, value)
+}
+
+const onQuatFeatureAxisValueChange = (
+  feature: string,
+  property: string,
+  axis: string,
+  value: number
+) => {
+  const key = axis.toLowerCase()
+  if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
+  draftBoard.setQuatFeatureAxisValue(feature, property, key, value)
+}
+
+const draftFloatVarValueGetterComputed = computed(() => {
+  const floatVarByKey = draftBoard.floatVarByKeyRef.value
+  return (name: string) => {
+    return floatVarByKey[name] ?? 0
+  }
+})
+
+const draftIntVarValueGetterComputed = computed(() => {
+  const intVarByKey = draftBoard.intVarByKeyRef.value
+  return (name: string) => {
+    return intVarByKey[name] ?? 0
+  }
+})
+
+const draftBoolVarValueGetterComputed = computed(() => {
+  const boolVarByKey = draftBoard.boolVarByKeyRef.value
+  return (name: string) => {
+    return boolVarByKey[name] ?? false
+  }
+})
+
+const draftVectorVarValueGetterComputed = computed(() => {
+  const vectorVarByKey = draftBoard.vectorVarByKeyRef.value
+  return (name: string) => {
+    const value = vectorVarByKey[name] ?? ZERO_VEC4
+    return { X: value.x, Y: value.y, Z: value.z, W: value.w }
+  }
+})
+
+const draftQuatVarValueGetterComputed = computed(() => {
+  const quatVarByKey = draftBoard.quatVarByKeyRef.value
+  return (name: string) => {
+    const value = quatVarByKey[name] ?? IDENTITY_QUAT_VEC4
+    return { X: value.x, Y: value.y, Z: value.z, W: value.w }
+  }
+})
+
+const onFloatVarValueChange = (name: string, value: number) => {
+  draftBoard.setFloatVarValue(name, value)
+}
+
+const onIntVarValueChange = (name: string, value: number) => {
+  draftBoard.setIntVarValue(name, value)
+}
+
+const onBoolVarValueChange = (name: string, value: boolean) => {
+  draftBoard.setBoolVarValue(name, value)
+}
+
+const onVectorVarAxisValueChange = (name: string, axis: string, value: number) => {
+  const key = axis.toLowerCase()
+  if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
+  draftBoard.setVectorVarAxisValue(name, key, value)
+}
+
+const onQuatVarAxisValueChange = (name: string, axis: string, value: number) => {
+  const key = axis.toLowerCase()
+  if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
+  draftBoard.setQuatVarAxisValue(name, key, value)
+}
+
+const draftWrapperWeightValueGetterComputed = computed(() => {
+  const wrapperWeightByKey = draftBoard.wrapperWeightByKeyRef.value
+  return (name: string) => {
+    return wrapperWeightByKey[name] ?? 0
+  }
+})
+
+const onWrapperWeightValueChange = (name: string, value: number) => {
+  draftBoard.setWrapperWeightValue(name, value)
+}
+
+const draftTagValueGetterComputed = computed(() => {
+  const tagValueByKey = draftBoard.tagValueByKeyRef.value
+  return (name: string) => {
+    return tagValueByKey[name] ?? 0
+  }
+})
+
+const onTagValueValueChange = (name: string, value: number) => {
+  draftBoard.setTagValueValue(name, value)
+}
+
+// #endregion
+
+// #region Resources
+
+const filteredEntityTags = computed(() => {
+  return animgraphSimDiscovered.entityTagsInfoComputed.value.entityTagNames
+    .filter((name) => matchesQuery(name, entityTagsFilter.value))
+    .slice()
+    .sort(localeCmp)
+})
+
+const entityTagsCount = computed(() => {
+  return animgraphSimDiscovered.entityTagsInfoComputed.value.entityTagNames.length
+})
+
+const hasAnyEntityTags = computed(() => {
+  return entityTagsCount.value > 0
+})
 
 const formatClipDur = (name: string) => {
-  const c = props.lookupClip(name)
+  const c = sim.lookupClip(name)
   return c ? `${c.duration.toFixed(2)}s` : '—'
 }
 
-const clipEventsForEntry = (name: string, entryId: string) =>
-  props.getClipInEntry(name, entryId)?.events ?? []
-
-const onFeatureValue = (feature: string, property: string, raw: string | number) => {
-  const value = Number(raw)
-  if (!Number.isFinite(value)) return
-  props.applyFeature(feature, property, value)
+const clipEventsForEntry = (name: string, entryId: string) => {
+  return sim.getClipInEntry(name, entryId)?.events ?? []
 }
 
-const onBoolFeatureValue = (feature: string, property: string, value: boolean) => {
-  props.applyBoolFeature?.(feature, property, value === true)
-}
+const draftEntityTagValueGetterComputed = computed(() => {
+  const entityTagByKey = draftBoard.entityTagByKeyRef.value
+  return (name: string) => {
+    return entityTagByKey[name] ?? false
+  }
+})
 
-const onStringFeatureValue = (feature: string, property: string, value: string) => {
-  props.applyStringFeature?.(feature, property, value ?? '')
-}
-
-const onVectorFeatureAxis = (
-  feature: string,
-  property: string,
-  axis: string,
-  raw: string | number
-) => {
-  const value = Number(raw)
-  if (!Number.isFinite(value)) return
-  const key = axis.toLowerCase()
-  if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
-  props.applyVectorFeatureAxis?.(feature, property, key, value)
-}
-
-const onQuatFeatureAxis = (
-  feature: string,
-  property: string,
-  axis: string,
-  raw: string | number
-) => {
-  const value = Number(raw)
-  if (!Number.isFinite(value)) return
-  const key = axis.toLowerCase()
-  if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
-  props.applyQuatFeatureAxis?.(feature, property, key, value)
-}
-
-const onFloatValue = (name: string, raw: string | number) => {
-  const value = Number(raw)
-  if (!Number.isFinite(value)) return
-  props.applyFloatVar(name, value)
-}
-
-const vectorVarTarget = (name: string) => {
-  const v = props.resolveVectorVarValue?.(name) ??
-    props.vectorVars?.[name] ?? { x: 0, y: 0, z: 0, w: 0 }
-  return { X: v.x, Y: v.y, Z: v.z, W: v.w }
-}
-
-const onVectorVarAxis = (name: string, axis: string, raw: string | number) => {
-  const value = Number(raw)
-  if (!Number.isFinite(value)) return
-  const key = axis.toLowerCase()
-  if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
-  props.applyVectorVarAxis?.(name, key, value)
-}
-
-const quatVarTarget = (name: string) => {
-  const v = props.resolveQuatVarValue?.(name) ??
-    props.quatVars?.[name] ?? { x: 0, y: 0, z: 0, w: 1 }
-  return { X: v.x, Y: v.y, Z: v.z, W: v.w }
-}
-
-const onQuatVarAxis = (name: string, axis: string, raw: string | number) => {
-  const value = Number(raw)
-  if (!Number.isFinite(value)) return
-  const key = axis.toLowerCase()
-  if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
-  props.applyQuatVarAxis?.(name, key, value)
-}
-
-const onIntValue = (name: string, raw: string | number) => {
-  const value = Number(raw)
-  if (!Number.isFinite(value)) return
-  props.applyIntVar(name, value)
-}
-
-const onBoolValue = (name: string, value: boolean) => {
-  props.applyBoolVar(name, value)
-}
-
-const onTagValue = (name: string, raw: string | number) => {
-  const value = Number(raw)
-  if (!Number.isFinite(value)) return
-  props.applyTagValue(name, value)
-}
-
-const onEntityTag = (name: string, present: boolean) => {
-  props.applyEntityTag(name, present)
+const onEntityTagValueChange = (name: string, value: boolean) => {
+  draftBoard.setEntityTagValue(name, value)
 }
 
 const onAddEntityTag = () => {
-  const name = entityTagDraft.value.trim()
+  const name = additionEntityTagNameRef.value.trim()
   if (!name || name === 'None') return
-  props.applyEntityTag(name, true)
-  entityTagDraft.value = ''
+
+  draftBoard.setEntityTagValue(name, true)
+  animgraphSimAddEntityTagName(name)
+  additionEntityTagNameRef.value = ''
 }
 
 const onRemoveEntityTag = (name: string) => {
-  props.removeEntityTag(name)
+  draftBoard.setEntityTagValue(name, false)
+  animgraphSimRemoveEntityTagName(name)
 }
 
-const onWrapperWeight = (name: string, raw: string | number) => {
-  const value = Number(raw)
-  if (!Number.isFinite(value)) return
-  props.applyWrapperWeight(name, value)
+const onRemoveAnimDatabase = (pathKey: string) => {
+  sim.removeAnimDatabase(pathKey)
 }
+
+// #endregion
 
 /** Display/edit sim clock speed as frames per second (1× = DEFAULT_SIM_FPS). */
-const simSpeedFps = computed(() => props.snapshot.speed * DEFAULT_SIM_FPS)
+const simSpeedFps = computed(() => simSpeedRef.value * DEFAULT_SIM_FPS)
 
 const onSpeedFps = (fps: number) => {
   if (!Number.isFinite(fps)) return
-  emit('setSpeed', fps / DEFAULT_SIM_FPS)
+  sim.setSpeed(fps / DEFAULT_SIM_FPS)
 }
 
-const onEntryPriority = (id: string, raw: string | number) => {
-  const value = Number(raw)
-  if (!Number.isFinite(value)) return
-  props.updateSetupEntry(id, { priority: value })
+const onToggleUpdateWarningsEnabled = () => {
+  sim.setUpdateWarningsEnabled(!sim.updateWarningsEnabled.value)
 }
 
-const setWrapperAddDraft = (id: string, raw: string) => {
-  wrapperAddDraftById.value = { ...wrapperAddDraftById.value, [id]: raw }
+const onToggleSampleWarningsEnabled = () => {
+  sim.setSampleWarningsEnabled(!sim.sampleWarningsEnabled.value)
 }
 
-const addEntryWrapper = (id: string) => {
-  const entry = props.setupEntries.find((e) => e.id === id)
-  if (!entry) return
-  const name = (wrapperAddDraftById.value[id] ?? '').trim()
-  if (!name || name === 'None') return
-  if (entry.variableNames.some((n) => n.toLowerCase() === name.toLowerCase())) {
-    wrapperAddDraftById.value = { ...wrapperAddDraftById.value, [id]: '' }
+const onSetActiveRig = (rigId: string | null) => {
+  sim.setActiveRig(rigId)
+}
+
+const onRemoveRig = (rigId: string) => {
+  sim.removeRig(rigId)
+}
+
+const onAnimSetEntryPriorityUpdate = (animSetEntryId: string, priority: number) => {
+  sim.updateSetupEntry(animSetEntryId, { priority })
+}
+
+const onAnimSetEntryRemove = (animSetEntryId: string) => {
+  sim.removeSetupEntry(animSetEntryId)
+}
+
+const onAnimSetEntryGLBPickerRequest = (animSetEntryId: string) => {
+  glbTargetEntryId.value = animSetEntryId
+  animsetGlbFileInput.value?.click()
+}
+
+const onAnimSetEntryGLBClear = (animSetEntryId: string) => {
+  sim.clearAnimsetGlb(animSetEntryId)
+}
+
+const onAnimSetEntryWrapperNewVariableNameDraft = (animSetEntryId: string, newVariableNameDraft: string) => {
+  draftWrapperVariableNameByanimSetEntryIdRef.value = { 
+    ...draftWrapperVariableNameByanimSetEntryIdRef.value, 
+    [animSetEntryId]: newVariableNameDraft,
+  }
+}
+
+const onAnimSetEntryWrapperVariableAdd = (animSetEntryId: string) => {
+  const newWrapperVariableName = (draftWrapperVariableNameByanimSetEntryIdRef.value[animSetEntryId] ?? '').trim()
+  if (!newWrapperVariableName || newWrapperVariableName === 'None') return
+  
+  const animSetEntry = simAnimSetEntriesRef.value.find((e) => e.id === animSetEntryId)
+  if (!animSetEntry) return
+
+  draftWrapperVariableNameByanimSetEntryIdRef.value = { 
+    ...draftWrapperVariableNameByanimSetEntryIdRef.value, 
+    [animSetEntryId]: '',
+  }
+  
+  const newWrapperVariableNameLowerCase = newWrapperVariableName.toLowerCase()
+  if (animSetEntry.variableNames.some((varName) => varName.toLowerCase() === newWrapperVariableNameLowerCase)) {
     return
   }
-  props.updateSetupEntry(id, { variableNames: [...entry.variableNames, name] })
-  wrapperAddDraftById.value = { ...wrapperAddDraftById.value, [id]: '' }
+
+  sim.updateSetupEntry(animSetEntryId, { variableNames: [...animSetEntry.variableNames, newWrapperVariableName] })
 }
 
-const removeEntryWrapper = (id: string, name: string) => {
-  const entry = props.setupEntries.find((e) => e.id === id)
-  if (!entry) return
-  props.updateSetupEntry(id, {
-    variableNames: entry.variableNames.filter((n) => n !== name),
+const onAnimSetEntryWrapperVariableRemove = (animSetEntryId: string, wrapperVariableName: string) => {
+  const animSetEntry = simAnimSetEntriesRef.value.find((e) => e.id === animSetEntryId)
+  if (!animSetEntry) return
+  sim.updateSetupEntry(animSetEntryId, {
+    variableNames: animSetEntry.variableNames.filter((n) => n !== wrapperVariableName),
   })
 }
 
-const applyRemoveEntry = (id: string) => {
-  props.removeSetupEntry(id)
-}
+
 
 const onAnimsetFile = async (ev: Event) => {
   clipsError.value = ''
@@ -2020,7 +2037,7 @@ const onAnimsetFile = async (ev: Event) => {
   try {
     const text = await file.text()
     const json = JSON.parse(text) as unknown
-    const result = props.loadAnimsetJson(json, file.name)
+    const result = sim.loadAnimsetJson(json, file.name)
     if (!result) clipsError.value = 'No clips found in file'
   } catch (err) {
     clipsError.value = err instanceof Error ? err.message : String(err)
@@ -2037,16 +2054,11 @@ const onAnimsetGlbFile = async (ev: Event) => {
   if (!file || !setupId) return
   try {
     const buf = await file.arrayBuffer()
-    const n = await props.loadAnimsetGlb(buf, file.name, setupId)
-    if (!n) clipsError.value = 'No animations found in GLB'
+    const animSetGLBAnimCount = await sim.loadAnimsetGlb(buf, file.name, setupId)
+    if (!animSetGLBAnimCount) clipsError.value = 'No animations found in GLB'
   } catch (err) {
     clipsError.value = err instanceof Error ? err.message : String(err)
   }
-}
-
-const pickGlbForEntry = (entryId: string) => {
-  glbTargetEntryId.value = entryId
-  animsetGlbFileInput.value?.click()
 }
 
 const onRigFile = async (ev: Event) => {
@@ -2058,8 +2070,8 @@ const onRigFile = async (ev: Event) => {
   try {
     const text = await file.text()
     const json = JSON.parse(text) as unknown
-    props.loadRigJson(json, file.name)
-    resourcesSubTab.value = 'rig'
+    sim.loadRigJson(json, file.name)
+    resourcesSubTabRef.value = 'rig'
   } catch (err) {
     rigError.value = err instanceof Error ? err.message : String(err)
   }
@@ -2078,10 +2090,10 @@ const onAnimDbFile = async (ev: Event) => {
       animDbError.value = 'Anim database JSON must be an object'
       return
     }
-    const pathKey = props.loadAnimDatabaseJson(json, file.name)
+    const pathKey = sim.loadAnimDatabaseJson(json, file.name)
     if (!pathKey) animDbError.value = 'No rows found in anim database'
     else {
-      resourcesSubTab.value = 'db'
+      resourcesSubTabRef.value = 'db'
       selectedAnimDbKey.value = pathKey
     }
   } catch (err) {

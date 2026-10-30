@@ -127,9 +127,7 @@ export interface SimSnapshot {
    * Use for derived pose-stats cache keys and Vue frame ticks (not display `f=`).
    */
   poseGen: number
-  playing: boolean
   time: number
-  speed: number
   update: SimSnapshotUpdate
   sample?: SimSnapshotSample
 }

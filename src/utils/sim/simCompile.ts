@@ -34,6 +34,22 @@ export type SimServiceEventListener = {
   onEvents: SimServiceEventBatchHandler
 }
 
+/** Fired once per instance create (engine AnimGraph::Init / OnInit). */
+export type SimInitHandler = (rt: SimServiceDispatchCtx) => void
+
+export type SimInitListener = {
+  handleId: string
+  onInit: SimInitHandler
+}
+
+/** Fired when a compiled node leaves the active Update path (was active → not). */
+export type SimDeactivateHandler = (rt: SimServiceDispatchCtx) => void
+
+export type SimDeactivateListener = {
+  handleId: string
+  onDeactivate: SimDeactivateHandler
+}
+
 /** Shared compile services (engine AnimInstanceBufferCompiler subset). */
 export type SimCompileCtx = {
   instanceStore: InstanceStore
@@ -47,10 +63,22 @@ export type SimCompileCtx = {
     kinds: SimServiceEventKind | readonly SimServiceEventKind[],
     onEvents: SimServiceEventBatchHandler
   ) => void
+  /**
+   * Register OnInit for the node currently being compiled.
+   * Runner fires after bind compile and after reset (instance create).
+   */
+  addInitListener: (onInit: SimInitHandler) => void
+  /**
+   * Register OnDeactivated for the node currently being compiled.
+   * Runner fires when that handle leaves the active Update path.
+   */
+  addDeactivateListener: (onDeactivate: SimDeactivateHandler) => void
 }
 
 export type SimCompiledGraph = {
   serviceListeners: SimServiceEventListener[]
+  initListeners: SimInitListener[]
+  deactivateListeners: SimDeactivateListener[]
 }
 
 export type SimCompileNodeFn = (
@@ -68,6 +96,9 @@ export function compileSimGraph(
   board: SimInputBoard
 ): SimCompiledGraph {
   const serviceListeners: SimServiceEventListener[] = []
+  const initListeners: SimInitListener[] = []
+  const deactivateListeners: SimDeactivateListener[] = []
+  let currentHandleId = ''
   const ctx: SimCompileCtx = {
     instanceStore,
     board,
@@ -78,14 +109,50 @@ export function compileSimGraph(
         onEvents,
       })
     },
+    addInitListener(onInit) {
+      if (!currentHandleId) return
+      initListeners.push({ handleId: currentHandleId, onInit })
+    },
+    addDeactivateListener(onDeactivate) {
+      if (!currentHandleId) return
+      deactivateListeners.push({ handleId: currentHandleId, onDeactivate })
+    },
   }
 
   for (const [, node] of handles) {
     if (!node) continue
+    currentHandleId = node.HandleId
     compileNode(node, ctx)
   }
 
-  return { serviceListeners }
+  return { serviceListeners, initListeners, deactivateListeners }
+}
+
+/** Fire compile-registered OnInit (bind / reset — engine AnimGraph::Init). */
+export function dispatchCompiledInits(
+  compiled: SimCompiledGraph | null,
+  rt: SimServiceDispatchCtx
+): void {
+  if (!compiled || compiled.initListeners.length === 0) return
+  for (const L of compiled.initListeners) {
+    L.onInit(rt)
+  }
+}
+
+/** Fire compile-registered OnDeactivated for handles that left the active path. */
+export function dispatchCompiledDeactivates(
+  compiled: SimCompiledGraph | null,
+  prev: Record<string, { active?: unknown }> | undefined,
+  now: Record<string, { active?: unknown }>,
+  rt: SimServiceDispatchCtx
+): void {
+  if (!compiled || compiled.deactivateListeners.length === 0) return
+  for (const L of compiled.deactivateListeners) {
+    const was = !!prev?.[L.handleId]?.active
+    const is = !!now[L.handleId]?.active
+    if (!was || is) continue
+    L.onDeactivate(rt)
+  }
 }
 
 /**

@@ -11,8 +11,6 @@ export const SIM_UPDATE_WARNINGS_MAX = 64
 export function emptySimSnapshot(): SimSnapshot {
   return {
     time: 0,
-    playing: false,
-    speed: 1,
     poseGen: 0,
     update: {
       rootHandleId: undefined,

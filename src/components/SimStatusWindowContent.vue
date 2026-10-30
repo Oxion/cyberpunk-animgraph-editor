@@ -45,7 +45,7 @@
           {{ chip }}
         </span>
       </div>
-      <template v-if="simUpdateWarningsEnabled">
+      <template v-if="sim.updateWarningsEnabled.value">
         <div
           v-if="selectedRunnerSnapshotComputed.update.warnings.length"
           class="mt-1 border-t border-border/60 pt-1 font-data text-[10px] text-amber-400/90"
@@ -69,7 +69,7 @@
           No update warnings this frame
         </p>
       </template>
-      <template v-if="simSampleWarningsEnabled">
+      <template v-if="sim.sampleWarningsEnabled.value">
         <div
           v-if="selectedRunnerSnapshotComputed.sample?.warnings.length"
           class="mt-1 border-t border-border/60 pt-1 font-data text-[10px] text-amber-400/90"
@@ -101,22 +101,16 @@
 import { computed, ref } from 'vue'
 import SimRunnerSelect from './sim/SimRunnerSelect.vue'
 import {
-  simClipStats,
-  simFeatureDrafts,
-  simGetRootRunnerId,
-  simSampleWarningsEnabled,
-  simSetupEntries,
-  simSnapshotsByRunner,
-  simUpdateWarningsEnabled,
-  simWrapperWeightDrafts,
+  sim,
+  draftBoard,
 } from '../stores/animgraphSim'
 import { emptySimSnapshot } from '../utils/sim/simSnapshot'
 import { SimInputBoard } from '../utils/sim/SimInputBoard'
 
-const selectedRunnerIdRef = ref(simGetRootRunnerId())
+const selectedRunnerIdRef = ref(sim.getRootRunnerId())
 
 const selectedRunnerSnapshotComputed = computed(() => {
-  return simSnapshotsByRunner.value[selectedRunnerIdRef.value] ?? emptySimSnapshot()
+  return sim.snapshotsByRunner.value[selectedRunnerIdRef.value] ?? emptySimSnapshot()
 })
 
 type StatusRow = {
@@ -200,14 +194,16 @@ const statusRows = computed((): StatusRow[] => {
 
 const statusFoot = computed((): string[] => {
   const chips: string[] = []
+  
   let wraps = 0
-  for (const [name, val] of Object.entries(simWrapperWeightDrafts.value)) {
+  for (const [name, val] of Object.entries(draftBoard.wrapperWeightByKeyRef.value)) {
     if ((val ?? 0) < SimInputBoard.WRAPPER_ACTIVE_THRESHOLD) continue
     chips.push(`w:${name}`)
     if (++wraps >= 4) break
   }
+  
   let feats = 0
-  for (const [key, val] of Object.entries(simFeatureDrafts.value)) {
+  for (const [key, val] of Object.entries(draftBoard.numericFeatureByKeyRef.value)) {
     const n = Number(val)
     if (!Number.isFinite(n) || n === 0) continue
     const sep = key.indexOf('\0')
@@ -215,9 +211,10 @@ const statusFoot = computed((): string[] => {
     chips.push(`${label}=${n}`)
     if (++feats >= 4) break
   }
-  const activeSets = simSetupEntries.value.filter((e) => e.active).length
-  if (simClipStats.value.entryCount) {
-    chips.push(`sets ${activeSets}/${simClipStats.value.entryCount}`)
+
+  const activeSets = sim.setupEntries.value.filter((e) => e.active).length
+  if (sim.clipStats.value.entryCount) {
+    chips.push(`sets ${activeSets}/${sim.clipStats.value.entryCount}`)
   }
   return chips
 })

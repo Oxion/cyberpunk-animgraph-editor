@@ -1,13 +1,23 @@
-import { computed, ref, shallowRef, watch } from 'vue'
-import { MAIN_DIAGRAM_ID } from '../utils/graph/diagramTypes'
+import { SequentialIdAllocator } from '@/utils/SequentialIdAllocator'
+import { mergeSets, mergeUniqueStrings } from '@/utils/merge'
+import { SimGraphSampleSlotHost, SimGraphUpdateSlotHost } from '@/utils/sim/SimGraphRunner.types'
+import { DiscoveredGraphInputs, discoverGraphInputs } from '@/utils/sim/discoverGraphInputs'
+import { computed, ref, shallowRef, triggerRef, watch } from 'vue'
+import type { RenderData, SimRunnerSlotsConfigJson, SimRunnerSlotsConfigJsonSlotItem } from '../utils/graph/diagramTypes'
+import { SimClock } from '../utils/sim/SimClock'
 import {
-  activeDiagramId,
-  getRenderData,
-  listDiagramIds,
-  mainDiagramId,
-  projectRef,
-} from '../stores/graphProject'
-import type { SimRunnerSlotsConfigJson } from '../utils/graph/diagramTypes'
+  discoverGraphSlotNames,
+  SimGraphRunner,
+} from '../utils/sim/SimGraphRunner'
+import { SimInputBoard } from '../utils/sim/SimInputBoard'
+import {
+  AnimDatabaseLibrary,
+  animDatabaseLibraryToCompactJson,
+  loadAnimDatabaseCsvJson,
+  loadCompactAnimDatabaseLibraryJson,
+  type AnimDatabaseLibraryJson,
+  type AnimDatabaseStats,
+} from '../utils/sim/animDatabase'
 import {
   ClipLibrary,
   DEFAULT_ANIM_SETUP_PRIORITY,
@@ -18,39 +28,15 @@ import {
   type ClipSetMembership,
 } from '../utils/sim/clipLibrary'
 import {
-  clipLibraryToCompactJson,
-  loadAnimsJsonIntoLibrary,
-  loadCompactClipLibraryJson,
-} from '../utils/sim/parseAnimsJson'
-import {
-  AnimDatabaseLibrary,
-  animDatabaseLibraryToCompactJson,
-  loadAnimDatabaseCsvJson,
-  loadCompactAnimDatabaseLibraryJson,
-  type AnimDatabaseLibraryJson,
-  type AnimDatabaseStats,
-} from '../utils/sim/animDatabase'
-import { SimClock } from '../utils/sim/SimClock'
-import {
-  SimGraphRunner,
-  collectGraphSlotNames,
-} from '../utils/sim/SimGraphRunner'
-import { SimInputBoard } from '../utils/sim/SimInputBoard'
-import {
-  IDENTITY_QUAT_VEC4,
-  ZERO_VEC4,
-  type SimVec4,
-} from '../utils/sim/evalAnimMathExpressionVector'
-import type { SimSnapshot } from '../utils/sim/simTypes'
-import { emptySimSnapshot } from '../utils/sim/simSnapshot'
-import { addFrameLogId, clearFrameLogIds, isSimSampleLogEnabled } from '../utils/sim/simSampleLog'
-import type { SimServiceEvent } from '../utils/sim/simServiceEvents'
-import { RigLibrary, type RigLibraryJson, type RigEntry, type RigEntryView } from '../utils/sim/rigResource'
-import {
   ClipPoseLibrary,
   type ClipPoseLibraryJson,
   type ClipPoseSetView,
 } from '../utils/sim/clipPoseLibrary'
+import {
+  clipLibraryToCompactJson,
+  loadAnimsJsonIntoLibrary,
+  loadCompactClipLibraryJson,
+} from '../utils/sim/parseAnimsJson'
 import type { Pose } from '../utils/sim/pose'
 import {
   buildRigBonesStats,
@@ -62,16 +48,12 @@ import {
   type DerivedPoseStats,
   type DerivedPoseStatsNeed,
 } from '../utils/sim/poseDerivedStats'
-import { SimGraphSampleSlotHost, SimGraphUpdateSlotHost } from '@/utils/sim/SimGraphRunner.types'
-import { discoverGraphInputs } from '@/utils/sim/discoverGraphInputs'
-
-function resolveRootDiagramId(ids: string[]): string | null {
-  if (!ids.length) return null
-  const mainId = mainDiagramId.value
-  if (mainId && ids.includes(mainId)) return mainId
-  if (ids.includes(MAIN_DIAGRAM_ID)) return MAIN_DIAGRAM_ID
-  return ids[0] ?? null
-}
+import { RigLibrary, type RigEntry, type RigEntryView, type RigLibraryJson } from '../utils/sim/rigResource'
+import { addFrameLogId, clearFrameLogIds } from '../utils/sim/simSampleLog'
+import { emptySimSnapshot } from '../utils/sim/simSnapshot'
+import type { SimSnapshot } from '../utils/sim/simTypes'
+import { makeFeatureKey } from './sim/features'
+import { IDraftBoard } from './sim/types'
 
 /** Case-insensitive diagram id lookup (GraphSlot.name ↔ project diagram id). */
 function findDiagramIdBySlotName(ids: string[], slotName: string): string | undefined {
@@ -106,11 +88,10 @@ export function rewriteRunnerSlotsDiagramIds(
     return (idMap as Record<string, string>)[oldId]
   }
 
-  const mapDiagramId = (raw: string): string | null => {
-    const trimmed = raw.trim()
-    if (!trimmed) return null
-    const next = mapGet(trimmed) ?? trimmed
-    return survivingIds.has(next) ? next : null
+  const resolveRemappedDiagramId = (diagramId?: string): string | undefined => {
+    if (!diagramId) return
+    const next = mapGet(diagramId) ?? diagramId
+    return survivingIds.has(next) ? next : undefined
   }
 
   if (cfg.rootDetached === true) {
@@ -126,45 +107,39 @@ export function rewriteRunnerSlotsDiagramIds(
 
   for (const [runnerId, entry] of Object.entries(srcRunners)) {
     if (!entry || typeof entry !== 'object') continue
-    const diagRaw = typeof entry.diagramId === 'string' ? entry.diagramId : ''
-    const diagramId = mapDiagramId(diagRaw)
-    if (!diagramId) continue
 
-    const slotDiagramIds: Record<string, string> = {}
-    if (entry.slotDiagramIds && typeof entry.slotDiagramIds === 'object') {
-      for (const [slot, diag] of Object.entries(entry.slotDiagramIds)) {
-        const s = slot.trim()
-        if (!s || typeof diag !== 'string') continue
-        const mapped = mapDiagramId(diag)
-        if (mapped) slotDiagramIds[s] = mapped
+    const runnerDiagramId = entry.diagramId && typeof entry.diagramId === 'string' 
+      ? entry.diagramId.trim()
+      : undefined
+    
+    const runnerRemappedDiagramId = resolveRemappedDiagramId(runnerDiagramId)
+    if (!runnerRemappedDiagramId) continue
+
+    const slotBySlotName: Partial<Record<string, SimRunnerSlotsConfigJsonSlotItem>> = {}
+    if (entry.slotBySlotName && typeof entry.slotBySlotName === 'object') {
+      for (const slotName in entry.slotBySlotName) {
+        const slot = entry.slotBySlotName[slotName]
+        if (!slot) continue
+
+        const  _slotDiagramId = slot.diagramId && typeof slot.diagramId === 'string'
+          ? slot.diagramId.trim()
+          : undefined
+
+        const _slotRunnerId = slot.runnerId && typeof slot.runnerId === 'string'
+          ? slot.runnerId.trim()
+          : undefined
+
+        slotBySlotName[slotName] = {
+          diagramId: resolveRemappedDiagramId(_slotDiagramId),
+          runnerId: _slotRunnerId,
+        }
       }
     }
 
     runnersOut[runnerId] = {
-      diagramId,
-      ...(Array.isArray(entry.slotInitialized)
-        ? { slotInitialized: [...entry.slotInitialized] }
-        : {}),
-      slotDiagramIds,
-      slotRunnerIds:
-        entry.slotRunnerIds && typeof entry.slotRunnerIds === 'object'
-          ? { ...entry.slotRunnerIds }
-          : {},
+      diagramId: runnerRemappedDiagramId,
+      slotBySlotName,
     }
-  }
-
-  // Drop slot→child links whose child runner was removed.
-  const keptRunnerIds = new Set(Object.keys(runnersOut))
-  for (const entry of Object.values(runnersOut)) {
-    if (!entry || !entry.slotRunnerIds) continue
-    const next: Record<string, string> = {}
-    for (const [slot, childId] of Object.entries(entry.slotRunnerIds)) {
-      const s = slot.trim()
-      const c = typeof childId === 'string' ? childId.trim() : ''
-      if (!s || !c || !keptRunnerIds.has(c)) continue
-      next[s] = c
-    }
-    entry.slotRunnerIds = next
   }
 
   return {
@@ -175,8 +150,8 @@ export function rewriteRunnerSlotsDiagramIds(
 
 export type SimSlotRunnerInfo = {
   slotName: string
-  runnerId: string
-  diagramId: string
+  runnerId: string | undefined
+  diagramId: string | undefined
 }
 
 /** Bound runner tree node for UI pickers (diagram set). */
@@ -204,90 +179,144 @@ type DerivedCacheEntry = DerivedPoseStats & {
   resolved?: boolean
 }
 
+type DraftBoardAppliedRevisionInfo = {
+  numericFeaturesRevision: number
+  stringFeaturesRevision: number
+  booleanFeaturesRevision: number
+  vectorFeaturesRevision: number
+  quatFeaturesRevision: number
+
+  floatVarsRevision: number
+  intVarsRevision: number
+  boolVarsRevision: number
+  vectorVarsRevision: number
+  quatVarsRevision: number
+
+  wrapperWeightsRevision: number
+
+  tagValuesRevision: number
+  
+  entityTagsRevision: number
+}
+
+type DraftBoardEntry = {
+  draftBoard: IDraftBoard
+  /** Lower priority = higher priority. */
+  priority: number
+  appliedRevisionInfo: DraftBoardAppliedRevisionInfo
+}
+
+const mergeUniqueKeyFeatures = (
+  seenFeatureKeysSet: Set<string>, 
+  features: { feature: string; property: string }[],
+  outputFeatures: { feature: string; property: string }[]
+) => {
+  for (const item of features) {
+    const key = makeFeatureKey(item.feature, item.property)
+    if (seenFeatureKeysSet.has(key)) continue
+    seenFeatureKeysSet.add(key)
+    outputFeatures.push(item)
+  }
+}
+
+export type SimExternalSimDriver = {
+  activate: () => void
+  deactivate: () => void
+  tick: (dt: number, rawDt?: number) => void
+}
+
+export type useAnimgraphSimProps = {
+  listDiagramIds: () => string[]
+  getRootDiagramId: () => string | undefined
+  getDiagramDataById: (diagramId: string) => RenderData | undefined
+}
+
+export type Sim = {
+  playing: boolean
+  speed: number
+  clock: SimClock
+  board: SimInputBoard
+  clipLibrary: ClipLibrary
+  animDbLibrary: AnimDatabaseLibrary
+  rigLibrary: RigLibrary
+  clipPoseLibrary: ClipPoseLibrary
+  runnerSlots: SimRunnerSlotsConfigJson
+}
+
 /** Sim runtime composable. Prefer singleton via `stores/animgraphSim`. */
-export function useAnimgraphSim() {
-  const clock = shallowRef(new SimClock())
+export function useAnimgraphSim(props: useAnimgraphSimProps) {
+  const { 
+    listDiagramIds,
+    getRootDiagramId,
+    getDiagramDataById,
+  } = props
+
+  const diagramIdsListRevisionRef = ref(0)
+  const bumpDiagramIdsList = () => {
+    diagramIdsListRevisionRef.value++
+  }
+  const syncToDiagrams = () => {
+    bumpDiagramIdsList()
+  }
+
+  const diagramIdToDiagramRevisionMap = new Map<string, number>()
+  const diagramIdToDiagramRevisionMapComputed = computed(() => {
+    void diagramIdsListRevisionRef.value
+
+    for (const diagramId of diagramIdToDiagramRevisionMap.keys()) {
+      diagramIdToDiagramRevisionMap.set(diagramId, (diagramIdToDiagramRevisionMap.get(diagramId) ?? 0) + 1)
+    }
+    return diagramIdToDiagramRevisionMap
+  })
+  const getDiagramRevision = (diagramId: string) => {
+    return diagramIdToDiagramRevisionMapComputed.value.get(diagramId) ?? 0
+  }
+  const bumpDiagramRevision = (diagramId: string) => {
+    diagramIdToDiagramRevisionMapComputed.value.set(diagramId, getDiagramRevision(diagramId) + 1)
+    triggerRef(diagramIdToDiagramRevisionMapComputed)
+  }
+  const syncToDiagram = (diagramId: string) => {
+    bumpDiagramRevision(diagramId)
+  }
+
+  const clock = shallowRef(new SimClock({
+    onPlayingChange: (playing) => {
+      playingRef.value = playing
+    },
+    onSpeedChange: (speed) => {
+      speedRef.value = speed
+    },
+  }))
+
+  const playingRef = ref(clock.value.playing)
+  const speedRef = ref(clock.value.speed)
+
   const board = shallowRef(new SimInputBoard())
-  /** One runner per execution slot (arbitrary runnerId). */
-  const runners = new Map<string, SimGraphRunner>()
-  let nextSlotRunnerSeq = 1
-  const clipLibrary = shallowRef(new ClipLibrary())
-  const animDbLibrary = shallowRef(new AnimDatabaseLibrary())
-  const rigLibrary = shallowRef(new RigLibrary())
-  const clipPoseLibrary = shallowRef(new ClipPoseLibrary())
-  /** Bump to refresh clip UI after library mutates in place. */
-  const clipLibraryRevision = ref(0)
-  const animDbRevision = ref(0)
-  const rigRevision = ref(0)
-  const clipPoseRevision = ref(0)
-  /** Per-runner snapshots from last publish. */
-  const snapshotsByRunner = shallowRef<Record<string, SimSnapshot>>({})
-  /**
-   * Bumped when runner Map / slot→diagram topology changes.
-   * `runners` is a plain Map — UI trees must depend on this, not only snapshots.
-   */
-  const runnersRev = ref(0)
-  const bumpRunners = () => {
-    runnersRev.value++
-  }
-  /** Bumped each publish; stamped onto every diagram snapshot. */
-  let poseGenCounter = 0
-  /** Last stack-capture handle ids (selection); first is preferred HUD pose. */
-  const stackCaptureHandleIds = ref<string[]>([])
-  /** Cache: poseGen|diagramId|poseKey → resolved pose + filled derived fields. */
-  const derivedPoseCache = new Map<string, DerivedCacheEntry>()
-  let derivedPoseCacheGen = -1
-  const enabled = ref(false)
-  const active = ref(false)
-  /**
-   * Mirror of `clock.playing` — SimClock mutates in place on a shallowRef,
-   * so UI must not read `clock.value.playing` without this (or snapshots).
-   */
-  const playing = ref(false)
-  const syncPlaying = () => {
-    playing.value = clock.value.playing
-  }
-  const eventDraft = ref('')
-  /** Valued timeline event payload for AnimNode_EventValue inject */
-  const eventValueDraft = ref(0)
-  const featureDrafts = ref<Record<string, number>>({})
-  /** Vector4 AnimFeature drafts: feature\\0property → {x,y,z,w} */
-  const vectorFeatureDrafts = ref<Record<string, SimVec4>>({})
-  const quatFeatureDrafts = ref<Record<string, SimVec4>>({})
-  /** Bool AnimFeature drafts: feature\\0property → boolean */
-  const boolFeatureDrafts = ref<Record<string, boolean>>({})
-  /** CName AnimFeature drafts: feature\\0property → string */
-  const stringFeatureDrafts = ref<Record<string, string>>({})
-  const floatVarDrafts = ref<Record<string, number>>({})
-  const vectorVarDrafts = ref<Record<string, SimVec4>>({})
-  const quatVarDrafts = ref<Record<string, SimVec4>>({})
-  const boolVarDrafts = ref<Record<string, boolean>>({})
-  const intVarDrafts = ref<Record<string, number>>({})
-  /** AnimNode_TagValue data-flow tags */
-  const tagValueDrafts = ref<Record<string, number>>({})
-  /** StaticSwitch entity tags (Component/Visual/Rig) — name → present */
-  const entityTagDrafts = ref<Record<string, boolean>>({})
-  /** SetAnimWrapperWeight mock: name → weight (active if >= 0.5) */
-  const wrapperWeightDrafts = ref<Record<string, number>>({})
-  /** Sample-path diagnostics (Blend2 null inputs, …). Off by default. */
-  const sampleWarningsEnabled = ref(false)
-  const updateWarningsEnabled = ref(false)
-
-  let raf = 0
-  let lastTs = 0
-  /** Runner ids currently stepping via GraphSlot nest — cycle guard. */
-  const nestStack: string[] = []
-
+  
+  const clipLibraryRef = shallowRef(new ClipLibrary())
+  const clipLibraryRevisionRef = ref(0)
   const bumpClips = () => {
-    clipLibraryRevision.value++
+    clipLibraryRevisionRef.value++
   }
 
+  const animDbLibrary = shallowRef(new AnimDatabaseLibrary())
+  const animDbRevision = ref(0)
   const bumpAnimDb = () => {
     animDbRevision.value++
   }
 
+  const rigLibrary = shallowRef(new RigLibrary())
+  const rigRevision = ref(0)
   const bumpRigs = () => {
     rigRevision.value++
+  }
+
+  const clipPoseLibrary = shallowRef(new ClipPoseLibrary())
+  const clipPoseRevision = ref(0)
+  const bumpClipPose = () => {
+    clipPoseRevision.value++
+    cachedClipPoseJson = null
+    cachedClipPoseCompact = null
   }
 
   /** Cached project pose payload (invalidated on bumpClipPose). */
@@ -315,37 +344,129 @@ export function useAnimgraphSim() {
     }
     return cachedClipPoseCompact
   }
-
-  const bumpClipPose = () => {
-    clipPoseRevision.value++
-    cachedClipPoseJson = null
-    cachedClipPoseCompact = null
+  
+  const runnerIdToRunnerMap = new Map<string, SimGraphRunner>()
+  const runnersSequentialIdAllocator = new SequentialIdAllocator('s', (id: string) => runnerIdToRunnerMap.has(id))
+  const runnersRev = ref(0)
+  const bumpRunners = () => {
+    runnersRev.value++
   }
+  
+  const getRunner = (runnerId: string | null | undefined): SimGraphRunner | undefined => {
+    return runnerId ? runnerIdToRunnerMap.get(runnerId) : undefined
+  }
+
+  const getPrimaryRunner = () => {
+    return getRunner(ROOT_RUNNER_ID)
+  }
+
+  const runnerIdToBoundDiagramRevisionCacheMap = new Map<string, number>()
+  const runnerIdToBoundDiagramRevisionCacheMapComputed = computed(() => {
+    void diagramIdToDiagramRevisionMapComputed.value
+
+    for (const runnerId of runnerIdToBoundDiagramRevisionCacheMap.keys()) {
+      const runner = runnerIdToRunnerMap.get(runnerId)
+      if (!runner) continue
+
+      if (!runner.diagramId) continue
+
+      ensureDiagramRunner(runnerId, runner.diagramId)
+    }
+    return runnerIdToBoundDiagramRevisionCacheMap
+  })
+  const getRunnerBoundDiagramRevision = (runnerId: string) => {
+    return runnerIdToBoundDiagramRevisionCacheMapComputed.value.get(runnerId) ?? 0
+  }
+
+  /** Per-runner snapshots from last publish. */
+  const snapshotsByRunner = shallowRef<Record<string, SimSnapshot>>({})
+
+  /** Bumped each publish; stamped onto every diagram snapshot. */
+  let poseGenCounter = 0
+  /** Last stack-capture handle ids (selection); first is preferred HUD pose. */
+  const stackCaptureHandleIds = ref<string[]>([])
+  
+  /** Cache: poseGen|diagramId|poseKey → resolved pose + filled derived fields. */
+  const derivedPoseCache = new Map<string, DerivedCacheEntry>()
+  let derivedPoseCachePoseGen = -1
+  
+  const active = ref(false)
+
+  const draftBoardEntries: DraftBoardEntry[] = []
+  
+  const _sortDraftBoardEntries = () => {
+    draftBoardEntries.sort((a, b) => {
+      const priorityDiff = a.priority - b.priority
+      if (priorityDiff !== 0) return priorityDiff
+      return a.draftBoard.id.localeCompare(b.draftBoard.id)
+    })
+  }
+
+  const getDraftBoard = (draftBoardId: string): IDraftBoard | undefined => {
+    return draftBoardEntries.find(draftBoardEntry => draftBoardEntry.draftBoard.id === draftBoardId)?.draftBoard
+  }
+  
+  const registerDraftBoard = (draftBoard: IDraftBoard, priority: number): boolean => {
+    if (!draftBoard.id || getDraftBoard(draftBoard.id)) return false
+    draftBoardEntries.push({
+      draftBoard,
+      priority,
+      appliedRevisionInfo: {
+        numericFeaturesRevision: -1,
+        stringFeaturesRevision: -1,
+        booleanFeaturesRevision: -1,
+        vectorFeaturesRevision: -1,
+        quatFeaturesRevision: -1,
+        floatVarsRevision: -1,
+        intVarsRevision: -1,
+        boolVarsRevision: -1,
+        vectorVarsRevision: -1,
+        quatVarsRevision: -1,
+        wrapperWeightsRevision: -1,
+        tagValuesRevision: -1,
+        entityTagsRevision: -1,
+      },
+    })
+    _sortDraftBoardEntries()
+    return true
+  }
+  const unregisterDraftBoard = (draftBoardId: string): boolean => {
+    const index = draftBoardEntries.findIndex(draftBoardEntry => draftBoardEntry.draftBoard.id === draftBoardId)
+    if (index === -1) return false
+    draftBoardEntries.splice(index, 1)
+    return true
+  }
+
+
+  /** Sample-path diagnostics (Blend2 null inputs, …). Off by default. */
+  const sampleWarningsEnabled = ref(false)
+  const updateWarningsEnabled = ref(false)
+
+  let raf = 0
+  let lastTs = 0
+  /** Runner ids currently stepping via GraphSlot nest — cycle guard. */
+  const nestStack: string[] = []
 
   const syncSampleResourcesToRunners = () => {
     const rig = rigLibrary.value.getActive()
-    for (const runner of runners.values()) {
+    for (const runner of runnerIdToRunnerMap.values()) {
       runner.setClipPoseLibrary(clipPoseLibrary.value)
       runner.setActiveRig(rig)
     }
   }
 
   const isWrapperActive = (name: string) => {
-    const w = wrapperWeightDrafts.value[name]
-    if (w !== undefined) return w >= SimInputBoard.WRAPPER_ACTIVE_THRESHOLD
     return board.value.isWrapperActive(name)
   }
 
   const syncRunnerResources = (r: SimGraphRunner) => {
-    r.setClipLibrary(clipLibrary.value)
+    r.setClipLibrary(clipLibraryRef.value)
     r.setAnimDatabaseLibrary(animDbLibrary.value)
     r.setClipPoseLibrary(clipPoseLibrary.value)
     r.setActiveRig(rigLibrary.value.getActive())
     r.sampleWarningsEnabled = sampleWarningsEnabled.value
     r.updateWarningsEnabled = updateWarningsEnabled.value
   }
-
-  const allocSlotRunnerId = (): string => `s${nextSlotRunnerSeq++}`
 
   /**
    * Host mirror when root is destroyed (explicit None): Diagrams UI + persistence
@@ -354,24 +475,14 @@ export function useAnimgraphSim() {
   /** Explicit root None — no live root; persisted as `rootDetached` (not empty diagramId). */
   let rootDetached = false
 
-  /** Create/get runner shell (not yet bound). Prefer `setRunnerDiagramId` for bind. */
-  const ensureRunner = (runnerId: string): SimGraphRunner => {
-    let r = runners.get(runnerId)
-    if (!r) {
-      r = new SimGraphRunner(runnerId)
-      runners.set(r.runnerId, r)
-    }
-    return r
-  }
-
   const getRootRunnerId = () => ROOT_RUNNER_ID
 
   /** Prefer root if it runs this diagram; else first match. */
   const findRunnerByDiagramId = (diagramId: string): SimGraphRunner | null => {
     if (!diagramId) return null
-    const root = runners.get(ROOT_RUNNER_ID)
+    const root = runnerIdToRunnerMap.get(ROOT_RUNNER_ID)
     if (root?.diagramId === diagramId) return root
-    for (const r of runners.values()) {
+    for (const r of runnerIdToRunnerMap.values()) {
       if (r.diagramId === diagramId) return r
     }
     return null
@@ -380,7 +491,7 @@ export function useAnimgraphSim() {
   const findRunnersByDiagramId = (diagramId: string): SimGraphRunner[] => {
     if (!diagramId) return []
     const out: SimGraphRunner[] = []
-    for (const r of runners.values()) {
+    for (const r of runnerIdToRunnerMap.values()) {
       if (r.diagramId === diagramId) out.push(r)
     }
     return out
@@ -388,23 +499,24 @@ export function useAnimgraphSim() {
 
   /** Depth-first dispose + delete (including root). Unlinks from parent's slotRunnerIds. */
   const destroyRunner = (runnerId: string) => {
-    const runner = runners.get(runnerId)
+    const runner = runnerIdToRunnerMap.get(runnerId)
     if (!runner) return
 
-    for (const childId of [...runner.slotRunnerIds.values()]) {
-      if (childId) destroyRunner(childId)
+    for (const slot of [...runner.graphSlots()]) {
+      if (slot.runnerId) destroyRunner(slot.runnerId)
+      slot.runnerId = undefined
     }
 
     // Detach from parent slot map (stale ids otherwise survive serialize).
-    for (const parent of runners.values()) {
-      if (parent === runner) continue
-      for (const [slot, childId] of [...parent.slotRunnerIds.entries()]) {
-        if (childId === runnerId) parent.setSlotRunnerId(slot, null)
+    for (const otherRunner of runnerIdToRunnerMap.values()) {
+      if (otherRunner === runner) continue
+      for (const slot of otherRunner.graphSlots()) {
+        if (slot.runnerId === runnerId) slot.runnerId = undefined
       }
     }
 
     runner.dispose()
-    runners.delete(runnerId)
+    runnerIdToRunnerMap.delete(runnerId)
 
     if (snapshotsByRunner.value[runnerId]) {
       const next = { ...snapshotsByRunner.value }
@@ -414,9 +526,9 @@ export function useAnimgraphSim() {
   }
 
   /**
-   * Bind runner to a diagram, or destroy when empty (None).
+   * Ensure a runner is bound to a diagram, or destroy when empty (None).
    */
-  const bindRunnerToDiagramId = (
+  const ensureDiagramRunner = (
     runnerId: string,
     diagramId?: string | null
   ): SimGraphRunner | undefined => {
@@ -429,7 +541,7 @@ export function useAnimgraphSim() {
       return
     }
 
-    const nextDiagramData = getRenderData(nextDiagramId)
+    const nextDiagramData = getDiagramDataById(nextDiagramId)
     if (!nextDiagramData) {
       console.warn(
         `[sim] setRunnerDiagramId: no RenderData for diagramId="${nextDiagramId}" (runner="${runnerId}")`
@@ -442,14 +554,39 @@ export function useAnimgraphSim() {
 
     if (runnerId === ROOT_RUNNER_ID) rootDetached = false
     
-    const simGraphRunner = ensureRunner(runnerId)
-    if (simGraphRunner.diagramId !== nextDiagramId) {
-      for (const childId of [...simGraphRunner.slotRunnerIds.values()]) {
-        destroyRunner(childId)
+    let repopulateRunnerSlots = false
+    let simGraphRunner = runnerIdToRunnerMap.get(runnerId)
+    if (!simGraphRunner) {
+      simGraphRunner = new SimGraphRunner(runnerId)
+      runnerIdToRunnerMap.set(runnerId, simGraphRunner)
+
+      repopulateRunnerSlots = true
+    }
+
+    if (simGraphRunner.diagramId && (
+      simGraphRunner.diagramId !== nextDiagramId ||
+      getRunnerBoundDiagramRevision(runnerId) === getDiagramRevision(nextDiagramId)
+    )) {
+      // SimGraphRunner diagram changed — destroy all child runners.
+      for (const simGraphRunnerSlot of simGraphRunner.graphSlots()) {
+        if (simGraphRunnerSlot.runnerId) {
+          destroyRunner(simGraphRunnerSlot.runnerId)
+          simGraphRunnerSlot.runnerId = undefined
+        }
       }
-      simGraphRunner.slotInitialized.clear()
-      simGraphRunner.slotDiagramIds.clear()
-      simGraphRunner.slotRunnerIds.clear()
+
+      repopulateRunnerSlots = true
+    }
+
+    if (repopulateRunnerSlots) {
+      const diagramDiscovered = getDiagramDiscovered(nextDiagramId)
+      if (diagramDiscovered) {
+        for (const slotName of diagramDiscovered.graphSlotNamesSet) {
+          simGraphRunner.addGraphSlot(slotName, {})
+        }
+      } else {
+        throw new Error(`[sim] ensureDiagramRunner: no discovered data for diagramId="${nextDiagramId}" (runner="${runnerId}")`)
+      }
     }
 
     // Libraries/rig before bind so compile / StaticSwitch see them.
@@ -462,7 +599,7 @@ export function useAnimgraphSim() {
 
   /**
    * Ensure a child runner exists for a GraphSlot when it has a diagram.
-   * Initialized None → destroy child, clear slotRunnerId, return null.
+   * Initialized None → destroy child, clear slotRunnerId, return undefined.
    */
   const ensureSlotRunner = (
     simGraphRunner: SimGraphRunner,
@@ -470,86 +607,86 @@ export function useAnimgraphSim() {
   ): string | undefined => {
     if (!slotName || slotName === 'None') return
 
-    let slotDiagramId = simGraphRunner.getSlotDiagramId(slotName) ?? ''
-    if (!slotDiagramId && !simGraphRunner.isSlotInitialized(slotName)) {
-      const slotNamedDiagramId = findDiagramIdBySlotName(listDiagramIds.value, slotName)
-      if (slotNamedDiagramId) {
-        slotDiagramId = slotNamedDiagramId
-        simGraphRunner.setSlotDiagramId(slotName, slotNamedDiagramId)
+    let simGraphRunnerSlot = simGraphRunner.getGraphSlot(slotName)
+    if (!simGraphRunnerSlot) {
+      simGraphRunnerSlot = simGraphRunner.addGraphSlot(slotName, {})
+    }
+
+    if (!simGraphRunnerSlot.diagramId) {
+      // Slot has no diagram id, try to assign one.
+      if (!simGraphRunnerSlot.diagramLocked) {
+        // Slot is not locked, try to assign diagram id from slot name.
+        simGraphRunnerSlot.diagramId = findDiagramIdBySlotName(listDiagramIds(), slotName)
       }
     }
 
-    // Explicit / resolved None — no live child.
-    if (!slotDiagramId) {
-      if (simGraphRunner.isSlotInitialized(slotName)) {
-        const slotSimGraphRunner = simGraphRunner.getSlotRunnerId(slotName)
-        if (slotSimGraphRunner) {
-          destroyRunner(slotSimGraphRunner)
-          simGraphRunner.setSlotRunnerId(slotName, null)
-        }
+    if (!simGraphRunnerSlot.diagramId) {
+      // Unresolved slot — no diagram id, cannot create runner.
+
+      if (simGraphRunnerSlot.runnerId) {
+        // Slot without diagram id has a runner, destroy it.
+        destroyRunner(simGraphRunnerSlot.runnerId)
+        simGraphRunnerSlot.runnerId = undefined
       }
       return
     }
 
-    let slotSimGraphRunnerId = simGraphRunner.getSlotRunnerId(slotName)
+    let slotSimGraphRunnerId = simGraphRunnerSlot.runnerId
     if (!slotSimGraphRunnerId) {
-      slotSimGraphRunnerId = allocSlotRunnerId()
+      slotSimGraphRunnerId = runnersSequentialIdAllocator.alloc()
     }
 
-    const slotSimGraphRunner = runners.get(slotSimGraphRunnerId)
-    if (!slotSimGraphRunner || slotSimGraphRunner.diagramId !== slotDiagramId) {
-      if (bindRunnerToDiagramId(slotSimGraphRunnerId, slotDiagramId)) {
-        simGraphRunner.setSlotRunnerId(slotName, slotSimGraphRunnerId)
-        return slotSimGraphRunnerId
-      } else {
-        return undefined
+    const slotSimGraphRunner = runnerIdToRunnerMap.get(slotSimGraphRunnerId)
+    if (!slotSimGraphRunner || slotSimGraphRunner.diagramId !== simGraphRunnerSlot.diagramId) {
+      if (ensureDiagramRunner(slotSimGraphRunnerId, simGraphRunnerSlot.diagramId)) {
+        simGraphRunnerSlot.runnerId = slotSimGraphRunnerId
       }
     }
 
-    return slotSimGraphRunner.runnerId
+    return simGraphRunnerSlot.runnerId
   }
 
   /** Eagerly create child runners for GraphSlot names on parent's bound diagram (one level). */
-  const materializeSlotRunners = (runnerId: string) => {
-    const simGraphRunner = runners.get(runnerId)
-    if (!simGraphRunner || !simGraphRunner.diagramId) return
+  const materializeRunnerSlotRunners = (simGraphRunner: SimGraphRunner) => {
+    const diagramGraphSlotNamesSet = simGraphRunner.diagramId
+      ? getDiagramDiscovered(simGraphRunner.diagramId)?.graphSlotNamesSet
+      : undefined
 
-    const diagramData = getRenderData(simGraphRunner.diagramId)
-    const diagramGraphSlotNames = collectGraphSlotNames(diagramData?.handlesRegistry)
-    const knownDiagramSlotNamesSet = new Set(diagramGraphSlotNames)
-
-    for (const diagramSlotName of diagramGraphSlotNames) {
-      ensureSlotRunner(simGraphRunner, diagramSlotName)
+    if (diagramGraphSlotNamesSet) {
+      for (const diagramSlotName of diagramGraphSlotNamesSet) {
+        ensureSlotRunner(simGraphRunner, diagramSlotName)
+      }
     }
 
+    // Prune slots that are not in the diagram.
     let pruned = false
-    for (const [slotName, slotRunnerId] of [...simGraphRunner.slotRunnerIds.entries()]) {
-      if (knownDiagramSlotNamesSet.has(slotName)) continue
-      if (slotRunnerId) destroyRunner(slotRunnerId)
-      simGraphRunner.setSlotRunnerId(slotName, null)
-      simGraphRunner.forgetSlotDiagram(slotName)
+    for (const slot of [...simGraphRunner.graphSlots()]) {
+      if (diagramGraphSlotNamesSet?.has(slot.slotName)) continue
+      if (slot.runnerId) destroyRunner(slot.runnerId)
+      simGraphRunner.removeGraphSlot(slot.slotName)
       pruned = true
     }
-    if (pruned || diagramGraphSlotNames.length) bumpRunners()
+    if (pruned) bumpRunners()
   }
 
   /** BFS materialize from a runner (cycle-safe). */
   const materializeSlotTree = (startId: string) => {
     const visitedRunnerIdsSet = new Set<string>()
     const runnerIdsQueue = [startId]
-    while (runnerIdsQueue.length) {
-      const runnerId = runnerIdsQueue.shift()!
+    let runnerIdsQueuePos = 0
+    while (runnerIdsQueuePos < runnerIdsQueue.length) {
+      const runnerId = runnerIdsQueue[runnerIdsQueuePos++]
       if (visitedRunnerIdsSet.has(runnerId)) continue
       visitedRunnerIdsSet.add(runnerId)
 
-      materializeSlotRunners(runnerId)
-      
-      const simGraphRunner = runners.get(runnerId)
+      const simGraphRunner = runnerIdToRunnerMap.get(runnerId)
       if (!simGraphRunner) continue
 
-      for (const slotRunnerId of simGraphRunner.slotRunnerIds.values()) {
-        if (slotRunnerId && !visitedRunnerIdsSet.has(slotRunnerId)) {
-          runnerIdsQueue.push(slotRunnerId)
+      materializeRunnerSlotRunners(simGraphRunner)
+
+      for (const slot of simGraphRunner.graphSlots()) {
+        if (slot.runnerId && !visitedRunnerIdsSet.has(slot.runnerId)) {
+          runnerIdsQueue.push(slot.runnerId)
         }
       }
     }
@@ -559,22 +696,19 @@ export function useAnimgraphSim() {
    * Slots on a bound parent: GraphSlot names + initialized Nones.
    * None slots may have empty runnerId (no live child).
    */
-  const listSlotRunners = (parentId: string): SimSlotRunnerInfo[] => {
-    const parent = runners.get(parentId)
-    if (!parent?.diagramId) return []
-    const data = getRenderData(parent.diagramId)
-    const names = new Set<string>(collectGraphSlotNames(data?.handlesRegistry))
-    for (const s of parent.slotInitialized) names.add(s)
-    for (const s of parent.slotRunnerIds.keys()) names.add(s)
+  const listSlotRunners = (runnerId: string): SimSlotRunnerInfo[] => {
+    const simGraphRunner = runnerIdToRunnerMap.get(runnerId)
+    if (!simGraphRunner?.diagramId) return []
+
     const out: SimSlotRunnerInfo[] = []
-    for (const slotName of names) {
-      if (!slotName || slotName === 'None') continue
-      const runnerId = parent.getSlotRunnerId(slotName) ?? ''
-      const child = runnerId ? runners.get(runnerId) : undefined
+    for (const slot of simGraphRunner.graphSlots()) {
+      const slotSimGraphRunner = slot.runnerId
+        ? runnerIdToRunnerMap.get(slot.runnerId)
+        : undefined
       out.push({
-        slotName,
-        runnerId,
-        diagramId: child?.diagramId ?? parent.getSlotDiagramId(slotName) ?? '',
+        slotName: slot.slotName,
+        runnerId: slot.runnerId,
+        diagramId: slotSimGraphRunner?.diagramId,
       })
     }
     return out
@@ -585,10 +719,10 @@ export function useAnimgraphSim() {
     slotName: string,
     diagramId: string | null
   ) => {
-    const simGraphRunner = runners.get(runnerId)
+    const simGraphRunner = runnerIdToRunnerMap.get(runnerId)
     if (!simGraphRunner) {
       console.warn(
-        `[sim] setSlotDiagramId: missing parent runner "${runnerId}"`
+        `[sim] setSlotDiagramId: missing runner "${runnerId}"`
       )
       return
     }
@@ -596,18 +730,28 @@ export function useAnimgraphSim() {
     const _slotName = slotName.trim()
     if (!_slotName || _slotName === 'None') return
 
-    simGraphRunner.setSlotDiagramId(_slotName, diagramId || null)
+    let simGraphRunnerSlot = simGraphRunner.getGraphSlot(_slotName)
+    if (simGraphRunnerSlot) {
+      simGraphRunnerSlot.diagramId = diagramId || undefined
+      simGraphRunnerSlot.diagramLocked = true
+    } else {
+      simGraphRunnerSlot = simGraphRunner.addGraphSlot(_slotName, {
+        diagramId: diagramId || undefined,
+        diagramLocked: true,
+      })
+    }
+
     if (!diagramId) {
-      const slotSimGraphRunnerId = simGraphRunner.getSlotRunnerId(_slotName)
+      const slotSimGraphRunnerId = simGraphRunnerSlot.runnerId
       if (slotSimGraphRunnerId) destroyRunner(slotSimGraphRunnerId)
-      simGraphRunner.setSlotRunnerId(_slotName, null)
+      simGraphRunnerSlot.runnerId = undefined
       bumpRunners()
       return
     }
 
     const slotSimGraphRunnerId = ensureSlotRunner(simGraphRunner, _slotName)
     if (slotSimGraphRunnerId) {
-      bindRunnerToDiagramId(slotSimGraphRunnerId, diagramId)
+      // ensureDiagramRunner(slotSimGraphRunnerId, diagramId)
       materializeSlotTree(slotSimGraphRunnerId)
     } else {
       bumpRunners()
@@ -617,67 +761,40 @@ export function useAnimgraphSim() {
   /** Bound runners only (diagram set) — for Skeleton / Status pickers. */
   const listBoundRunnerTree = (): SimRunnerTreeNode | null => {
     const rootId = ROOT_RUNNER_ID
-    const root = runners.get(rootId)
+    const root = runnerIdToRunnerMap.get(rootId)
     if (!root?.diagramId) return null
 
+    const visited = new Set<string>()
+
     const build = (
-      runnerId: string,
       label: string,
-      visited: Set<string>
+      runnerId: string,
     ): SimRunnerTreeNode | null => {
       if (visited.has(runnerId)) return null
       visited.add(runnerId)
-      const r = runners.get(runnerId)
-      if (!r?.diagramId) return null
+
+      const simGraphRunner = runnerIdToRunnerMap.get(runnerId)
+      if (!simGraphRunner) return null
+
+      if (!simGraphRunner.diagramId) return null
+
       const children: SimRunnerTreeNode[] = []
-      for (const slot of listSlotRunners(runnerId)) {
-        if (!slot.diagramId) continue
-        const child = build(slot.runnerId, slot.slotName, visited)
+      for (const slotInfo of listSlotRunners(runnerId)) {
+        if (!slotInfo.runnerId || !slotInfo.diagramId) continue
+        const child = build(slotInfo.slotName, slotInfo.runnerId)
         if (child) children.push(child)
       }
+
       return {
         runnerId,
-        diagramId: r.diagramId,
+        diagramId: simGraphRunner.diagramId,
         label,
-        title: `${label} (${r.diagramId})`,
+        title: `${label} (${simGraphRunner.diagramId})`,
         children,
       }
     }
 
-    return build(rootId, 'root', new Set())
-  }
-
-  /**
-   * Bound runner tree pruned to runners executing `diagramId` (at-node picker).
-   * Non-matching ancestors are dropped; their matching descendants are promoted.
-   * Multiple top-level matches are wrapped under a synthetic group node.
-   */
-  const listBoundRunnerTreeForDiagram = (
-    diagramId: string
-  ): SimRunnerTreeNode | null => {
-    const want = diagramId.trim()
-    if (!want) return null
-    const tree = listBoundRunnerTree()
-    if (!tree) return null
-
-    const prune = (node: SimRunnerTreeNode): SimRunnerTreeNode[] => {
-      const kids = node.children.flatMap(prune)
-      if (node.diagramId === want) {
-        return [{ ...node, children: kids }]
-      }
-      return kids
-    }
-
-    const roots = prune(tree)
-    if (!roots.length) return null
-    if (roots.length === 1) return roots[0]!
-    return {
-      runnerId: `__diagram:${want}`,
-      diagramId: want,
-      label: want,
-      title: want,
-      children: roots,
-    }
+    return build('root', rootId)
   }
 
   /**
@@ -708,131 +825,173 @@ export function useAnimgraphSim() {
     return out
   }
 
-  const getSlotDiagramId = (parentRunnerId: string, slotName: string) =>
-    runners.get(parentRunnerId)?.getSlotDiagramId(slotName)
-
-  const getSlotRunnerId = (parentRunnerId: string, slotName: string) =>
-    runners.get(parentRunnerId)?.getSlotRunnerId(slotName)
-
-  /** Root runner for drivers (LookAt / MixerSlot attach). */
-  /** Live root only (null when destroyed / explicit None). */
-  const getPrimaryRunner = () => runners.get(ROOT_RUNNER_ID) ?? null
-
-  const getRunner = (runnerId: string | null | undefined) =>
-    runnerId ? runners.get(runnerId) ?? null : null
-
   /**
    * Host / SimPanel view: always root runner snap + live clock fields.
    * Diagram-scoped UI must use `snapshotForRunner` / `snapshotForDiagram`
    * (do not guess via activeDiagramId here).
    */
   const snapshot = computed((): SimSnapshot => {
-    const rootSnap = snapshotsByRunner.value[ROOT_RUNNER_ID]
+    return snapshotsByRunner.value[ROOT_RUNNER_ID] ?? emptySimSnapshot()
+  })
+
+  const discoveredCacheMapComputed = computed(() => {
+    void diagramIdsListRevisionRef.value
+    return new Map<string, { 
+      diagramRevision: number, 
+      data: {
+        graphInputs: DiscoveredGraphInputs
+        graphSlotNamesSet: Set<string>
+      }, 
+    }>()
+  })
+  const discoveredCacheMapContentRevisionRef = ref(0)
+  const bumpDiscoveredCacheMapContentRevision = () => {
+    discoveredCacheMapContentRevisionRef.value++
+  }
+  const getDiagramDiscovered = (diagramId: string) => {
+    const discoveredCacheMap = discoveredCacheMapComputed.value
+    
+    const diagramRevision = getDiagramRevision(diagramId)
+    const cacheItem = discoveredCacheMap.get(diagramId)
+    if (cacheItem && cacheItem.diagramRevision === diagramRevision) {
+      return cacheItem.data
+    }
+
+    const data = getDiagramDataById(diagramId)
+    if (!data) {
+      discoveredCacheMap.delete(diagramId)
+      return
+    }
+
+    const nextCacheItem = {
+      diagramRevision,
+      data: {
+        graphInputs: discoverGraphInputs(data.handlesRegistry),
+        graphSlotNamesSet: discoverGraphSlotNames(data.handlesRegistry),
+      },
+    }
+    discoveredCacheMap.set(diagramId, nextCacheItem)
+    bumpDiscoveredCacheMapContentRevision()
+
+    return nextCacheItem.data
+  }
+
+  const allDiagramsDiscoveredComputed = computed(() => {
+    const diagramIds = listDiagramIds()
+
+    const floatFeatureKeysSet = new Set<string>()
+    const floatFeatures: { feature: string; property: string }[] = []
+    const vectorFeatureKeysSet = new Set<string>()
+    const vectorFeatures: { feature: string; property: string }[] = []
+    const quatFeatureKeysSet = new Set<string>()
+    const quatFeatures: { feature: string; property: string }[] = []
+    const boolFeatureKeysSet = new Set<string>()
+    const boolFeatures: { feature: string; property: string }[] = []
+    const stringFeatureKeysSet = new Set<string>()
+    const stringFeatures: { feature: string; property: string }[] = []
+
+    const floatVarNamesSet = new Set<string>()
+    const vectorVarNamesSet = new Set<string>()
+    const quatVarNamesSet = new Set<string>()
+    const transformVarNamesSet = new Set<string>()
+    const boolVarNamesSet = new Set<string>()
+    const intVarNamesSet = new Set<string>()
+    const wrapperNamesSet = new Set<string>()
+    const eventNamesSet = new Set<string>()
+    const tagNamesSet = new Set<string>()
+    const entityTagNamesSet = new Set<string>()
+
+    for (const diagramId of diagramIds) {
+      const diagramDiscovered = getDiagramDiscovered(diagramId)
+      if (!diagramDiscovered) continue
+
+      mergeUniqueKeyFeatures(floatFeatureKeysSet, diagramDiscovered.graphInputs.floatFeatures, floatFeatures)
+      mergeUniqueKeyFeatures(vectorFeatureKeysSet, diagramDiscovered.graphInputs.vectorFeatures, vectorFeatures)
+      mergeUniqueKeyFeatures(quatFeatureKeysSet, diagramDiscovered.graphInputs.quatFeatures, quatFeatures)
+      mergeUniqueKeyFeatures(boolFeatureKeysSet, diagramDiscovered.graphInputs.boolFeatures, boolFeatures)
+      mergeUniqueKeyFeatures(stringFeatureKeysSet, diagramDiscovered.graphInputs.stringFeatures, stringFeatures)
+
+      mergeSets(diagramDiscovered.graphInputs.floatVarNamesSet, floatVarNamesSet)
+      mergeSets(diagramDiscovered.graphInputs.vectorVarNamesSet, vectorVarNamesSet)
+      mergeSets(diagramDiscovered.graphInputs.quatVarNamesSet, quatVarNamesSet)
+      mergeSets(diagramDiscovered.graphInputs.transformVarNamesSet, transformVarNamesSet)
+      mergeSets(diagramDiscovered.graphInputs.boolVarNamesSet, boolVarNamesSet)
+      mergeSets(diagramDiscovered.graphInputs.intVarNamesSet, intVarNamesSet)
+      mergeSets(diagramDiscovered.graphInputs.wrapperNamesSet, wrapperNamesSet)
+      mergeSets(diagramDiscovered.graphInputs.eventNamesSet, eventNamesSet)
+      mergeSets(diagramDiscovered.graphInputs.tagNamesSet, tagNamesSet)
+      mergeSets(diagramDiscovered.graphInputs.entityTagNamesSet, entityTagNamesSet)
+    }
+
     return {
-      ...(rootSnap ?? emptySimSnapshot()),
-      time: clock.value.time,
-      playing: playing.value,
-      speed: clock.value.speed,
+      floatFeatureKeysSet,
+      floatFeatures,
+      vectorFeatureKeysSet,
+      vectorFeatures,
+      quatFeatureKeysSet,
+      quatFeatures,
+      boolFeatureKeysSet,
+      boolFeatures,
+      stringFeatureKeysSet,
+      stringFeatures,
+      floatVarNamesSet,
+      vectorVarNamesSet,
+      quatVarNamesSet,
+      transformVarNamesSet,
+      boolVarNamesSet,
+      intVarNamesSet,
+      wrapperNamesSet,
+      eventNamesSet,
+      tagNamesSet,
+      entityTagNamesSet,
     }
   })
 
+  const discoveredClipLibraryClipEventNamesSetComputed = computed(() => {
+    void clipLibraryRevisionRef.value
+    return new Set(clipLibraryRef.value.eventNames())
+  })
+
+  const discoveredClipLibraryWrapperNamesSetComputed = computed(() => {
+    void clipLibraryRevisionRef.value
+    return new Set(clipLibraryRef.value.wrapperNames())
+  })
+
   const discovered = computed(() => {
-    void projectRef.value
-    void clipLibraryRevision.value
-    void entityTagDrafts.value
-    const features: { feature: string; property: string }[] = []
-    const vectorFeatures: { feature: string; property: string }[] = []
-    const quatFeatures: { feature: string; property: string }[] = []
-    const boolFeatures: { feature: string; property: string }[] = []
-    const stringFeatures: { feature: string; property: string }[] = []
-    const floatVars: string[] = []
-    const vectorVars: string[] = []
-    const quatVars: string[] = []
-    const transformVars: string[] = []
-    const boolVars: string[] = []
-    const intVars: string[] = []
-    const wrappers: string[] = []
-    const events: string[] = []
-    const tags: string[] = []
-    const entityTags: string[] = []
-    const featSeen = new Set<string>()
-    const vecFeatSeen = new Set<string>()
-    const quatFeatSeen = new Set<string>()
-    const boolFeatSeen = new Set<string>()
-    const stringFeatSeen = new Set<string>()
-    const mergeUnique = (into: string[], seen: Set<string>, names: string[]) => {
-      for (const n of names) {
-        const k = n.toLowerCase()
-        if (seen.has(k)) continue
-        seen.add(k)
-        into.push(n)
-      }
-    }
-    const floatSeen = new Set<string>()
-    const vectorSeen = new Set<string>()
-    const quatVarSeen = new Set<string>()
-    const transformSeen = new Set<string>()
-    const boolSeen = new Set<string>()
-    const intSeen = new Set<string>()
-    const wrapSeen = new Set<string>()
-    const eventSeen = new Set<string>()
-    const tagSeen = new Set<string>()
-    const entityTagSeen = new Set<string>()
+    void clipLibraryRevisionRef.value
 
-    for (const id of listDiagramIds.value) {
-      const handles = getRenderData(id)?.handlesRegistry
-      if (!handles) continue
-      const fromGraph = discoverGraphInputs(handles)
-      for (const f of fromGraph.features) {
-        const k = `${f.feature}\0${f.property}`.toLowerCase()
-        if (featSeen.has(k)) continue
-        featSeen.add(k)
-        features.push(f)
-      }
-      for (const f of fromGraph.vectorFeatures) {
-        const k = `${f.feature}\0${f.property}`.toLowerCase()
-        if (vecFeatSeen.has(k)) continue
-        vecFeatSeen.add(k)
-        vectorFeatures.push(f)
-      }
-      for (const f of fromGraph.quatFeatures) {
-        const k = `${f.feature}\0${f.property}`.toLowerCase()
-        if (quatFeatSeen.has(k)) continue
-        quatFeatSeen.add(k)
-        quatFeatures.push(f)
-      }
-      for (const f of fromGraph.boolFeatures) {
-        const k = `${f.feature}\0${f.property}`.toLowerCase()
-        if (boolFeatSeen.has(k)) continue
-        boolFeatSeen.add(k)
-        boolFeatures.push(f)
-      }
-      for (const f of fromGraph.stringFeatures) {
-        const k = `${f.feature}\0${f.property}`.toLowerCase()
-        if (stringFeatSeen.has(k)) continue
-        stringFeatSeen.add(k)
-        stringFeatures.push(f)
-      }
-      mergeUnique(floatVars, floatSeen, fromGraph.floatVars)
-      mergeUnique(vectorVars, vectorSeen, fromGraph.vectorVars)
-      mergeUnique(quatVars, quatVarSeen, fromGraph.quatVars)
-      mergeUnique(transformVars, transformSeen, fromGraph.transformVars)
-      mergeUnique(boolVars, boolSeen, fromGraph.boolVars)
-      mergeUnique(intVars, intSeen, fromGraph.intVars)
-      mergeUnique(wrappers, wrapSeen, fromGraph.wrappers)
-      mergeUnique(events, eventSeen, fromGraph.events)
-      mergeUnique(tags, tagSeen, fromGraph.tags)
-      mergeUnique(entityTags, entityTagSeen, fromGraph.entityTags)
-    }
-    // Keep manually added entity tags in the list
-    mergeUnique(entityTags, entityTagSeen, Object.keys(entityTagDrafts.value))
+    const allDiagramsDiscovered = allDiagramsDiscoveredComputed.value
 
-    const fromClips = clipLibrary.value.eventNames()
-    const fromSetupWrappers = clipLibrary.value.wrapperNames()
-    mergeUnique(events, eventSeen, fromClips)
-    mergeUnique(wrappers, wrapSeen, fromSetupWrappers)
+    const floatFeatures = allDiagramsDiscovered.floatFeatures
+    const vectorFeatures = allDiagramsDiscovered.vectorFeatures
+    const quatFeatures = allDiagramsDiscovered.quatFeatures
+    const boolFeatures = allDiagramsDiscovered.boolFeatures
+    const stringFeatures = allDiagramsDiscovered.stringFeatures
+    const floatVarNames = Array.from(allDiagramsDiscovered.floatVarNamesSet)
+    const vectorVarNames = Array.from(allDiagramsDiscovered.vectorVarNamesSet)
+    const quatVarNames = Array.from(allDiagramsDiscovered.quatVarNamesSet)
+    const transformVarNames = Array.from(allDiagramsDiscovered.transformVarNamesSet)
+    const boolVarNames = Array.from(allDiagramsDiscovered.boolVarNamesSet)
+    const intVarNames = Array.from(allDiagramsDiscovered.intVarNamesSet)
+    const wrapperNames = Array.from(allDiagramsDiscovered.wrapperNamesSet)
+    const wrapperNamesSet = new Set(allDiagramsDiscovered.wrapperNamesSet)
+    const eventNames = Array.from(allDiagramsDiscovered.eventNamesSet)
+    const eventNamesSet = new Set(allDiagramsDiscovered.eventNamesSet)
+    const tagNames = Array.from(allDiagramsDiscovered.tagNamesSet)
 
-    features.sort((a, b) =>
+    mergeUniqueStrings(
+      eventNamesSet, 
+      Array.from(discoveredClipLibraryClipEventNamesSetComputed.value), 
+      eventNames
+    )
+
+    mergeUniqueStrings(
+      wrapperNamesSet, 
+      Array.from(discoveredClipLibraryWrapperNamesSetComputed.value), 
+      wrapperNames
+    )
+
+    floatFeatures.sort((a, b) =>
       `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
     )
     vectorFeatures.sort((a, b) =>
@@ -847,50 +1006,62 @@ export function useAnimgraphSim() {
     stringFeatures.sort((a, b) =>
       `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
     )
-    floatVars.sort((a, b) => a.localeCompare(b))
-    vectorVars.sort((a, b) => a.localeCompare(b))
-    quatVars.sort((a, b) => a.localeCompare(b))
-    transformVars.sort((a, b) => a.localeCompare(b))
-    boolVars.sort((a, b) => a.localeCompare(b))
-    intVars.sort((a, b) => a.localeCompare(b))
-    wrappers.sort((a, b) => a.localeCompare(b))
-    events.sort((a, b) => a.localeCompare(b))
-    tags.sort((a, b) => a.localeCompare(b))
-    entityTags.sort((a, b) => a.localeCompare(b))
+    floatVarNames.sort((a, b) => a.localeCompare(b))
+    vectorVarNames.sort((a, b) => a.localeCompare(b))
+    quatVarNames.sort((a, b) => a.localeCompare(b))
+    transformVarNames.sort((a, b) => a.localeCompare(b))
+    boolVarNames.sort((a, b) => a.localeCompare(b))
+    intVarNames.sort((a, b) => a.localeCompare(b))
+    wrapperNames.sort((a, b) => a.localeCompare(b))
+    eventNames.sort((a, b) => a.localeCompare(b))
+    tagNames.sort((a, b) => a.localeCompare(b))
 
     return {
-      features,
+      floatFeatureKeysSet: allDiagramsDiscovered.floatFeatureKeysSet,
+      floatFeatures,
+      vectorFeatureKeysSet: allDiagramsDiscovered.vectorFeatureKeysSet,
       vectorFeatures,
+      quatFeatureKeysSet: allDiagramsDiscovered.quatFeatureKeysSet,
       quatFeatures,
+      boolFeatureKeysSet: allDiagramsDiscovered.boolFeatureKeysSet,
       boolFeatures,
+      stringFeatureKeysSet: allDiagramsDiscovered.stringFeatureKeysSet,
       stringFeatures,
-      floatVars,
-      vectorVars,
-      quatVars,
-      transformVars,
-      boolVars,
-      intVars,
-      wrappers,
-      events,
-      tags,
-      entityTags,
+      floatVarNamesSet: allDiagramsDiscovered.floatVarNamesSet,
+      floatVarNames,
+      vectorVarNamesSet: allDiagramsDiscovered.vectorVarNamesSet,
+      vectorVarNames,
+      quatVarNamesSet: allDiagramsDiscovered.quatVarNamesSet,
+      quatVarNames,
+      transformVarNamesSet: allDiagramsDiscovered.transformVarNamesSet,
+      transformVarNames,
+      boolVarNamesSet: allDiagramsDiscovered.boolVarNamesSet,
+      boolVarNames,
+      intVarNamesSet: allDiagramsDiscovered.intVarNamesSet,
+      intVarNames,
+      wrapperNamesSet,
+      wrapperNames,
+      eventNamesSet,
+      eventNames,
+      tagNamesSet: allDiagramsDiscovered.tagNamesSet,
+      tagNames,
     }
   })
 
   const clipStats = computed((): ClipLibraryStats => {
-    void clipLibraryRevision.value
-    return clipLibrary.value.stats()
+    void clipLibraryRevisionRef.value
+    return clipLibraryRef.value.stats()
   })
 
   const clipNames = computed((): string[] => {
-    void clipLibraryRevision.value
-    return clipLibrary.value.names()
+    void clipLibraryRevisionRef.value
+    return clipLibraryRef.value.names()
   })
 
   const setupEntries = computed((): AnimSetupEntryView[] => {
-    void clipLibraryRevision.value
-    void wrapperWeightDrafts.value
-    return clipLibrary.value.listEntries(isWrapperActive)
+    void clipLibraryRevisionRef.value
+    void boardWrapperWeightsRevisionRef.value
+    return clipLibraryRef.value.listEntries(isWrapperActive)
   })
 
   const animDbStats = computed((): AnimDatabaseStats => {
@@ -936,70 +1107,158 @@ export function useAnimgraphSim() {
     return clipPoseLibrary.value.listAnimNames(poseSetId)
   }
 
-  const featureKey = (feature: string, property: string) => `${feature}\0${property}`
+  const boardWrapperWeightsRevisionRef = ref(0)
 
   const applyDraftsToBoard = () => {
-    for (const [key, val] of Object.entries(featureDrafts.value)) {
-      const sep = key.indexOf('\0')
-      if (sep < 0) continue
-      const n = Number(val)
-      if (!Number.isFinite(n)) continue
-      board.value.setFeature(key.slice(0, sep), key.slice(sep + 1), n)
-    }
-    for (const [key, val] of Object.entries(vectorFeatureDrafts.value)) {
-      const sep = key.indexOf('\0')
-      if (sep < 0 || !val) continue
-      board.value.setVectorFeature(key.slice(0, sep), key.slice(sep + 1), val)
-    }
-    for (const [key, val] of Object.entries(quatFeatureDrafts.value)) {
-      const sep = key.indexOf('\0')
-      if (sep < 0 || !val) continue
-      board.value.setQuatFeature(key.slice(0, sep), key.slice(sep + 1), val)
-    }
-    for (const [key, val] of Object.entries(boolFeatureDrafts.value)) {
-      const sep = key.indexOf('\0')
-      if (sep < 0) continue
-      board.value.setBoolFeature(key.slice(0, sep), key.slice(sep + 1), val === true)
-    }
-    for (const [key, val] of Object.entries(stringFeatureDrafts.value)) {
-      const sep = key.indexOf('\0')
-      if (sep < 0) continue
-      board.value.setStringFeature(key.slice(0, sep), key.slice(sep + 1), val ?? '')
-    }
-    for (const [name, val] of Object.entries(floatVarDrafts.value)) {
-      const n = Number(val)
-      if (!Number.isFinite(n)) continue
-      board.value.floatVars.set(name, n)
-    }
-    for (const [name, val] of Object.entries(vectorVarDrafts.value)) {
-      if (!val) continue
-      board.value.vectorVars.set(name, { ...val })
-    }
-    for (const [name, val] of Object.entries(quatVarDrafts.value)) {
-      if (!val) continue
-      board.value.quatVars.set(name, { ...val })
-    }
-    for (const [name, val] of Object.entries(boolVarDrafts.value)) {
-      board.value.boolVars.set(name, val === true)
-    }
-    for (const [name, val] of Object.entries(intVarDrafts.value)) {
-      const n = Number(val)
-      if (!Number.isFinite(n)) continue
-      board.value.intVars.set(name, Math.round(n))
-    }
-    for (const [name, val] of Object.entries(tagValueDrafts.value)) {
-      const n = Number(val)
-      if (!Number.isFinite(n)) continue
-      board.value.setTagValue(name, n)
-    }
-    for (const [name, val] of Object.entries(wrapperWeightDrafts.value)) {
-      const n = Number(val)
-      if (!Number.isFinite(n)) continue
-      board.value.setWrapperWeight(name, n)
-    }
-    board.value.entityTags.clear()
-    for (const [name, present] of Object.entries(entityTagDrafts.value)) {
-      if (present) board.value.setEntityTag(name, true)
+    for (let i = draftBoardEntries.length - 1; i >= 0; i--) {
+      const draftBoardEntry = draftBoardEntries[i]
+      const draftBoard = draftBoardEntry.draftBoard
+      const appliedRevisionInfo = draftBoardEntry.appliedRevisionInfo
+      
+      if (appliedRevisionInfo.numericFeaturesRevision !== draftBoard.numericFeaturesRevisionRef.value) {
+        const numericFeatureByKey = draftBoard.numericFeatureByKeyRef.value
+        for (const [key, featureInfo] of draftBoard.populatedNumericFeatureKeyToFeatureMap) {
+          const value = numericFeatureByKey[key]
+          if (value === undefined) continue
+          board.value.setFeature(featureInfo.feature, featureInfo.property, value)
+        }
+        
+        appliedRevisionInfo.numericFeaturesRevision = draftBoard.numericFeaturesRevisionRef.value
+      }
+      
+      if (appliedRevisionInfo.stringFeaturesRevision !== draftBoard.stringFeaturesRevisionRef.value) {
+        const stringFeatureByKey = draftBoard.stringFeatureByKeyRef.value
+        for (const [key, featureInfo] of draftBoard.populatedStringFeatureKeyToFeatureMap) {
+          const value = stringFeatureByKey[key]
+          if (value === undefined) continue
+          board.value.setStringFeature(featureInfo.feature, featureInfo.property, value)
+        }
+
+        appliedRevisionInfo.stringFeaturesRevision = draftBoard.stringFeaturesRevisionRef.value
+      }
+      
+      if (appliedRevisionInfo.booleanFeaturesRevision !== draftBoard.booleanFeaturesRevisionRef.value) {
+        const booleanFeatureByKey = draftBoard.booleanFeatureByKeyRef.value
+        for (const [key, featureInfo] of draftBoard.populatedBooleanFeatureKeyToFeatureMap) {
+          const value = booleanFeatureByKey[key]
+          if (value === undefined) continue
+          board.value.setBoolFeature(featureInfo.feature, featureInfo.property, value)
+        }
+
+        appliedRevisionInfo.booleanFeaturesRevision = draftBoard.booleanFeaturesRevisionRef.value
+      }
+      
+      if (appliedRevisionInfo.vectorFeaturesRevision !== draftBoard.vectorFeaturesRevisionRef.value) {
+        const vectorFeatureByKey = draftBoard.vectorFeatureByKeyRef.value
+        for (const [key, featureInfo] of draftBoard.populatedVectorFeatureKeyToFeatureMap) {
+          const value = vectorFeatureByKey[key]
+          if (value === undefined) continue
+          board.value.setVectorFeature(featureInfo.feature, featureInfo.property, value)
+        }
+
+        appliedRevisionInfo.vectorFeaturesRevision = draftBoard.vectorFeaturesRevisionRef.value
+      }
+
+      if (appliedRevisionInfo.quatFeaturesRevision !== draftBoard.quatFeaturesRevisionRef.value) {
+        const quatFeatureByKey = draftBoard.quatFeatureByKeyRef.value
+        for (const [key, featureInfo] of draftBoard.populatedQuatFeatureKeyToFeatureMap) {
+          const value = quatFeatureByKey[key]
+          if (value === undefined) continue
+          board.value.setQuatFeature(featureInfo.feature, featureInfo.property, value)
+        }
+
+        appliedRevisionInfo.quatFeaturesRevision = draftBoard.quatFeaturesRevisionRef.value
+      }
+
+      if (appliedRevisionInfo.floatVarsRevision !== draftBoard.floatVarsRevisionRef.value) {
+        const floatVarByKey = draftBoard.floatVarByKeyRef.value
+        for (const varName of draftBoard.populatedFloatVarNamesSet) {
+          const value = floatVarByKey[varName]
+          if (value === undefined) continue
+          board.value.floatVars.set(varName, value)
+        }
+
+        appliedRevisionInfo.floatVarsRevision = draftBoard.floatVarsRevisionRef.value
+      }
+
+      if (appliedRevisionInfo.intVarsRevision !== draftBoard.intVarsRevisionRef.value) {
+        const intVarByKey = draftBoard.intVarByKeyRef.value
+        for (const varName of draftBoard.populatedIntVarNamesSet) {
+          const value = intVarByKey[varName]
+          if (value === undefined) continue
+          board.value.intVars.set(varName, value)
+        }
+
+        appliedRevisionInfo.intVarsRevision = draftBoard.intVarsRevisionRef.value
+      }
+
+      if (appliedRevisionInfo.boolVarsRevision !== draftBoard.boolVarsRevisionRef.value) {
+        const boolVarByKey = draftBoard.boolVarByKeyRef.value
+        for (const varName of draftBoard.populatedBoolVarNamesSet) {
+          const value = boolVarByKey[varName]
+          if (value === undefined) continue
+          board.value.boolVars.set(varName, value)
+        }
+
+        appliedRevisionInfo.boolVarsRevision = draftBoard.boolVarsRevisionRef.value
+      }
+
+      if (appliedRevisionInfo.vectorVarsRevision !== draftBoard.vectorVarsRevisionRef.value) {
+        const vectorVarByKey = draftBoard.vectorVarByKeyRef.value
+        for (const varName of draftBoard.populatedVectorVarNamesSet) {
+          const value = vectorVarByKey[varName]
+          if (value === undefined) continue
+          board.value.vectorVars.set(varName, value)
+        }
+
+        appliedRevisionInfo.vectorVarsRevision = draftBoard.vectorVarsRevisionRef.value
+      }
+
+      if (appliedRevisionInfo.quatVarsRevision !== draftBoard.quatVarsRevisionRef.value) {
+        const quatVarByKey = draftBoard.quatVarByKeyRef.value
+        for (const varName of draftBoard.populatedQuatVarNamesSet) {
+          const value = quatVarByKey[varName]
+          if (value === undefined) continue
+          board.value.quatVars.set(varName, value)
+        }
+
+        appliedRevisionInfo.quatVarsRevision = draftBoard.quatVarsRevisionRef.value
+      }
+
+      if (appliedRevisionInfo.wrapperWeightsRevision !== draftBoard.wrapperWeightsRevisionRef.value) {
+        const wrapperWeightByKey = draftBoard.wrapperWeightByKeyRef.value
+        for (const varName of draftBoard.populatedWrapperWeightNamesSet) {
+          const value = wrapperWeightByKey[varName]
+          if (value === undefined) continue
+          board.value.setWrapperWeight(varName, value)
+        }
+
+        appliedRevisionInfo.wrapperWeightsRevision = draftBoard.wrapperWeightsRevisionRef.value
+        boardWrapperWeightsRevisionRef.value++
+      }
+
+      if (appliedRevisionInfo.tagValuesRevision !== draftBoard.tagValuesRevisionRef.value) {
+        const tagValueByKey = draftBoard.tagValueByKeyRef.value
+        for (const varName of draftBoard.populatedTagValueNamesSet) {
+          const value = tagValueByKey[varName]
+          if (value === undefined) continue
+          board.value.setTagValue(varName, value)
+        }
+
+        appliedRevisionInfo.tagValuesRevision = draftBoard.tagValuesRevisionRef.value
+      }
+
+      if (appliedRevisionInfo.entityTagsRevision !== draftBoard.entityTagsRevisionRef.value) {
+        const entityTagByKey = draftBoard.entityTagByKeyRef.value
+        for (const varName of draftBoard.populatedEntityTagNamesSet) {
+          const value = entityTagByKey[varName]
+          if (value === undefined) continue
+          board.value.setEntityTag(varName, value)
+        }
+
+        appliedRevisionInfo.entityTagsRevision = draftBoard.entityTagsRevisionRef.value
+        invalidateAllStaticSwitches()
+      }
     }
   }
 
@@ -1061,7 +1320,7 @@ export function useAnimgraphSim() {
   ): SimGraphUpdateSlotHost => {
     return {
       updateNested(slotName, updateInput) {
-        const simGraphRunner = runners.get(simGraphRunnerId)
+        const simGraphRunner = runnerIdToRunnerMap.get(simGraphRunnerId)
         if (!simGraphRunner) {
           console.warn(
             `[sim] sampleNested (slot="${slotName}") missing runner "${simGraphRunnerId}"`
@@ -1069,8 +1328,8 @@ export function useAnimgraphSim() {
           return
         }
 
-        const simGraphRunnerSlotDiagramId = simGraphRunner.getSlotDiagramId(slotName)
-        if (simGraphRunner.isSlotInitialized(slotName) && !simGraphRunnerSlotDiagramId) {
+        const simGraphRunnerSlot = simGraphRunner.getGraphSlot(slotName)
+        if (simGraphRunnerSlot && simGraphRunnerSlot.diagramLocked && !simGraphRunnerSlot.diagramId) {
           // Explicit None → passthrough (do not step a child graph).
           return
         }
@@ -1078,7 +1337,7 @@ export function useAnimgraphSim() {
         const slotSimGraphRunnerId = ensureSlotRunner(simGraphRunner, slotName)
         if (!slotSimGraphRunnerId || nestStack.includes(slotSimGraphRunnerId)) return
         
-        const slotSimGraphRunner = runners.get(slotSimGraphRunnerId)
+        const slotSimGraphRunner = runnerIdToRunnerMap.get(slotSimGraphRunnerId)
         if (!slotSimGraphRunner || !slotSimGraphRunner.diagramId) {
           console.warn('[sim] sampleNested: missing slot runner or runner is not bound to a diagram')
           return
@@ -1135,7 +1394,7 @@ export function useAnimgraphSim() {
   ): SimGraphSampleSlotHost => {
     return {
       sampleNested(slotName, sampleInput) {
-        const simGraphRunner = runners.get(simGraphRunnerId)
+        const simGraphRunner = runnerIdToRunnerMap.get(simGraphRunnerId)
         if (!simGraphRunner) {
           console.warn(
             `[sim] sampleNested (slot="${slotName}") missing runner "${simGraphRunnerId}"`
@@ -1143,8 +1402,8 @@ export function useAnimgraphSim() {
           return
         }
 
-        const simGraphRunnerSlotDiagramId = simGraphRunner.getSlotDiagramId(slotName)
-        if (simGraphRunner.isSlotInitialized(slotName) && !simGraphRunnerSlotDiagramId) {
+        const simGraphRunnerSlot = simGraphRunner.getGraphSlot(slotName)
+        if (simGraphRunnerSlot && simGraphRunnerSlot.diagramLocked && !simGraphRunnerSlot.diagramId) {
           // Explicit None → passthrough (do not step a child graph).
           return
         }
@@ -1152,7 +1411,7 @@ export function useAnimgraphSim() {
         const slotSimGraphRunnerId = ensureSlotRunner(simGraphRunner, slotName)
         if (!slotSimGraphRunnerId || nestStack.includes(slotSimGraphRunnerId)) return
         
-        const slotSimGraphRunner = runners.get(slotSimGraphRunnerId)
+        const slotSimGraphRunner = runnerIdToRunnerMap.get(slotSimGraphRunnerId)
         if (!slotSimGraphRunner || !slotSimGraphRunner.diagramId) {
           console.warn('[sim] sampleNested: missing slot runner or runner is not bound to a diagram')
           return
@@ -1175,62 +1434,43 @@ export function useAnimgraphSim() {
     }
   }
 
-  /** Live bridge: game `op:tick` drives publish (not raf). Enter via startLiveBridge before lines. */
-  const liveBridgeActive = ref(false)
+  const externalSimDriverRef = ref<SimExternalSimDriver | undefined>(undefined)
 
-  const setLiveBridgeActive = (on: boolean) => {
-    if (on === liveBridgeActive.value) {
-      syncLoop()
-      return
+  const acquireExternalSimDriver = (): SimExternalSimDriver | undefined => {
+    if (externalSimDriverRef.value) return
+    const driver: SimExternalSimDriver = {
+      activate: () => {
+        clock.value.reset()
+        board.value.clearAll()
+        for (const runner of runnerIdToRunnerMap.values()) runner.reset(board.value)
+        
+        active.value = true
+        clock.value.play()
+        _publish(0)
+        _syncLoop()
+      },
+      deactivate: () => {
+        active.value = false
+        clock.value.reset()
+        _publish(0)
+        _syncLoop()
+      },
+      tick: (dt: number, rawDt?: number) => {
+        clock.value.tickExternal(dt, rawDt)
+        _publish(dt, clock.value.lastRawDt)
+      }
     }
-    liveBridgeActive.value = on
-    if (on) {
-      // Clean slate before any game tick / sticky drafts.
-      clock.value.reset()
-      board.value.resetDynamics()
-      for (const runner of runners.values()) runner.reset()
-      featureDrafts.value = {}
-      vectorFeatureDrafts.value = {}
-      quatFeatureDrafts.value = {}
-      boolFeatureDrafts.value = {}
-      stringFeatureDrafts.value = {}
-      floatVarDrafts.value = {}
-      vectorVarDrafts.value = {}
-      quatVarDrafts.value = {}
-      boolVarDrafts.value = {}
-      intVarDrafts.value = {}
-      tagValueDrafts.value = {}
-      entityTagDrafts.value = {}
-      wrapperWeightDrafts.value = {}
-      active.value = true
-      clock.value.play()
-      syncPlaying()
-      publish(0)
-    } else {
-      clock.value.pause()
-      syncPlaying()
-    }
-    syncLoop()
+    externalSimDriverRef.value = driver
+    return driver
   }
 
-  const startLiveBridge = async () => {
-    setLiveBridgeActive(true)
-    return (await window.electronAPI?.liveBridgeStart()) ?? {
-      enabled: false,
-      connected: false,
-    }
+  const releaseExternalSimDriver = (driver: SimExternalSimDriver): boolean => {
+    if (externalSimDriverRef.value !== driver) return false
+    externalSimDriverRef.value = undefined
+    return true
   }
 
-  const stopLiveBridge = async () => {
-    const status = (await window.electronAPI?.liveBridgeStop()) ?? {
-      enabled: false,
-      connected: false,
-    }
-    setLiveBridgeActive(false)
-    return status
-  }
-
-  const publish = (dt: number, rawDt = dt) => {
+  const _publish = (dt: number, rawDt = dt) => {
     if (!active.value) return
 
     applyDraftsToBoard()
@@ -1240,11 +1480,11 @@ export function useAnimgraphSim() {
 
     const simGraphRunnerIdToSimSnapshot: Record<string, SimSnapshot> = {}
 
-    let rootSimGraphRunner = runners.get(ROOT_RUNNER_ID)
+    let rootSimGraphRunner = runnerIdToRunnerMap.get(ROOT_RUNNER_ID)
     if (!rootSimGraphRunner && !rootDetached) {
-      const rootDiagramId = resolveRootDiagramId(listDiagramIds.value)
-      if (rootDiagramId) {
-        rootSimGraphRunner = bindRunnerToDiagramId(ROOT_RUNNER_ID, rootDiagramId)
+      const rootDiagramId = getRootDiagramId()
+      if (rootDiagramId && listDiagramIds().includes(rootDiagramId)) {
+        rootSimGraphRunner = ensureDiagramRunner(ROOT_RUNNER_ID, rootDiagramId)
         materializeSlotTree(ROOT_RUNNER_ID)
       }
     }
@@ -1296,7 +1536,7 @@ export function useAnimgraphSim() {
     }
   }
 
-  const stopLoop = () => {
+  const _stopLoop = () => {
     if (raf) {
       cancelAnimationFrame(raf)
       raf = 0
@@ -1304,43 +1544,39 @@ export function useAnimgraphSim() {
     lastTs = 0
   }
 
-  const loop = (ts: number) => {
+  const _loop = (ts: number) => {
     if (!active.value || !clock.value.playing) {
       raf = 0
       lastTs = 0
       return
     }
-    raf = requestAnimationFrame(loop)
+    raf = requestAnimationFrame(_loop)
     if (!lastTs) lastTs = ts
     const wall = ts - lastTs
     lastTs = ts
     const dt = clock.value.tickWall(wall)
-    if (dt > 0) publish(dt, clock.value.lastRawDt)
+    if (dt > 0) _publish(dt, clock.value.lastRawDt)
   }
 
-  const syncLoop = () => {
-    syncPlaying()
-    // Live bridge: game sends op:tick — do not free-run raf (sticky deltas).
-    if (liveBridgeActive.value) {
-      enabled.value = active.value
-      stopLoop()
+  const _syncLoop = () => {
+    const nextLoopActive = active.value && 
+      clock.value.playing &&
+      !externalSimDriverRef.value
+    if (!nextLoopActive) {
+      _stopLoop()
       return
     }
-    const want = active.value && clock.value.playing
-    enabled.value = want
-    if (!want) {
-      stopLoop()
-      return
-    }
+
     if (!raf) {
       lastTs = 0
-      raf = requestAnimationFrame(loop)
+      raf = requestAnimationFrame(_loop)
     }
   }
 
   const rebind = () => {
-    const ids = listDiagramIds.value
-    const idSet = new Set(ids)
+    const diagramIds = listDiagramIds()
+    const diagramIdsSet = new Set(diagramIds)
+    
     // Snapshot topology before teardown (preserves rootDetached via serialize).
     const saved = serializeRunnerSlots()
 
@@ -1348,553 +1584,150 @@ export function useAnimgraphSim() {
     applyRunnerSlotsConfig(saved)
 
     // Invalidate slot→diagram bindings whose diagrams left the project.
-    for (const r of [...runners.values()]) {
-      if (r.diagramId && !idSet.has(r.diagramId)) {
-        destroyRunner(r.runnerId)
+    for (const simGraphRunner of [...runnerIdToRunnerMap.values()]) {
+      if (simGraphRunner.diagramId && !diagramIdsSet.has(simGraphRunner.diagramId)) {
+        destroyRunner(simGraphRunner.runnerId)
         continue
       }
-      for (const [slot, diag] of [...r.slotDiagramIds.entries()]) {
-        if (diag && !idSet.has(diag)) {
-          r.setSlotDiagramId(slot, null)
-          const childId = r.getSlotRunnerId(slot)
-          if (childId) destroyRunner(childId)
-          r.setSlotRunnerId(slot, null)
-        }
+
+      for (const slot of [...simGraphRunner.graphSlots()]) {
+        if (!slot.diagramId || !slot.runnerId) continue
+        if (diagramIdsSet.has(slot.diagramId)) continue
+
+        destroyRunner(slot.runnerId)
+        slot.runnerId = undefined
       }
     }
 
     clock.value.reset()
-    syncPlaying()
-    // Drafts mirror board (incl. compile-time feature seeds).
-    const drafts: Record<string, number> = {}
-    for (const f of discovered.value.features) {
-      drafts[featureKey(f.feature, f.property)] =
-        board.value.getFeature(f.feature, f.property) ?? 0
-    }
-    featureDrafts.value = drafts
-    const vecDrafts: Record<string, SimVec4> = {}
-    for (const f of discovered.value.vectorFeatures) {
-      vecDrafts[featureKey(f.feature, f.property)] =
-        board.value.getVectorFeature(f.feature, f.property) ?? { ...ZERO_VEC4 }
-    }
-    vectorFeatureDrafts.value = vecDrafts
-    const quatDrafts: Record<string, SimVec4> = {}
-    for (const f of discovered.value.quatFeatures) {
-      quatDrafts[featureKey(f.feature, f.property)] =
-        board.value.getQuatFeature(f.feature, f.property) ?? {
-          ...IDENTITY_QUAT_VEC4,
-        }
-    }
-    quatFeatureDrafts.value = quatDrafts
-    const boolDrafts: Record<string, boolean> = {}
-    for (const f of discovered.value.boolFeatures) {
-      boolDrafts[featureKey(f.feature, f.property)] =
-        board.value.getBoolFeature(f.feature, f.property) ?? false
-    }
-    boolFeatureDrafts.value = boolDrafts
-    const stringDrafts: Record<string, string> = {}
-    for (const f of discovered.value.stringFeatures) {
-      stringDrafts[featureKey(f.feature, f.property)] =
-        board.value.getStringFeature(f.feature, f.property) ?? ''
-    }
-    stringFeatureDrafts.value = stringDrafts
-    floatVarDrafts.value = {}
-    vectorVarDrafts.value = {}
-    quatVarDrafts.value = {}
-    boolVarDrafts.value = {}
-    intVarDrafts.value = {}
-    tagValueDrafts.value = {}
-    // entityTagDrafts are project resources — kept across rebind (like clip/anim DB).
-    wrapperWeightDrafts.value = {}
+
     snapshotsByRunner.value = {}
     bumpRunners()
-    publish(0)
-    syncLoop()
+    _publish(0)
+    _syncLoop()
   }
 
-  // Project replace / diagram add-remove — full rebind. Soft diagram switch does not.
-  watch(
-    () => projectRef.value,
-    () => {
-      rebind()
-    },
-    { immediate: true }
-  )
-
   const dispose = () => {
-    stopLoop()
+    _stopLoop()
   }
 
   const play = () => {
+    if (externalSimDriverRef.value) {
+      return
+    }
+
     clock.value.play()
-    syncPlaying()
-    publish(0)
-    syncLoop()
+    _publish(0)
+    _syncLoop()
   }
+  
   const pause = () => {
+    if (externalSimDriverRef.value) {
+      return
+    }
+
     clock.value.pause()
-    syncPlaying()
-    publish(0)
-    syncLoop()
+    _publish(0)
+    _syncLoop()
   }
+
   const toggle = () => {
+    if (externalSimDriverRef.value) {
+      return
+    }
+
     clock.value.toggle()
-    syncPlaying()
-    publish(0)
-    syncLoop()
+    _publish(0)
+    _syncLoop()
   }
+
   const step = () => {
+    if (externalSimDriverRef.value) {
+      return
+    }
+
     const dt = clock.value.step()
-    publish(dt, clock.value.lastRawDt)
+    _publish(dt, clock.value.lastRawDt)
   }
+
+  const update = () => {
+    if (externalSimDriverRef.value) {
+      return
+    }
+
+    _publish(0)
+  }
+
   const reset = () => {
+    if (externalSimDriverRef.value) {
+      return
+    }
+
     clock.value.reset()
-    syncPlaying()
     board.value.resetDynamics()
-    for (const runner of runners.values()) runner.reset()
-    publish(0)
-    syncLoop()
+    for (const runner of runnerIdToRunnerMap.values()) runner.reset(board.value)
+    _publish(0)
+    _syncLoop()
   }
 
   const activate = () => {
+    if (externalSimDriverRef.value) {
+      return
+    }
+
     active.value = true
-    publish(0)
-    syncLoop()
+    _publish(0)
+    _syncLoop()
   }
+
   const deactivate = () => {
+    if (externalSimDriverRef.value) {
+      return
+    }
+
     active.value = false
     clock.value.pause()
-    syncPlaying()
-    syncLoop()
-  }
-  const toggleActive = () => {
-    if (active.value) deactivate()
-    else activate()
+    _syncLoop()
   }
 
-  // @TODO decouple from snapshot
-  const setSpeed = (s: number) => {
-    clock.value.setSpeed(s)
-    const nextSnaps: Record<string, SimSnapshot> = { ...snapshotsByRunner.value }
-    for (const [id, snap] of Object.entries(nextSnaps)) {
-      nextSnaps[id] = {
-        ...snap,
-        speed: clock.value.speed,
-      }
+  const toggleActivation = () => {
+    if (active.value) {
+      deactivate()
+    } else {
+      activate()
     }
-    snapshotsByRunner.value = nextSnaps
   }
 
-  const fireExternal = (name?: string) => {
-    const n = (name ?? eventDraft.value).trim()
-    if (!n) return
-    board.value.fireExternalEvent(n)
-    publish(0)
+  const setSpeed = (s: number) => {
+    if (externalSimDriverRef.value) {
+      return
+    }
+
+    clock.value.setSpeed(s)
   }
 
-  const fireAnimEvent = (name?: string, value?: number) => {
-    const n = (name ?? eventDraft.value).trim()
-    if (!n) return
+  const fireExternal = (eventName: string) => {
+    if (!eventName) return
+    board.value.fireExternalEvent(eventName)
+    _publish(0)
+  }
+
+  const fireAnimEvent = (eventName: string, value?: number) => {
+    if (!eventName) return
     board.value.injectAnimEventNow(
-      n,
+      eventName,
       value !== undefined && Number.isFinite(value) ? value : undefined
     )
-    publish(0)
+    _publish(0)
   }
 
-  const fireAnimEnd = (name?: string) => {
-    const n = (name ?? eventDraft.value).trim()
-    board.value.fireAnimEnd(n || undefined)
-    publish(0)
-  }
-
-  const setFloatVar = (name: string, value: number) => {
-    const n = Number(value)
-    if (!name || !Number.isFinite(n)) return
-    floatVarDrafts.value = { ...floatVarDrafts.value, [name]: n }
-    board.value.floatVars.set(name, n)
-    publish(0)
-  }
-
-  const draftVectorVarValue = (name: string): SimVec4 => {
-    if (!name) return { ...ZERO_VEC4 }
-    const direct = vectorVarDrafts.value[name]
-    if (direct) return { ...direct }
-    const want = name.toLowerCase()
-    for (const [k, v] of Object.entries(vectorVarDrafts.value)) {
-      if (k.toLowerCase() === want) return { ...v }
-    }
-    return { ...ZERO_VEC4 }
-  }
-
-  const setVectorVar = (name: string, value: SimVec4) => {
-    const trimmed = name.trim()
-    if (!trimmed) return
-    const v: SimVec4 = {
-      x: Number.isFinite(value.x) ? value.x : 0,
-      y: Number.isFinite(value.y) ? value.y : 0,
-      z: Number.isFinite(value.z) ? value.z : 0,
-      w: Number.isFinite(value.w) ? value.w : 0,
-    }
-    const next: Record<string, SimVec4> = { ...vectorVarDrafts.value }
-    const want = trimmed.toLowerCase()
-    for (const k of Object.keys(next)) {
-      if (k !== trimmed && k.toLowerCase() === want) delete next[k]
-    }
-    next[trimmed] = v
-    vectorVarDrafts.value = next
-    board.value.vectorVars.set(trimmed, v)
-    publish(0)
-  }
-
-  const setVectorVarAxis = (name: string, axis: keyof SimVec4, value: number) => {
-    const n = Number(value)
-    if (!Number.isFinite(n)) return
-    const cur = draftVectorVarValue(name)
-    setVectorVar(name, { ...cur, [axis]: n })
-  }
-
-  const draftQuatVarValue = (name: string): SimVec4 => {
-    if (!name) return { ...IDENTITY_QUAT_VEC4 }
-    const direct = quatVarDrafts.value[name]
-    if (direct) return { ...direct }
-    const want = name.toLowerCase()
-    for (const [k, v] of Object.entries(quatVarDrafts.value)) {
-      if (k.toLowerCase() === want) return { ...v }
-    }
-    return { ...IDENTITY_QUAT_VEC4 }
-  }
-
-  const setQuatVar = (name: string, value: SimVec4) => {
-    const trimmed = name.trim()
-    if (!trimmed) return
-    const v: SimVec4 = {
-      x: Number.isFinite(value.x) ? value.x : 0,
-      y: Number.isFinite(value.y) ? value.y : 0,
-      z: Number.isFinite(value.z) ? value.z : 0,
-      w: Number.isFinite(value.w) ? value.w : 1,
-    }
-    const next: Record<string, SimVec4> = { ...quatVarDrafts.value }
-    const want = trimmed.toLowerCase()
-    for (const k of Object.keys(next)) {
-      if (k !== trimmed && k.toLowerCase() === want) delete next[k]
-    }
-    next[trimmed] = v
-    quatVarDrafts.value = next
-    board.value.quatVars.set(trimmed, v)
-    publish(0)
-  }
-
-  const setQuatVarAxis = (name: string, axis: keyof SimVec4, value: number) => {
-    const n = Number(value)
-    if (!Number.isFinite(n)) return
-    const cur = draftQuatVarValue(name)
-    setQuatVar(name, { ...cur, [axis]: n })
-  }
-
-  const setBoolVar = (name: string, value: boolean) => {
-    const trimmed = name.trim()
-    if (!trimmed) return
-    boolVarDrafts.value = { ...boolVarDrafts.value, [trimmed]: value === true }
-    board.value.boolVars.set(trimmed, value === true)
-    publish(0)
-  }
-
-  const setIntVar = (name: string, value: number) => {
-    const n = Number(value)
-    if (!name || !Number.isFinite(n)) return
-    const rounded = Math.round(n)
-    intVarDrafts.value = { ...intVarDrafts.value, [name]: rounded }
-    board.value.intVars.set(name, rounded)
-    publish(0)
-  }
-
-  const setTagValue = (name: string, value: number) => {
-    const n = Number(value)
-    const trimmed = name.trim()
-    if (!trimmed || !Number.isFinite(n)) return
-    tagValueDrafts.value = { ...tagValueDrafts.value, [trimmed]: n }
-    board.value.setTagValue(trimmed, n)
-    publish(0)
-  }
-
-  const setWrapperWeight = (name: string, value: number) => {
-    const n = Number(value)
-    const trimmed = name.trim()
-    if (!trimmed || !Number.isFinite(n)) return
-    wrapperWeightDrafts.value = { ...wrapperWeightDrafts.value, [trimmed]: n }
-    board.value.setWrapperWeight(trimmed, n)
-    publish(0)
+  const fireAnimEnd = (eventName?: string) => {
+    board.value.fireAnimEnd(eventName || undefined)
+    _publish(0)
   }
 
   const invalidateAllStaticSwitches = () => {
-    for (const r of runners.values()) r.invalidateStaticSwitches()
-  }
-
-  const setEntityTag = (name: string, present: boolean) => {
-    const trimmed = name.trim()
-    if (!trimmed || trimmed === 'None') return
-    entityTagDrafts.value = { ...entityTagDrafts.value, [trimmed]: present === true }
-    board.value.setEntityTag(trimmed, present === true)
-    invalidateAllStaticSwitches()
-    publish(0)
-  }
-
-  const removeEntityTag = (name: string) => {
-    const trimmed = name.trim()
-    if (!trimmed) return
-    const next = { ...entityTagDrafts.value }
-    delete next[trimmed]
-    entityTagDrafts.value = next
-    board.value.setEntityTag(trimmed, false)
-    invalidateAllStaticSwitches()
-    publish(0)
-  }
-
-  /** Nested withBatch depth — publish only when outermost batch ends. */
-  let featureBatchDepth = 0
-
-  const withFeatureBatch = (fn: () => void) => {
-    featureBatchDepth++
-    try {
-      fn()
-    } finally {
-      featureBatchDepth--
-      if (featureBatchDepth === 0) publish(0)
-    }
-  }
-
-  const publishFeatureUnlessBatch = () => {
-    if (featureBatchDepth === 0) publish(0)
-  }
-
-  const setFeature = (feature: string, property: string, value: number) => {
-    const n = Number(value)
-    if (!feature || !property || !Number.isFinite(n)) return
-    const key = featureKey(feature, property)
-    const next: Record<string, number> = { ...featureDrafts.value }
-    const want = `${feature}.${property}`.toLowerCase()
-    for (const k of Object.keys(next)) {
-      if (k === key) continue
-      if (k.includes('\0')) {
-        const sep = k.indexOf('\0')
-        const label = `${k.slice(0, sep)}.${k.slice(sep + 1)}`.toLowerCase()
-        if (label === want) delete next[k]
-      } else if (k.toLowerCase() === want) {
-        delete next[k]
-      }
-    }
-    next[key] = n
-    featureDrafts.value = next
-    board.value.setFeature(feature, property, n)
-    publishFeatureUnlessBatch()
-  }
-
-  const draftFeatureValue = (feature: string, property: string) => {
-    const key = featureKey(feature, property)
-    if (key in featureDrafts.value) return featureDrafts.value[key] ?? 0
-    const want = `${feature}.${property}`.toLowerCase()
-    for (const [k, v] of Object.entries(featureDrafts.value)) {
-      if (k.toLowerCase() === want) return v
-    }
-    return 0
-  }
-
-  const draftVectorFeatureValue = (feature: string, property: string): SimVec4 => {
-    const key = featureKey(feature, property)
-    const direct = vectorFeatureDrafts.value[key]
-    if (direct) return { ...direct }
-    const want = `${feature}.${property}`.toLowerCase()
-    for (const [k, v] of Object.entries(vectorFeatureDrafts.value)) {
-      if (k.toLowerCase() === want) return { ...v }
-    }
-    return { ...ZERO_VEC4 }
-  }
-
-  const draftBoolFeatureValue = (feature: string, property: string): boolean => {
-    const key = featureKey(feature, property)
-    if (key in boolFeatureDrafts.value) return boolFeatureDrafts.value[key] === true
-    const want = `${feature}.${property}`.toLowerCase()
-    for (const [k, v] of Object.entries(boolFeatureDrafts.value)) {
-      if (k.toLowerCase() === want) return v === true
-    }
-    return false
-  }
-
-  const setBoolFeature = (feature: string, property: string, value: boolean) => {
-    if (!feature || !property) return
-    const key = featureKey(feature, property)
-    const next: Record<string, boolean> = { ...boolFeatureDrafts.value }
-    const want = `${feature}.${property}`.toLowerCase()
-    for (const k of Object.keys(next)) {
-      if (k === key) continue
-      if (k.includes('\0')) {
-        const sep = k.indexOf('\0')
-        const label = `${k.slice(0, sep)}.${k.slice(sep + 1)}`.toLowerCase()
-        if (label === want) delete next[k]
-      } else if (k.toLowerCase() === want) {
-        delete next[k]
-      }
-    }
-    next[key] = value === true
-    boolFeatureDrafts.value = next
-    board.value.setBoolFeature(feature, property, value === true)
-    publishFeatureUnlessBatch()
-  }
-
-  const draftStringFeatureValue = (feature: string, property: string): string => {
-    const key = featureKey(feature, property)
-    if (key in stringFeatureDrafts.value) return stringFeatureDrafts.value[key] ?? ''
-    const want = `${feature}.${property}`.toLowerCase()
-    for (const [k, v] of Object.entries(stringFeatureDrafts.value)) {
-      if (k.toLowerCase() === want) return v
-    }
-    return ''
-  }
-
-  const setStringFeature = (feature: string, property: string, value: string) => {
-    if (!feature || !property) return
-    const key = featureKey(feature, property)
-    const next: Record<string, string> = { ...stringFeatureDrafts.value }
-    const want = `${feature}.${property}`.toLowerCase()
-    for (const k of Object.keys(next)) {
-      if (k === key) continue
-      if (k.includes('\0')) {
-        const sep = k.indexOf('\0')
-        const label = `${k.slice(0, sep)}.${k.slice(sep + 1)}`.toLowerCase()
-        if (label === want) delete next[k]
-      } else if (k.toLowerCase() === want) {
-        delete next[k]
-      }
-    }
-    next[key] = value ?? ''
-    stringFeatureDrafts.value = next
-    board.value.setStringFeature(feature, property, value ?? '')
-    publishFeatureUnlessBatch()
-  }
-
-  const getFeature = (feature: string, property: string): number | undefined => {
-    const key = featureKey(feature, property)
-    if (key in featureDrafts.value) {
-      const n = Number(featureDrafts.value[key])
-      return Number.isFinite(n) ? n : undefined
-    }
-    return board.value.getFeature(feature, property)
-  }
-
-  const getBoolFeature = (feature: string, property: string): boolean | undefined => {
-    const key = featureKey(feature, property)
-    if (key in boolFeatureDrafts.value) return boolFeatureDrafts.value[key] === true
-    return board.value.getBoolFeature(feature, property)
-  }
-
-  const getStringFeature = (feature: string, property: string): string | undefined => {
-    const key = featureKey(feature, property)
-    if (key in stringFeatureDrafts.value) return stringFeatureDrafts.value[key]
-    return board.value.getStringFeature(feature, property)
-  }
-
-  const getVectorFeature = (feature: string, property: string): SimVec4 | undefined => {
-    const key = featureKey(feature, property)
-    const direct = vectorFeatureDrafts.value[key]
-    if (direct) return { ...direct }
-    return board.value.getVectorFeature(feature, property)
-  }
-
-  const getQuatFeature = (feature: string, property: string): SimVec4 | undefined => {
-    const key = featureKey(feature, property)
-    const direct = quatFeatureDrafts.value[key]
-    if (direct) return { ...direct }
-    return board.value.getQuatFeature(feature, property)
-  }
-
-  const setVectorFeature = (feature: string, property: string, value: SimVec4) => {
-    if (!feature || !property) return
-    const key = featureKey(feature, property)
-    const next: Record<string, SimVec4> = { ...vectorFeatureDrafts.value }
-    const want = `${feature}.${property}`.toLowerCase()
-    for (const k of Object.keys(next)) {
-      if (k === key) continue
-      if (k.includes('\0')) {
-        const sep = k.indexOf('\0')
-        const label = `${k.slice(0, sep)}.${k.slice(sep + 1)}`.toLowerCase()
-        if (label === want) delete next[k]
-      } else if (k.toLowerCase() === want) {
-        delete next[k]
-      }
-    }
-    const v: SimVec4 = {
-      x: Number.isFinite(value.x) ? value.x : 0,
-      y: Number.isFinite(value.y) ? value.y : 0,
-      z: Number.isFinite(value.z) ? value.z : 0,
-      w: Number.isFinite(value.w) ? value.w : 0,
-    }
-    next[key] = v
-    vectorFeatureDrafts.value = next
-    board.value.setVectorFeature(feature, property, v)
-    publishFeatureUnlessBatch()
-  }
-
-  const setVectorFeatureAxis = (
-    feature: string,
-    property: string,
-    axis: keyof SimVec4,
-    value: number
-  ) => {
-    const n = Number(value)
-    if (!Number.isFinite(n)) return
-    const cur = draftVectorFeatureValue(feature, property)
-    setVectorFeature(feature, property, { ...cur, [axis]: n })
-  }
-
-  const draftQuatFeatureValue = (feature: string, property: string): SimVec4 => {
-    const key = featureKey(feature, property)
-    const direct = quatFeatureDrafts.value[key]
-    if (direct) return { ...direct }
-    const want = `${feature}.${property}`.toLowerCase()
-    for (const [k, v] of Object.entries(quatFeatureDrafts.value)) {
-      if (k.toLowerCase() === want) return { ...v }
-    }
-    return { ...IDENTITY_QUAT_VEC4 }
-  }
-
-  const setQuatFeature = (feature: string, property: string, value: SimVec4) => {
-    if (!feature || !property) return
-    const key = featureKey(feature, property)
-    const next: Record<string, SimVec4> = { ...quatFeatureDrafts.value }
-    const want = `${feature}.${property}`.toLowerCase()
-    for (const k of Object.keys(next)) {
-      if (k === key) continue
-      if (k.includes('\0')) {
-        const sep = k.indexOf('\0')
-        const label = `${k.slice(0, sep)}.${k.slice(sep + 1)}`.toLowerCase()
-        if (label === want) delete next[k]
-      } else if (k.toLowerCase() === want) {
-        delete next[k]
-      }
-    }
-    const v: SimVec4 = {
-      x: Number.isFinite(value.x) ? value.x : 0,
-      y: Number.isFinite(value.y) ? value.y : 0,
-      z: Number.isFinite(value.z) ? value.z : 0,
-      w: Number.isFinite(value.w) ? value.w : 1,
-    }
-    next[key] = v
-    quatFeatureDrafts.value = next
-    board.value.setQuatFeature(feature, property, v)
-    publishFeatureUnlessBatch()
-  }
-
-  const setQuatFeatureAxis = (
-    feature: string,
-    property: string,
-    axis: keyof SimVec4,
-    value: number
-  ) => {
-    const n = Number(value)
-    if (!Number.isFinite(n)) return
-    const cur = draftQuatFeatureValue(feature, property)
-    setQuatFeature(feature, property, { ...cur, [axis]: n })
+    for (const r of runnerIdToRunnerMap.values()) r.invalidateStaticSwitches()
   }
 
   const loadAnimsetJson = (
@@ -1902,37 +1735,29 @@ export function useAnimgraphSim() {
     sourceLabel?: string,
     options?: { priority?: number; variableNames?: string[] }
   ) => {
-    const result = loadAnimsJsonIntoLibrary(clipLibrary.value, json, sourceLabel, {
+    const result = loadAnimsJsonIntoLibrary(clipLibraryRef.value, json, sourceLabel, {
       priority: options?.priority ?? DEFAULT_ANIM_SETUP_PRIORITY,
       variableNames: options?.variableNames,
     })
     bumpClips()
-    if (options?.variableNames?.length) {
-      const next = { ...wrapperWeightDrafts.value }
-      for (const name of options.variableNames) {
-        const t = name.trim()
-        if (t && !(t in next)) next[t] = 0
-      }
-      wrapperWeightDrafts.value = next
-    }
-    publish(0)
+    _publish(0)
     return result
   }
 
   const loadClipLibraryJson = (json: unknown, sourceLabel?: string): number => {
-    const n = loadCompactClipLibraryJson(clipLibrary.value, json, sourceLabel)
+    const n = loadCompactClipLibraryJson(clipLibraryRef.value, json, sourceLabel)
     bumpClips()
-    publish(0)
+    _publish(0)
     return n
   }
 
   const clearClipLibrary = () => {
-    clipLibrary.value.clear()
+    clipLibraryRef.value.clear()
     clipPoseLibrary.value.clear()
     bumpClips()
     bumpClipPose()
     syncSampleResourcesToRunners()
-    publish(0)
+    _publish(0)
   }
 
   const loadAnimsetGlb = async (
@@ -1944,7 +1769,7 @@ export function useAnimgraphSim() {
       console.warn('loadAnimsetGlb requires setupEntryId')
       return 0
     }
-    const entry = clipLibrary.value.getEntry(setupEntryId)
+    const entry = clipLibraryRef.value.getEntry(setupEntryId)
     if (!entry) {
       console.warn('loadAnimsetGlb: unknown setupEntryId', setupEntryId)
       return 0
@@ -1952,47 +1777,47 @@ export function useAnimgraphSim() {
     if (entry.poseSetId) {
       clipPoseLibrary.value.remove(entry.poseSetId)
     }
-    const typesFromJson = clipLibrary.value.getAnimationTypesForEntry(setupEntryId)
+    const typesFromJson = clipLibraryRef.value.getAnimationTypesForEntry(setupEntryId)
     const { id: poseId, animCount } = clipPoseLibrary.value.loadGlb(
       buffer,
       sourceLabel,
       typesFromJson
     )
-    clipLibrary.value.setEntryPoseSetId(setupEntryId, poseId)
+    clipLibraryRef.value.setEntryPoseSetId(setupEntryId, poseId)
     bumpClips()
     bumpClipPose()
     syncSampleResourcesToRunners()
-    publish(0)
+    _publish(0)
     return animCount
   }
 
   const clearAnimsetGlb = (setupEntryId: string) => {
-    const entry = clipLibrary.value.getEntry(setupEntryId)
+    const entry = clipLibraryRef.value.getEntry(setupEntryId)
     if (!entry?.poseSetId) return
     clipPoseLibrary.value.remove(entry.poseSetId)
-    clipLibrary.value.setEntryPoseSetId(setupEntryId, null)
+    clipLibraryRef.value.setEntryPoseSetId(setupEntryId, null)
     bumpClips()
     bumpClipPose()
     syncSampleResourcesToRunners()
-    publish(0)
+    _publish(0)
   }
 
   const clearClipPoseLibrary = () => {
     clipPoseLibrary.value.clear()
-    for (const e of clipLibrary.value.listEntries()) {
-      if (e.poseSetId) clipLibrary.value.setEntryPoseSetId(e.id, null)
+    for (const e of clipLibraryRef.value.listEntries()) {
+      if (e.poseSetId) clipLibraryRef.value.setEntryPoseSetId(e.id, null)
     }
     bumpClips()
     bumpClipPose()
     syncSampleResourcesToRunners()
-    publish(0)
+    _publish(0)
   }
 
   const loadRigJson = (json: unknown, sourceLabel?: string): string => {
     const id = rigLibrary.value.addFromJson(json, sourceLabel || 'rig')
     bumpRigs()
     syncSampleResourcesToRunners()
-    publish(0)
+    _publish(0)
     return id
   }
 
@@ -2000,54 +1825,54 @@ export function useAnimgraphSim() {
     if (!rigLibrary.value.remove(id)) return
     bumpRigs()
     syncSampleResourcesToRunners()
-    publish(0)
+    _publish(0)
   }
 
   const setActiveRig = (id: string | null) => {
     if (!rigLibrary.value.setActive(id)) return
     bumpRigs()
     syncSampleResourcesToRunners()
-    publish(0)
+    _publish(0)
   }
 
   const clearRigLibrary = () => {
     rigLibrary.value.clear()
     bumpRigs()
     syncSampleResourcesToRunners()
-    publish(0)
+    _publish(0)
   }
 
   const setStackCaptureHandleIds = (ids: string[]) => {
     const cleaned = ids.map((id) => id.trim()).filter(Boolean)
     stackCaptureHandleIds.value = cleaned
-    for (const runner of runners.values()) {
+    for (const runner of runnerIdToRunnerMap.values()) {
       // Only capture on diagrams that own the handle (avoid ranged looking for player_base ids).
       runner.setStackCaptureHandleIds(cleaned.filter((id) => runner.hasHandle(id)))
     }
-    publish(0)
+    _publish(0)
   }
 
   const setSampleWarningsEnabled = (on: boolean) => {
     sampleWarningsEnabled.value = on
-    for (const runner of runners.values()) {
+    for (const runner of runnerIdToRunnerMap.values()) {
       runner.sampleWarningsEnabled = on
     }
-    publish(0)
+    _publish(0)
   }
 
   const setUpdateWarningsEnabled = (on: boolean) => {
     updateWarningsEnabled.value = on
-    for (const runner of runners.values()) {
+    for (const runner of runnerIdToRunnerMap.values()) {
       runner.updateWarningsEnabled = on
     }
-    publish(0)
+    _publish(0)
   }
 
   const resolveRunnerPose = (
     runnerId: string,
     poseRef: DerivedPoseRef
   ): { pose: Pose | null; rig: RigEntry | null } => {
-    const runner = runners.get(runnerId)
+    const runner = runnerIdToRunnerMap.get(runnerId)
     if (!runner) return { pose: null, rig: null }
     const rig = runner.getActiveRig()
     if (poseRef === 'sample') {
@@ -2074,9 +1899,9 @@ export function useAnimgraphSim() {
   ): Readonly<DerivedPoseStats> => {
     const poseRef = opts.pose ?? 'sample'
     const poseGen = snap.poseGen
-    if (derivedPoseCacheGen !== poseGen) {
+    if (derivedPoseCachePoseGen !== poseGen) {
       derivedPoseCache.clear()
-      derivedPoseCacheGen = poseGen
+      derivedPoseCachePoseGen = poseGen
     }
     const key = `${poseGen}|${runnerId}|${poseRefKey(poseRef)}`
     let entry = derivedPoseCache.get(key)
@@ -2127,85 +1952,81 @@ export function useAnimgraphSim() {
       return ''
     }
     bumpAnimDb()
-    publish(0)
+    _publish(0)
     return db.pathKey
   }
 
   const loadAnimDatabaseLibraryJson = (json: object, sourceLabel?: string): number => {
     const n = loadCompactAnimDatabaseLibraryJson(animDbLibrary.value, json, sourceLabel)
     bumpAnimDb()
-    publish(0)
+    _publish(0)
     return n
   }
 
   const clearAnimDatabaseLibrary = () => {
     animDbLibrary.value.clear()
     bumpAnimDb()
-    publish(0)
+    _publish(0)
   }
 
   const removeAnimDatabase = (pathKey: string) => {
     if (!animDbLibrary.value.remove(pathKey)) return
     bumpAnimDb()
-    publish(0)
+    _publish(0)
   }
 
   const updateSetupEntry = (
     id: string,
     patch: { priority?: number; variableNames?: string[]; tags?: string[] }
   ) => {
-    if (!clipLibrary.value.updateEntry(id, patch)) return
-    if (patch.variableNames) {
-      const next = { ...wrapperWeightDrafts.value }
-      for (const name of patch.variableNames) {
-        if (name && !(name in next)) next[name] = 0
-      }
-      wrapperWeightDrafts.value = next
-    }
+    if (!clipLibraryRef.value.updateEntry(id, patch)) return
     bumpClips()
-    publish(0)
+    _publish(0)
   }
 
   const removeSetupEntry = (id: string) => {
-    const entry = clipLibrary.value.getEntry(id)
+    const entry = clipLibraryRef.value.getEntry(id)
     if (entry?.poseSetId) {
       clipPoseLibrary.value.remove(entry.poseSetId)
     }
-    if (!clipLibrary.value.removeEntry(id)) return
+    if (!clipLibraryRef.value.removeEntry(id)) return
     bumpClips()
     bumpClipPose()
     syncSampleResourcesToRunners()
-    publish(0)
+    _publish(0)
   }
 
   const getClip = (name: string): ClipMeta | undefined => {
-    void clipLibraryRevision.value
-    void wrapperWeightDrafts.value
-    return clipLibrary.value.resolveClip(name, isWrapperActive)
+    void clipLibraryRevisionRef.value
+    void boardWrapperWeightsRevisionRef.value
+    return clipLibraryRef.value.resolveClip(name, isWrapperActive)
   }
 
   const lookupClip = (name: string): ClipMeta | undefined => {
-    void clipLibraryRevision.value
-    return clipLibrary.value.lookup(name)
+    void clipLibraryRevisionRef.value
+    return clipLibraryRef.value.lookup(name)
   }
 
   const getClipInEntry = (name: string, entryId: string): ClipMeta | undefined => {
-    void clipLibraryRevision.value
-    return clipLibrary.value.getClipInEntry(name, entryId)
+    void clipLibraryRevisionRef.value
+    return clipLibraryRef.value.getClipInEntry(name, entryId)
   }
 
   const isClipActive = (name: string): boolean => getClip(name) !== undefined
 
   const listClipSets = (name: string): ClipSetMembership[] => {
-    void clipLibraryRevision.value
-    void wrapperWeightDrafts.value
-    return clipLibrary.value.entriesContainingClip(name, isWrapperActive)
+    void clipLibraryRevisionRef.value
+    void boardWrapperWeightsRevisionRef.value
+    return clipLibraryRef.value.entriesContainingClip(name, isWrapperActive)
   }
 
-  const exportCompactClipLibrary = () => clipLibraryToCompactJson(clipLibrary.value)
+  const exportCompactClipLibrary = () => {
+    return clipLibraryToCompactJson(clipLibraryRef.value)
+  }
 
-  const exportCompactAnimDatabaseLibrary = () =>
-    animDatabaseLibraryToCompactJson(animDbLibrary.value)
+  const exportCompactAnimDatabaseLibrary = () => {
+    return animDatabaseLibraryToCompactJson(animDbLibrary.value)
+  }
 
   // function decls so rebind()'s immediate project watch can call them (hoisted).
   // Pair: rewriteRunnerSlotsDiagramIds (module export) rewrites this JSON shape.
@@ -2218,40 +2039,45 @@ export function useAnimgraphSim() {
       }
     }
 
-    const rootRunner = runners.get(ROOT_RUNNER_ID)
+    const rootRunner = runnerIdToRunnerMap.get(ROOT_RUNNER_ID)
     if (!rootRunner || !rootRunner.diagramId) {
       return undefined
     }
 
     const onlyRootDefault =
-      runners.size <= 1 &&
-      rootRunner.slotInitialized.size === 0 &&
-      rootRunner.slotDiagramIds.size === 0 &&
-      rootRunner.slotRunnerIds.size === 0 &&
-      rootRunner.diagramId === resolveRootDiagramId(listDiagramIds.value)
+      runnerIdToRunnerMap.size <= 1 &&
+      rootRunner.diagramId === getRootDiagramId() &&
+      rootRunner.haveLockedGraphSlots() === false
     if (onlyRootDefault) return undefined
 
     // Map holds only live bound runners — no reachability walk needed.
     const runnersJson: SimRunnerSlotsConfigJson['runners'] = {}
-    for (const [runnerId, runner] of runners) {
+    for (const [runnerId, runner] of runnerIdToRunnerMap) {
       if (!runner.diagramId) continue
-      
+
+      const slotBySlotName: Partial<Record<string, SimRunnerSlotsConfigJsonSlotItem>> = {}
+      for (const slot of runner.graphSlots()) {
+        if (!slot.diagramLocked) continue
+        slotBySlotName[slot.slotName] = {
+          diagramId: slot.diagramId,
+          runnerId: slot.runnerId,
+        }
+      }
+
       runnersJson[runnerId] = {
         diagramId: runner.diagramId,
-        slotInitialized: [...runner.slotInitialized],
-        slotDiagramIds: Object.fromEntries(runner.slotDiagramIds),
-        slotRunnerIds: Object.fromEntries(runner.slotRunnerIds),
+        slotBySlotName,
       }
     }
     return { rootRunnerId: ROOT_RUNNER_ID, runners: runnersJson }
   }
 
   function applyRunnerSlotsConfig(cfg: SimRunnerSlotsConfigJson | null | undefined) {
-    for (const id of [...runners.keys()]) destroyRunner(id)
-    nextSlotRunnerSeq = 1
+    for (const id of [...runnerIdToRunnerMap.keys()]) destroyRunner(id)
+    
     rootDetached = false
-    const projectDiagramIds = listDiagramIds.value
-    const projectDiagramIdsSet = new Set(projectDiagramIds)
+    const diagramIds = listDiagramIds()
+    const diagramIdsSet = new Set(diagramIds)
 
     if (cfg?.rootDetached === true) {
       rootDetached = true
@@ -2260,9 +2086,9 @@ export function useAnimgraphSim() {
     }
 
     if (!cfg?.runners || typeof cfg.runners !== 'object') {
-      const rootDiagramId = resolveRootDiagramId(projectDiagramIds)
-      if (rootDiagramId) {
-        bindRunnerToDiagramId(ROOT_RUNNER_ID, rootDiagramId)
+      const rootDiagramId = getRootDiagramId()
+      if (rootDiagramId && diagramIdsSet.has(rootDiagramId)) {
+        ensureDiagramRunner(ROOT_RUNNER_ID, rootDiagramId)
         materializeSlotTree(ROOT_RUNNER_ID)
       }
       return
@@ -2276,30 +2102,17 @@ export function useAnimgraphSim() {
     const rootEntryDiagramId = rootEntry?.diagramId
     if (!rootEntry || 
       !rootEntryDiagramId || typeof rootEntryDiagramId !== 'string' || 
-      !projectDiagramIds.includes(rootEntryDiagramId)
+      !diagramIds.includes(rootEntryDiagramId)
     ) {
-      const rootDiagramId = resolveRootDiagramId(projectDiagramIds)
-      if (rootDiagramId) {
-        bindRunnerToDiagramId(ROOT_RUNNER_ID, rootDiagramId)
+      const rootDiagramId = getRootDiagramId()
+      if (rootDiagramId && diagramIdsSet.has(rootDiagramId)) {
+        ensureDiagramRunner(ROOT_RUNNER_ID, rootDiagramId)
         materializeSlotTree(ROOT_RUNNER_ID)
       }
       return
     }
-    
 
-    const rootDiagRaw =
-      typeof rootEntry?.diagramId === 'string' ? rootEntry.diagramId.trim() : ''
-    const rootDiag =
-      rootDiagRaw && projectDiagramIdsSet.has(rootDiagRaw)
-        ? rootDiagRaw
-        : resolveRootDiagramId(projectDiagramIds) ?? ''
-    if (!rootDiag) {
-      rootDetached = true
-      bumpRunners()
-      return
-    }
-
-    const rootSimGraphRunner = bindRunnerToDiagramId(ROOT_RUNNER_ID, rootEntryDiagramId)
+    const rootSimGraphRunner = ensureDiagramRunner(ROOT_RUNNER_ID, rootEntryDiagramId)
     if (!rootSimGraphRunner) {
       return
     }
@@ -2309,61 +2122,34 @@ export function useAnimgraphSim() {
       runnerId: string,
       entry: NonNullable<SimRunnerSlotsConfigJson['runners']>[string]
     ) => {
-      const simGraphRunner = runners.get(runnerId)
-      if (!simGraphRunner || !entry) return
+      const simGraphRunner = runnerIdToRunnerMap.get(runnerId)
+      if (!simGraphRunner || !entry || typeof entry.slotBySlotName !== 'object') return
 
-      if (entry.slotDiagramIds && typeof entry.slotDiagramIds === 'object') {
-        for (const [slotName, diagramId] of Object.entries(entry.slotDiagramIds)) {
-          const _slotName = slotName.trim()
-          if (!_slotName) continue
-          
-          const _diagramId = typeof diagramId === 'string' ? diagramId.trim() : undefined
-          if (!_diagramId || !projectDiagramIdsSet.has(_diagramId)) continue
+      for (const slotName in entry.slotBySlotName) {
+        const slot = entry.slotBySlotName[slotName]
+        if (!slot) continue
 
-          simGraphRunner.setSlotDiagramId(_slotName, _diagramId)
-        }
-      }
+        const _slotDiagramId = slot.diagramId && typeof slot.diagramId === 'string'
+          ? slot.diagramId.trim()
+          : undefined
+        if (_slotDiagramId && !diagramIdsSet.has(_slotDiagramId)) continue
 
-      if (Array.isArray(entry.slotInitialized)) {
-        for (const initializedSlotName of entry.slotInitialized) {
-          const _initializedSlotName = typeof initializedSlotName === 'string' 
-            ? initializedSlotName.trim() 
-            : undefined
-          if (!_initializedSlotName) continue
+        const _slotSimGraphRunnerId = slot.runnerId && typeof slot.runnerId === 'string'
+          ? slot.runnerId.trim()
+          : undefined
+        if (_slotSimGraphRunnerId && !cfg.runners[_slotSimGraphRunnerId]) continue
 
-          if (!simGraphRunner.isSlotInitialized(_initializedSlotName)) {
-            simGraphRunner.setSlotDiagramId(_initializedSlotName, null)
+        simGraphRunner.addGraphSlot(slotName, {
+          diagramId: _slotDiagramId,
+          diagramLocked: true,
+          runnerId: _slotSimGraphRunnerId,
+        })
+
+        if (_slotSimGraphRunnerId) {
+          if (_slotDiagramId) {
+            ensureDiagramRunner(_slotSimGraphRunnerId, _slotDiagramId)
           }
-        }
-      }
-
-      if (entry.slotRunnerIds && typeof entry.slotRunnerIds === 'object') {
-        for (const [slotName, slotSimGraphRunnerId] of Object.entries(entry.slotRunnerIds)) {
-          const _slotName = slotName.trim()
-          const _slotSimGraphRunnerId = typeof slotSimGraphRunnerId === 'string' 
-            ? slotSimGraphRunnerId.trim() 
-            : undefined
-          if (!_slotName || !_slotSimGraphRunnerId) continue
-
-          const slotRunnerEntry = cfg.runners[_slotSimGraphRunnerId]
-          if (!slotRunnerEntry) continue
-
-          const slotRunnerEntryDiagramId = typeof slotRunnerEntry.diagramId === 'string' 
-            ? slotRunnerEntry.diagramId.trim() 
-            : undefined
-          if (!slotRunnerEntryDiagramId || !projectDiagramIdsSet.has(slotRunnerEntryDiagramId)) continue
-
-          // @TODO not stable, use dedi
-          const m = /^s(\d+)$/.exec(_slotSimGraphRunnerId)
-          if (m) {
-            const n = Number(m[1])
-            if (Number.isFinite(n) && n >= nextSlotRunnerSeq) nextSlotRunnerSeq = n + 1
-          }
-
-          simGraphRunner.setSlotRunnerId(_slotName, _slotSimGraphRunnerId)
-          bindRunnerToDiagramId(_slotSimGraphRunnerId, slotRunnerEntryDiagramId)
-
-          applySimRunnerSlotsConfigEntry(_slotSimGraphRunnerId, slotRunnerEntry)
+          applySimRunnerSlotsConfigEntry(_slotSimGraphRunnerId, cfg.runners[_slotSimGraphRunnerId])
         }
       }
     }
@@ -2377,26 +2163,24 @@ export function useAnimgraphSim() {
   const getProjectSimResources = (opts?: { includeClipPoses?: boolean }) => {
     const includeClipPoses = opts?.includeClipPoses === true
     const clipSetup =
-      clipLibrary.value.entryCount > 0 ? clipLibraryToCompactJson(clipLibrary.value) : undefined
+      clipLibraryRef.value.entryCount > 0 ? clipLibraryToCompactJson(clipLibraryRef.value) : undefined
+    
     const animDatabaseLibrary =
       animDbLibrary.value.size > 0
         ? animDatabaseLibraryToCompactJson(animDbLibrary.value)
         : undefined
-    const entityTags =
-      Object.keys(entityTagDrafts.value).length > 0
-        ? { ...entityTagDrafts.value }
-        : undefined
-    const rigLibraryJson =
-      rigLibrary.value.size > 0 ? rigLibrary.value.toJson() : undefined
+    
+    const rigLibraryJson = rigLibrary.value.size > 0 ? rigLibrary.value.toJson() : undefined
+    
     const clipPoseLibraryJson = includeClipPoses
       ? getCachedClipPoseLibraryJson()
       : undefined
-    const hasPoses = clipPoseLibrary.value.size > 0
+    
+      const hasPoses = clipPoseLibrary.value.size > 0
     const runnerSlots = serializeRunnerSlots()
     if (
       clipSetup == null &&
       animDatabaseLibrary == null &&
-      entityTags == null &&
       (rigLibraryJson == null || !(rigLibraryJson.entries?.length > 0)) &&
       !hasPoses &&
       runnerSlots == null
@@ -2406,7 +2190,6 @@ export function useAnimgraphSim() {
     return {
       clipSetup,
       animDatabaseLibrary,
-      entityTags,
       rigLibrary: rigLibraryJson,
       clipPoseLibrary: clipPoseLibraryJson,
       clipPoseRevision: clipPoseRevision.value,
@@ -2418,24 +2201,21 @@ export function useAnimgraphSim() {
     resources: {
       clipSetup?: AnimClipSetupJson
       animDatabaseLibrary?: AnimDatabaseLibraryJson
-      entityTags?: Record<string, boolean>
       rigLibrary?: RigLibraryJson
       clipPoseLibrary?: ClipPoseLibraryJson
       runnerSlots?: SimRunnerSlotsConfigJson
     } | null
   ) => {
-    clipLibrary.value.clear()
-    animDbLibrary.value.clear()
-    clipPoseLibrary.value.clear()
-    rigLibrary.value.clear()
-    entityTagDrafts.value = {}
+    clipLibraryRef.value.clear()
     if (resources?.clipSetup != null) {
       try {
-        loadCompactClipLibraryJson(clipLibrary.value, resources.clipSetup, 'project')
+        loadCompactClipLibraryJson(clipLibraryRef.value, resources.clipSetup, 'project')
       } catch (err) {
         console.warn('Failed to restore project clipSetup', err)
       }
     }
+
+    animDbLibrary.value.clear()
     if (resources?.animDatabaseLibrary != null) {
       try {
         loadCompactAnimDatabaseLibraryJson(
@@ -2447,22 +2227,8 @@ export function useAnimgraphSim() {
         console.warn('Failed to restore project animDatabaseLibrary', err)
       }
     }
-    if (resources?.entityTags != null && typeof resources.entityTags === 'object') {
-      const next: Record<string, boolean> = {}
-      for (const [name, present] of Object.entries(resources.entityTags)) {
-        const trimmed = name.trim()
-        if (!trimmed || trimmed === 'None') continue
-        next[trimmed] = present === true
-      }
-      entityTagDrafts.value = next
-    }
-    if (resources?.rigLibrary != null) {
-      try {
-        rigLibrary.value.loadFromJson(resources.rigLibrary)
-      } catch (err) {
-        console.warn('Failed to restore project rigLibrary', err)
-      }
-    }
+
+    clipPoseLibrary.value.clear()
     if (resources?.clipPoseLibrary != null) {
       try {
         clipPoseLibrary.value.loadFromJson(resources.clipPoseLibrary)
@@ -2470,13 +2236,25 @@ export function useAnimgraphSim() {
         console.warn('Failed to restore project clipPoseLibrary', err)
       }
     }
-    // Drop dangling pose links (no migration from legacy setupEntryId).
-    for (const e of clipLibrary.value.listEntries()) {
-      if (e.poseSetId && !clipPoseLibrary.value.get(e.poseSetId)) {
-        clipLibrary.value.setEntryPoseSetId(e.id, null)
+
+    rigLibrary.value.clear()
+    if (resources?.rigLibrary != null) {
+      try {
+        rigLibrary.value.loadFromJson(resources.rigLibrary)
+      } catch (err) {
+        console.warn('Failed to restore project rigLibrary', err)
       }
     }
+
+    // Drop dangling pose links (no migration from legacy setupEntryId).
+    for (const e of clipLibraryRef.value.listEntries()) {
+      if (e.poseSetId && !clipPoseLibrary.value.get(e.poseSetId)) {
+        clipLibraryRef.value.setEntryPoseSetId(e.id, null)
+      }
+    }
+
     applyRunnerSlotsConfig(resources?.runnerSlots)
+
     bumpClips()
     bumpAnimDb()
     bumpRigs()
@@ -2499,323 +2277,109 @@ export function useAnimgraphSim() {
   }
 
   /**
+   * @TODO move out from composable to store?
    * Pooled pose + rig for skeleton viewport (not reactive — call each frame).
    * - full: root runner sampleOut
    * - selected: chosen runner sampleOut (`selectedRunnerId`)
-   * - atNode: Sample capture at selected handle (fallback → open/selected/full)
+   * - atNode: Sample capture at selected handle (no fallback)
    */
   const getSkeletonViewPose = (
     source: 'full' | 'selected' | 'atNode',
-    options?: {
+    options: {
       /** Prefer open diagram for atNode capture search / fallback. */
       activeDiagramId?: string | null
       /** Runner Sample out when source is `selected`. */
       selectedRunnerId?: string | null
-      /** @deprecated use selectedRunnerId */
-      selectedDiagramId?: string | null
       captureHandleId?: string | null
-    }
+    } = {}
   ): { pose: Pose; rig: RigEntry } | null => {
-    const pickRunner = (runnerId: string | null | undefined) => {
-      if (!runnerId) return null
-      const runner = runners.get(runnerId)
+    const outputFromRunner = (runner: SimGraphRunner | null | undefined) => {
       if (!runner) return null
       const rig = runner.getActiveRig() ?? rigLibrary.value.getActive()
       const pose = runner.getSampledPose()
-      if (!rig || !pose) return null
+      return rig && pose ? { pose, rig } : null
+    }
+
+    const resolveRunner = (
+      runnerId: string | null | undefined,
+      diagramId: string | null | undefined,
+    ) => {
+      const runnerFromId = runnerId ? runnerIdToRunnerMap.get(runnerId) : null
+      if (runnerFromId) {
+        return runnerFromId
+      }
+      if (diagramId) {
+        return findRunnerByDiagramId(diagramId)
+      }
+      return null
+    }
+
+    if (source === 'full') {
+      return outputFromRunner(resolveRunner(ROOT_RUNNER_ID, null))
+    }
+
+    if (source === 'selected') {
+      return outputFromRunner(resolveRunner(options.selectedRunnerId, options.activeDiagramId))
+    }
+
+    if (source === 'atNode') {
+      if (!options.captureHandleId) {
+        return null
+      }
+
+      const runner = resolveRunner(options.selectedRunnerId, options.activeDiagramId)
+      if (!runner) {
+        return null
+      }
+
+      const pose = runner.getCapturedPose(options.captureHandleId)
+      const rig = runner.getActiveRig() ?? rigLibrary.value.getActive()
+      if (!pose || !rig) {
+        return null
+      }
       return { pose, rig }
     }
-    const pickByDiagram = (diagramId: string | null | undefined) => {
-      if (!diagramId) return null
-      const runner = findRunnerByDiagramId(diagramId)
-      return runner ? pickRunner(runner.runnerId) : null
-    }
 
-    const rootId = ROOT_RUNNER_ID
-    const openDiagramId =
-      options?.activeDiagramId ?? activeDiagramId.value ?? runners.get(rootId)?.diagramId
-    const selectedRunnerId =
-      options?.selectedRunnerId ||
-      (options?.selectedDiagramId
-        ? findRunnerByDiagramId(options.selectedDiagramId)?.runnerId
-        : null) ||
-      rootId
-
-    if (source === 'full') return pickRunner(rootId)
-
-    if (source === 'selected') return pickRunner(selectedRunnerId)
-
-    // atNode — prefer explicit runner (filtered to node’s diagram in UI).
-    const atRunnerId = options?.selectedRunnerId?.trim() || null
-    const hid = options?.captureHandleId?.trim()
-    if (hid) {
-      const tryCaptureOnRunner = (runner: SimGraphRunner | null | undefined) => {
-        if (!runner) return null
-        const pose = runner.getCapturedPose(hid)
-        const rig = runner.getActiveRig() ?? rigLibrary.value.getActive()
-        if (!pose || !rig) return null
-        return { pose, rig }
-      }
-      if (atRunnerId) {
-        const hit = tryCaptureOnRunner(runners.get(atRunnerId))
-        if (hit) {
-          if (isSimSampleLogEnabled()) {
-            console.log(
-              `[sim-sample] viewport atNode=${hid} source=capture runner=${atRunnerId}`
-            )
-          }
-          return hit
-        }
-      }
-      const fromOpen = tryCaptureOnRunner(
-        openDiagramId ? findRunnerByDiagramId(openDiagramId) : runners.get(rootId)
-      )
-      if (fromOpen) {
-        if (isSimSampleLogEnabled()) {
-          console.log(`[sim-sample] viewport atNode=${hid} source=capture diagram=${openDiagramId}`)
-        }
-        return fromOpen
-      }
-      for (const runner of runners.values()) {
-        const hit = tryCaptureOnRunner(runner)
-        if (hit) {
-          if (isSimSampleLogEnabled()) {
-            console.log(
-              `[sim-sample] viewport atNode=${hid} source=capture diagram=${runner.diagramId} runner=${runner.runnerId}`
-            )
-          }
-          return hit
-        }
-      }
-      if (isSimSampleLogEnabled()) {
-        console.log(
-          `[sim-sample] viewport atNode=${hid} source=FALLBACK-sampleOut open=${openDiagramId} root=${rootId}`
-        )
-      }
-    }
-    return (
-      pickRunner(atRunnerId) ?? pickByDiagram(openDiagramId) ?? pickRunner(rootId)
-    )
+    return null
   }
 
-  type LiveTyped = { type?: string; value?: unknown }
-  type LiveVec = { x?: number; y?: number; z?: number; w?: number }
+  // ------------------------------------------------------------
+  // Effects
+  // ------------------------------------------------------------
 
-  const asSimVec4 = (v: unknown, fallbackW = 0): SimVec4 => {
-    if (!v || typeof v !== 'object') return { x: 0, y: 0, z: 0, w: fallbackW }
-    const o = v as LiveVec
-    return {
-      x: Number.isFinite(o.x) ? Number(o.x) : 0,
-      y: Number.isFinite(o.y) ? Number(o.y) : 0,
-      z: Number.isFinite(o.z) ? Number(o.z) : 0,
-      w: Number.isFinite(o.w) ? Number(o.w) : fallbackW,
-    }
-  }
-
-  /** Draft-only — no board write / publish; next sim tick picks up via applyDraftsToBoard. */
-  const applyLiveTypedFeature = (feature: string, property: string, typed: LiveTyped) => {
-    if (!feature || !property) return
-    const t = String(typed.type ?? '').trim()
-    if (!t) return
-    const key = featureKey(feature, property)
-    const v = typed.value
-    if (t === 'bool') {
-      boolFeatureDrafts.value = { ...boolFeatureDrafts.value, [key]: v === true }
-    } else if (t === 'cname' || t === 'string') {
-      stringFeatureDrafts.value = { ...stringFeatureDrafts.value, [key]: String(v ?? '') }
-    } else if (t === 'vector') {
-      vectorFeatureDrafts.value = { ...vectorFeatureDrafts.value, [key]: asSimVec4(v, 0) }
-    } else if (t === 'quat') {
-      quatFeatureDrafts.value = { ...quatFeatureDrafts.value, [key]: asSimVec4(v, 1) }
-    } else if (t === 'int') {
-      featureDrafts.value = { ...featureDrafts.value, [key]: Math.round(Number(v) || 0) }
-    } else if (t === 'float') {
-      const n = Number(v) || 0
-      if (!Number.isFinite(n)) return
-      featureDrafts.value = { ...featureDrafts.value, [key]: n }
-    }
-  }
-
-  const applyLiveTypedVar = (name: string, typed: LiveTyped) => {
-    const trimmed = String(name ?? '').trim()
-    if (!trimmed) return
-    const t = String(typed.type ?? '').trim()
-    if (!t) return
-    const v = typed.value
-    if (t === 'bool') {
-      boolVarDrafts.value = { ...boolVarDrafts.value, [trimmed]: v === true }
-    } else if (t === 'int') {
-      intVarDrafts.value = { ...intVarDrafts.value, [trimmed]: Math.round(Number(v) || 0) }
-    } else if (t === 'vector') {
-      vectorVarDrafts.value = { ...vectorVarDrafts.value, [trimmed]: asSimVec4(v, 0) }
-    } else if (t === 'quat') {
-      quatVarDrafts.value = { ...quatVarDrafts.value, [trimmed]: asSimVec4(v, 1) }
-    } else if (t === 'float') {
-      const n = Number(v) || 0
-      if (!Number.isFinite(n)) return
-      floatVarDrafts.value = { ...floatVarDrafts.value, [trimmed]: n }
-    }
-  }
-
-  const applyLiveWrapper = (name: string, value: unknown) => {
-    const trimmed = String(name ?? '').trim()
-    if (!trimmed) return
-    const n = Number(value)
-    if (!Number.isFinite(n)) return
-    wrapperWeightDrafts.value = { ...wrapperWeightDrafts.value, [trimmed]: n }
-  }
-
-  /** Apply one JSON line from the game bridge (snapshot / setFeature / setVar / fireExternal). */
-  const applyLiveBridgeLine = (line: string) => {
-    const trimmed = line.trim()
-    if (!trimmed) return
-    let msg: Record<string, unknown>
-    try {
-      msg = JSON.parse(trimmed) as Record<string, unknown>
-    } catch {
-      return
-    }
-    if (!liveBridgeActive.value) return
-    const op = String(msg.op ?? '')
-
-    if (op === 'snapshot') {
-      const features = msg.features as Record<string, Record<string, LiveTyped>> | undefined
-      if (features) {
-        for (const [feat, props] of Object.entries(features)) {
-          for (const [prop, typed] of Object.entries(props ?? {})) {
-            applyLiveTypedFeature(feat, prop, typed ?? {})
-          }
-        }
-      }
-      const vars = msg.vars as Record<string, LiveTyped> | undefined
-      if (vars) {
-        for (const [name, typed] of Object.entries(vars)) {
-          applyLiveTypedVar(name, typed ?? {})
-        }
-      }
-      const wrappers = msg.wrappers as Record<string, unknown> | undefined
-      if (wrappers) {
-        for (const [name, value] of Object.entries(wrappers)) {
-          applyLiveWrapper(name, value)
-        }
-      }
-      return
-    }
-
-    if (op === 'setFeature') {
-      const feature = String(msg.feature ?? '')
-      const props = msg.props as Array<{ name?: unknown; type?: unknown; value?: unknown }> | undefined
-      if (!Array.isArray(props)) return
-      for (const p of props) {
-        applyLiveTypedFeature(feature, String(p?.name ?? ''), {
-          type: p?.type != null ? String(p.type) : undefined,
-          value: p?.value,
-        })
-      }
-      return
-    }
-
-    if (op === 'setVar') {
-      applyLiveTypedVar(String(msg.name ?? ''), {
-        type: msg.type != null ? String(msg.type) : undefined,
-        value: msg.value,
-      })
-      return
-    }
-
-    if (op === 'setWrapper') {
-      applyLiveWrapper(String(msg.name ?? ''), msg.value)
-      return
-    }
-
-    if (op === 'fireExternal') {
-      // Legacy: prefer tick.externalEvents (atomic with frame). Still accept live lines.
-      const name = String(msg.name ?? '').trim()
-      if (!name) return
-      board.value.fireExternalEvent(name)
-      return
-    }
-
-    if (op === 'serviceEvent') {
-      const event = msg.event as SimServiceEvent | undefined
-      if (!event || typeof event !== 'object' || !('kind' in event)) return
-      getPrimaryRunner()?.pushServiceEvent(event)
-      return
-    }
-
-    if (op === 'tick') {
-      // Apply this frame's ACC PushEvents immediately before publish (same Update set).
-      const ext = msg.externalEvents
-      if (Array.isArray(ext)) {
-        for (const raw of ext) {
-          const name = String(raw ?? '').trim()
-          if (name === "DoubleJump") {
-            console.log(poseGenCounter, 'op tick DoubjeJump event received')
-          }
-          if (name) board.value.fireExternalEvent(name)
-        }
-      }
-      const gameDt = Number(msg.dt)
-      const gameRaw = Number(msg.rawDt)
-      const dt = clock.value.tickGame(
-        Number.isFinite(gameDt) ? gameDt : 0,
-        Number.isFinite(gameRaw) ? gameRaw : undefined
-      )
-      publish(dt, clock.value.lastRawDt)
-    }
-  }
+  watch(() => diagramIdsListRevisionRef.value, () => {
+    rebind()
+  }, { immediate: true })
 
   return {
-    enabled,
+    syncToDiagrams,
+    syncToDiagram,
     active,
-    playing,
+    playing: playingRef,
+    speedRef,
     getPrimaryRunner,
     getRunner,
     getRootRunnerId,
-    ensureRunner,
     ensureSlotRunner: (parentId: string, slotName: string) => {
-      const parent = runners.get(parentId)
+      const parent = runnerIdToRunnerMap.get(parentId)
       if (!parent) return null
       return ensureSlotRunner(parent, slotName)
     },
     listSlotRunners,
     listBoundRunnerTree,
-    listBoundRunnerTreeForDiagram,
     listBoundRunnerPaths,
     setSlotDiagramId,
-    getSlotDiagramId,
-    getSlotRunnerId,
-    setRunnerDiagramId: bindRunnerToDiagramId,
+    setRunnerDiagramId: ensureDiagramRunner,
     findRunnerByDiagramId,
     findRunnersByDiagramId,
-    withFeatureBatch,
-    getFeature,
-    getBoolFeature,
-    getStringFeature,
-    getVectorFeature,
-    getQuatFeature,
     snapshot,
     snapshotsByRunner,
     runnersRev,
     snapshotForDiagram,
     snapshotForRunner,
     getSkeletonViewPose,
+    allDiagramsDiscoveredComputed,
     discovered,
-    eventDraft,
-    eventValueDraft,
-    featureDrafts,
-    vectorFeatureDrafts,
-    quatFeatureDrafts,
-    boolFeatureDrafts,
-    stringFeatureDrafts,
-    floatVarDrafts,
-    vectorVarDrafts,
-    quatVarDrafts,
-    boolVarDrafts,
-    intVarDrafts,
-    tagValueDrafts,
-    entityTagDrafts,
-    wrapperWeightDrafts,
     clipStats,
     clipNames,
     setupEntries,
@@ -2827,11 +2391,6 @@ export function useAnimgraphSim() {
     clipPoseSets,
     getClipGlbInfo,
     listGlbAnimNames,
-    draftFeatureValue,
-    draftVectorFeatureValue,
-    draftQuatFeatureValue,
-    draftBoolFeatureValue,
-    draftStringFeatureValue,
     getClip,
     lookupClip,
     getClipInEntry,
@@ -2865,45 +2424,32 @@ export function useAnimgraphSim() {
     getProjectSimResources,
     getCachedClipPoseCompactText,
     applyProjectSimResources,
+
+    getDraftBoard,
+    registerDraftBoard,
+    unregisterDraftBoard,
+    
+    acquireExternalSimDriver,
+    releaseExternalSimDriver,
+
+    activate,
+    deactivate,
+    toggleActivation,
+    
     play,
     pause,
     toggle,
     step,
     reset,
-    activate,
-    deactivate,
-    toggleActive,
+    update,
     setSpeed,
+
     fireExternal,
     fireAnimEvent,
     fireAnimEnd,
-    setFloatVar,
-    setVectorVar,
-    setVectorVarAxis,
-    draftVectorVarValue,
-    setQuatVar,
-    setQuatVarAxis,
-    draftQuatVarValue,
-    setBoolVar,
-    setIntVar,
-    setTagValue,
-    setEntityTag,
-    removeEntityTag,
-    setWrapperWeight,
-    setFeature,
-    setBoolFeature,
-    setStringFeature,
-    setVectorFeature,
-    setVectorFeatureAxis,
-    setQuatFeature,
-    setQuatFeatureAxis,
+
     rebind,
     dispose,
-    liveBridgeActive,
-    setLiveBridgeActive,
-    startLiveBridge,
-    stopLiveBridge,
-    applyLiveBridgeLine,
   }
 }
 

@@ -1,0 +1,1 @@
+export const makeFeatureKey = (feature: string, property: string) => `${feature}\0${property}`

@@ -2,70 +2,76 @@ import { AnimgraphNode } from "../graph/animgraphTypes";
 import { handleType, readCName, readCNameList } from "./simDataUtils";
 import { UPDATE_WORKSPOT_FEATURE, UpdateWorkspotProp } from "./workspotHubKeys";
 
-export function discoverGraphInputs(handles: Map<string, AnimgraphNode>): {
-  features: Array<{ feature: string; property: string }>
+export type DiscoveredGraphInputs = {
+  /** Float AnimFeatures (FloatInput / FloatFeature) — one entry per group.name */
+  floatFeatures: Array<{ feature: string; property: string }>
+  floatFeatureKeysSet: Set<string>
   /** Vector4 AnimFeatures (VectorInput) — one entry per group.name */
   vectorFeatures: Array<{ feature: string; property: string }>
+  vectorFeatureKeysSet: Set<string>
   /** Quaternion AnimFeatures (QuaternionInput) — one entry per group.name */
   quatFeatures: Array<{ feature: string; property: string }>
+  quatFeatureKeysSet: Set<string>
   /** Bool AnimFeatures (BoolInput / BoolFeature) — one entry per group.name */
   boolFeatures: Array<{ feature: string; property: string }>
+  boolFeatureKeysSet: Set<string>
   /** CName AnimFeatures (UpdateWorkspot.animName, …) */
   stringFeatures: Array<{ feature: string; property: string }>
-  floatVars: string[]
-  vectorVars: string[]
-  quatVars: string[]
-  transformVars: string[]
-  boolVars: string[]
-  intVars: string[]
-  wrappers: string[]
-  events: string[]
-  /** Data-flow tags (AnimNode_TagValue) */
-  tags: string[]
-  /** StaticSwitch Component/Visual/Rig tags (offline entityTags mock) */
-  entityTags: string[]
-} {
-  const features: Array<{ feature: string; property: string }> = []
+  stringFeatureKeysSet: Set<string>
+  floatVarNamesSet: Set<string>
+  vectorVarNamesSet: Set<string>
+  quatVarNamesSet: Set<string>
+  transformVarNamesSet: Set<string>
+  boolVarNamesSet: Set<string>
+  intVarNamesSet: Set<string>
+  wrapperNamesSet: Set<string>
+  eventNamesSet: Set<string>
+  tagNamesSet: Set<string>
+  entityTagNamesSet: Set<string>
+}
+
+export function discoverGraphInputs(handles: Map<string, AnimgraphNode>): DiscoveredGraphInputs {
+  const floatFeatures: Array<{ feature: string; property: string }> = []
+  const floatFeatureKeysSet = new Set<string>()
   const vectorFeatures: Array<{ feature: string; property: string }> = []
+  const vectorFeatureKeysSet = new Set<string>()
   const quatFeatures: Array<{ feature: string; property: string }> = []
+  const quatFeatureKeysSet = new Set<string>()
   const boolFeatures: Array<{ feature: string; property: string }> = []
+  const boolFeatureKeysSet = new Set<string>()
   const stringFeatures: Array<{ feature: string; property: string }> = []
-  const featureKeys = new Set<string>()
-  const vectorKeys = new Set<string>()
-  const quatKeys = new Set<string>()
-  const boolKeys = new Set<string>()
-  const stringKeys = new Set<string>()
-  const floatVars = new Set<string>()
-  const vectorVars = new Set<string>()
-  const quatVars = new Set<string>()
-  const transformVars = new Set<string>()
-  const boolVars = new Set<string>()
-  const intVars = new Set<string>()
-  const wrappers = new Set<string>()
-  const events = new Set<string>()
-  const tags = new Set<string>()
-  const entityTags = new Set<string>()
+  const stringFeatureKeysSet = new Set<string>()
+  const floatVarNamesSet = new Set<string>()
+  const vectorVarNamesSet = new Set<string>()
+  const quatVarNamesSet = new Set<string>()
+  const transformVarNamesSet = new Set<string>()
+  const boolVarNamesSet = new Set<string>()
+  const intVarNamesSet = new Set<string>()
+  const wrapperNamesSet = new Set<string>()
+  const eventNamesSet = new Set<string>()
+  const tagNamesSet = new Set<string>()
+  const entityTagNamesSet = new Set<string>()
 
   const addFeature = (feature: string, property: string, preferDisplay = false) => {
     if (!feature || !property || feature === 'None' || property === 'None') return
     const key = `${feature}.${property}`.toLowerCase()
-    if (featureKeys.has(key)) {
+    if (floatFeatureKeysSet.has(key)) {
       if (preferDisplay) {
-        const i = features.findIndex(
+        const i = floatFeatures.findIndex(
           (f) => `${f.feature}.${f.property}`.toLowerCase() === key
         )
-        if (i >= 0) features[i] = { feature, property }
+        if (i >= 0) floatFeatures[i] = { feature, property }
       }
       return
     }
-    featureKeys.add(key)
-    features.push({ feature, property })
+    floatFeatureKeysSet.add(key)
+    floatFeatures.push({ feature, property })
   }
 
   const addVectorFeature = (feature: string, property: string, preferDisplay = false) => {
     if (!feature || !property || feature === 'None' || property === 'None') return
     const key = `${feature}.${property}`.toLowerCase()
-    if (vectorKeys.has(key)) {
+    if (vectorFeatureKeysSet.has(key)) {
       if (preferDisplay) {
         const i = vectorFeatures.findIndex(
           (f) => `${f.feature}.${f.property}`.toLowerCase() === key
@@ -74,14 +80,14 @@ export function discoverGraphInputs(handles: Map<string, AnimgraphNode>): {
       }
       return
     }
-    vectorKeys.add(key)
+    vectorFeatureKeysSet.add(key)
     vectorFeatures.push({ feature, property })
   }
 
   const addQuatFeature = (feature: string, property: string, preferDisplay = false) => {
     if (!feature || !property || feature === 'None' || property === 'None') return
     const key = `${feature}.${property}`.toLowerCase()
-    if (quatKeys.has(key)) {
+    if (quatFeatureKeysSet.has(key)) {
       if (preferDisplay) {
         const i = quatFeatures.findIndex(
           (f) => `${f.feature}.${f.property}`.toLowerCase() === key
@@ -90,14 +96,14 @@ export function discoverGraphInputs(handles: Map<string, AnimgraphNode>): {
       }
       return
     }
-    quatKeys.add(key)
+    quatFeatureKeysSet.add(key)
     quatFeatures.push({ feature, property })
   }
 
   const addBoolFeature = (feature: string, property: string, preferDisplay = false) => {
     if (!feature || !property || feature === 'None' || property === 'None') return
     const key = `${feature}.${property}`.toLowerCase()
-    if (boolKeys.has(key)) {
+    if (boolFeatureKeysSet.has(key)) {
       if (preferDisplay) {
         const i = boolFeatures.findIndex(
           (f) => `${f.feature}.${f.property}`.toLowerCase() === key
@@ -106,14 +112,14 @@ export function discoverGraphInputs(handles: Map<string, AnimgraphNode>): {
       }
       return
     }
-    boolKeys.add(key)
+    boolFeatureKeysSet.add(key)
     boolFeatures.push({ feature, property })
   }
 
   const addStringFeature = (feature: string, property: string, preferDisplay = false) => {
     if (!feature || !property || feature === 'None' || property === 'None') return
     const key = `${feature}.${property}`.toLowerCase()
-    if (stringKeys.has(key)) {
+    if (stringFeatureKeysSet.has(key)) {
       if (preferDisplay) {
         const i = stringFeatures.findIndex(
           (f) => `${f.feature}.${f.property}`.toLowerCase() === key
@@ -122,12 +128,12 @@ export function discoverGraphInputs(handles: Map<string, AnimgraphNode>): {
       }
       return
     }
-    stringKeys.add(key)
+    stringFeatureKeysSet.add(key)
     stringFeatures.push({ feature, property })
   }
 
   const addWrapper = (name: string) => {
-    if (name && name !== 'None') wrappers.add(name)
+    if (name && name !== 'None') wrapperNamesSet.add(name)
   }
 
   for (const h of handles.values()) {
@@ -201,33 +207,33 @@ export function discoverGraphInputs(handles: Map<string, AnimgraphNode>): {
       t === 'animAnimNode_FloatVariable'
     ) {
       const name = readCName(d.variableName)
-      if (name) floatVars.add(name)
+      if (name) floatVarNamesSet.add(name)
     }
     if (t === 'animAnimNode_VectorVariable') {
       const name = readCName(d.variableName)
-      if (name && name !== 'None') vectorVars.add(name)
+      if (name && name !== 'None') vectorVarNamesSet.add(name)
     }
     if (t === 'animAnimNode_QuaternionVariable') {
       const name = readCName(d.variableName)
-      if (name && name !== 'None') quatVars.add(name)
+      if (name && name !== 'None') quatVarNamesSet.add(name)
     }
     if (t === 'animAnimNode_TransformVariable') {
       const name = readCName(d.variableName)
-      if (name && name !== 'None') transformVars.add(name)
+      if (name && name !== 'None') transformVarNamesSet.add(name)
     }
     if (
       t === 'animAnimStateTransitionCondition_BoolVariable' ||
       t === 'animAnimNode_BoolVariable'
     ) {
       const name = readCName(d.variableName)
-      if (name) boolVars.add(name)
+      if (name) boolVarNamesSet.add(name)
     }
     if (
       t === 'animAnimStateTransitionCondition_IntVariable' ||
       t === 'animAnimNode_IntVariable'
     ) {
       const name = readCName(d.variableName)
-      if (name) intVars.add(name)
+      if (name) intVarNamesSet.add(name)
     }
     if (t === 'animAnimNode_WrapperValue') {
       for (const name of readCNameList(d.wrapperNames)) addWrapper(name)
@@ -237,7 +243,7 @@ export function discoverGraphInputs(handles: Map<string, AnimgraphNode>): {
     }
     if (t === 'animAnimNode_TagValue') {
       const name = readCName(d.tag)
-      if (name && name !== 'None') tags.add(name)
+      if (name && name !== 'None') tagNamesSet.add(name)
     }
     if (
       t === 'animComponentTagCondition' ||
@@ -246,7 +252,7 @@ export function discoverGraphInputs(handles: Map<string, AnimgraphNode>): {
     ) {
       const name =
         readCName(d.animTag) || readCName(d.visualTag) || readCName(d.tag)
-      if (name && name !== 'None') entityTags.add(name)
+      if (name && name !== 'None') entityTagNamesSet.add(name)
     }
     if (t === 'animAnimNode_MultiBoolToFloatValue') {
       const inputs = Array.isArray(d.inputsData) ? d.inputsData : []
@@ -264,47 +270,36 @@ export function discoverGraphInputs(handles: Map<string, AnimgraphNode>): {
       t === 'animAnimNode_Event'
     ) {
       const name = readCName(d.eventName)
-      if (name && name !== 'None') events.add(name)
+      if (name && name !== 'None') eventNamesSet.add(name)
     }
     if (t === 'animAnimNode_Signal') {
       for (const key of ['startEvent', 'endEvent'] as const) {
         const name = readCName(d[key])
-        if (name && name !== 'None') events.add(name)
+        if (name && name !== 'None') eventNamesSet.add(name)
       }
     }
   }
 
-  features.sort((a, b) =>
-    `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
-  )
-  vectorFeatures.sort((a, b) =>
-    `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
-  )
-  quatFeatures.sort((a, b) =>
-    `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
-  )
-  boolFeatures.sort((a, b) =>
-    `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
-  )
-  stringFeatures.sort((a, b) =>
-    `${a.feature}.${a.property}`.localeCompare(`${b.feature}.${b.property}`)
-  )
-
   return {
-    features,
+    floatFeatures,
+    floatFeatureKeysSet,
     vectorFeatures,
+    vectorFeatureKeysSet,
     quatFeatures,
+    quatFeatureKeysSet,
     boolFeatures,
+    boolFeatureKeysSet,
     stringFeatures,
-    floatVars: [...floatVars].sort((a, b) => a.localeCompare(b)),
-    vectorVars: [...vectorVars].sort((a, b) => a.localeCompare(b)),
-    quatVars: [...quatVars].sort((a, b) => a.localeCompare(b)),
-    transformVars: [...transformVars].sort((a, b) => a.localeCompare(b)),
-    boolVars: [...boolVars].sort((a, b) => a.localeCompare(b)),
-    intVars: [...intVars].sort((a, b) => a.localeCompare(b)),
-    wrappers: [...wrappers].sort((a, b) => a.localeCompare(b)),
-    events: [...events].sort((a, b) => a.localeCompare(b)),
-    tags: [...tags].sort((a, b) => a.localeCompare(b)),
-    entityTags: [...entityTags].sort((a, b) => a.localeCompare(b)),
+    stringFeatureKeysSet,
+    floatVarNamesSet,
+    vectorVarNamesSet,
+    quatVarNamesSet,
+    transformVarNamesSet,
+    boolVarNamesSet,
+    intVarNamesSet,
+    wrapperNamesSet,
+    eventNamesSet,
+    tagNamesSet,
+    entityTagNamesSet,
   }
 }

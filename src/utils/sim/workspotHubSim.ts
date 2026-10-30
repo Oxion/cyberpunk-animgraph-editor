@@ -133,22 +133,7 @@ export function compileWorkspotHubNode(
   node: AnimgraphNode,
   ctx: SimCompileCtx
 ): void {
-  ctx.instanceStore.set(WorkspotHubDynDef, node.HandleId, createWorkspotHubDyn())
-  // Seed UpdateWorkspot board defaults once (first hub wins).
-  const { board } = ctx
-  const d = node.Data ?? {}
-  if (board.getFeature(GROUP, P.timeScale) === undefined) {
-    board.setFeature(GROUP, P.timeScale, 1)
-  }
-  if (board.getFeature(GROUP, P.facialKeyWeight) === undefined) {
-    board.setFeature(GROUP, P.facialKeyWeight, readNumber(d.facialKeyWeight, 0.75))
-  }
-  if (board.getBoolFeature(GROUP, P.isActive) === undefined) {
-    board.setBoolFeature(GROUP, P.isActive, true)
-  }
-  if (board.getBoolFeature(GROUP, P.globalBlendIn) === undefined) {
-    board.setBoolFeature(GROUP, P.globalBlendIn, true)
-  }
+  ensureWorkspotHubDyn(ctx.instanceStore, node)
 }
 
 export function ensureWorkspotHubDyn(
@@ -591,7 +576,7 @@ export function updateWorkspotHub(
     )
 
     const globalBlendDuration = featNum(board, P.globalBlendDuration, 0)
-    if (featBool(board, P.globalBlendIn, true)) {
+    if (featBool(board, P.globalBlendIn, false)) {
       dyn.globalBlendTime = Math.min(
         dyn.globalBlendTime + ctx.dt,
         globalBlendDuration
@@ -798,7 +783,7 @@ export function updateWorkspotHub(
   }
 
   return (
-    featBool(board, P.isActive, true) &&
+    featBool(board, P.isActive, false) &&
     (!!dyn.curr.animName ||
       !!resolveSocketLink(handles, sockets, dyn.curr.entryId) ||
       !!dyn.facialCurr.idleAnimName)

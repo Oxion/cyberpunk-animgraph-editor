@@ -1,6 +1,5 @@
 import {
-  simGetPrimaryRunner,
-  simGetRunner,
+  sim
 } from '../../stores/animgraphSim'
 import type { SimDriverAttachCtx, SimDriverHandle } from './simDriver'
 import { SimDriverHandleDef } from './simDriverHandleDef'
@@ -11,10 +10,8 @@ import { LookAtDriverDef } from './simLookAtDriverDef'
 function resolveLookAtAttachCtx(
   handle: SimDriverHandle<SimLookAtDriver>
 ): SimDriverAttachCtx | null {
-  const runner =
-    (handle.runnerId ? simGetRunner(handle.runnerId) : null) ??
-    simGetPrimaryRunner() ??
-    null
+  const runner = (handle.runnerId ? sim.getRunner(handle.runnerId) : null) ??
+    sim.getPrimaryRunner()
   return runner ? { runner } : null
 }
 

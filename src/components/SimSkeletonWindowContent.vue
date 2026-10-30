@@ -213,11 +213,7 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { activeDiagramId } from '../stores/graphProject'
 import {
-  simGetDerivedPoseStats,
-  simGetRootRunnerId,
-  simSnapshotsByRunner,
-  simStackCaptureHandleIds,
-  simFindRunnerByDiagramId,
+  sim,
 } from '../stores/animgraphSim'
 import { emptySimSnapshot } from '../utils/sim/simSnapshot'
 import {
@@ -277,7 +273,7 @@ const props = defineProps<{
 
 const mainTab = ref<'viewport' | 'bones'>('viewport')
 const poseSource = ref<SkeletonPoseSource>('full')
-const selectedRunnerId = ref(simGetRootRunnerId())
+const selectedRunnerId = ref(sim.getRootRunnerId())
 const atNodeRunnerId = ref('')
 const showLabels = ref(false)
 const nameFilter = ref('')
@@ -315,7 +311,7 @@ const sourceLabel = (s: SkeletonPoseSource) => {
 watch(
   () => props.diagramId,
   (id) => {
-    const hit = simFindRunnerByDiagramId(id)
+    const hit = sim.findRunnerByDiagramId(id)
     if (hit) selectedRunnerId.value = hit.runnerId
   }
 )
@@ -349,10 +345,10 @@ const derivedPoseQuery = computed((): DerivedPoseQuery | null => {
     runnerId = selectedRunnerId.value || null
   } else if (poseSource.value === 'atNode') {
     runnerId = atNodeRunnerId.value || null
-    const capture = simStackCaptureHandleIds.value[0]
+    const capture = sim.stackCaptureHandleIds.value[0]
     pose = capture ? { capture } : 'sample'
   } else {
-    runnerId = simGetRootRunnerId()
+    runnerId = sim.getRootRunnerId()
   }
   if (!runnerId) return null
   return { runnerId, pose, need: BONES_TAB_NEED }
@@ -363,8 +359,8 @@ const derivedPoseStats = computed(() => {
   if (mainTab.value !== 'bones') return null
   const query = derivedPoseQuery.value
   if (!query) return null
-  const snap = simSnapshotsByRunner.value[query.runnerId] ?? emptySimSnapshot()
-  return simGetDerivedPoseStats(snap, query.runnerId, {
+  const snap = sim.snapshotsByRunner.value[query.runnerId] ?? emptySimSnapshot()
+  return sim.getDerivedPoseStats(snap, query.runnerId, {
     pose: query.pose,
     need: query.need,
   })

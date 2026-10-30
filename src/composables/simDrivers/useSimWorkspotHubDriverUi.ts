@@ -2,7 +2,6 @@ import { computed, reactive, type Ref } from 'vue'
 import type { SimDriverHandle } from '../../utils/sim/simDriver'
 import type { SimWorkspotHubDriver } from '../../utils/sim/simWorkspotHubDriver'
 import { WORKSPOT_SLOT_NAME } from '../../utils/sim/workspotHubKeys'
-import { simSnapshot } from '../../stores/animgraphSim'
 
 export type WorkspotHubDrafts = {
   animName: string
@@ -27,19 +26,16 @@ export function useSimWorkspotHubDriverUi(
 
   const snapshot = computed(() => {
     void handle.value?.rev.value
-    void simSnapshot.value
     return handle.value?.driver.getSnapshot() ?? null
   })
 
   const counter = computed(() => {
     void handle.value?.rev.value
-    void simSnapshot.value
     return handle.value?.driver.counter() ?? 0
   })
 
   const isActive = computed(() => {
     void handle.value?.rev.value
-    void simSnapshot.value
     return handle.value?.driver.isActive() ?? false
   })
 

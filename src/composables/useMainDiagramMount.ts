@@ -175,11 +175,13 @@ export function remountProject(diagramId: string = MAIN_DIAGRAM_ID) {
   // After body v-for paints, canvas refs are bound via bindDiagramCanvasEl.
   void nextTick(() => {
     if (token !== diagramRenderToken) return
+
     const canvas = canvasByDiagram.get(diagramId)
     if (!canvas) {
       diagramViewReadyRef.value = false
       return
     }
+    
     try {
       const renderer = new PixiGraphRenderer(canvas, data)
       wireMainRenderer(diagramId, canvas, renderer)
@@ -225,9 +227,3 @@ export function teardownProjectView() {
   }
   destroyAllMainDiagramRenderers()
 }
-
-/** @deprecated Use remountProject */
-export const renderGraph = remountProject
-
-/** @deprecated Prefer bindDiagramCanvasEl — kept for older single-canvas wiring. */
-export type { Ref }

@@ -673,37 +673,78 @@ export class IKTargetsController {
     }
   }
 
+  /**
+   * Engine IKTargetsGraphInput::Set — always write the full channel group.
+   * Sticky board: never leave stale position/weights after disable.
+   */
   publish(board: SimInputBoard): void {
     for (const m of this.machines) {
-      const o = m.published
-      const g = m.chainName
-      board.setBoolFeature(g, 'isEnabled', o.isEnabled)
-      board.setVectorFeature(g, 'position', {
-        x: o.targetPositionMs.x,
-        y: o.targetPositionMs.y,
-        z: o.targetPositionMs.z,
-        w: 0,
-      } as SimVec4)
-      board.setQuatFeature(g, 'rotation', {
-        x: o.targetOrientationMs.x,
-        y: o.targetOrientationMs.y,
-        z: o.targetOrientationMs.z,
-        w: o.targetOrientationMs.w,
-      })
-      board.setFeature(g, 'weightPosition', o.weightPosition)
-      board.setFeature(g, 'weightRotation', o.weightOrientation)
-      board.setVectorFeature(g, 'poleVector', {
-        x: o.poleVectorMs.x,
-        y: o.poleVectorMs.y,
-        z: o.poleVectorMs.z,
-        w: 0,
-      } as SimVec4)
-      // Engine GraphInput typo
-      board.setFeature(g, 'poleVectorOverideWeight', o.poleVectorOverrideWeight)
-      board.setFeature(g, 'poleVectorOverrideWeight', o.poleVectorOverrideWeight)
-      board.setBoolFeature(g, 'setPosition', o.weightPosition > 1e-7)
-      board.setBoolFeature(g, 'setRotation', o.weightOrientation > 1e-7)
+      this.publishChain(board, m.chainName, m.published)
     }
+  }
+
+  /**
+   * Engine HumanIk Sample: every limb GraphInput slot is Set every Sample
+   * (BuildDataLayout compiles all four). Controllers may only own a subset of
+   * chains — zero the standard HumanIk groups first so sticky weights/positions
+   * cannot pull limbs toward the origin when a chain is idle / not in settings.
+   */
+  publishHumanIk(board: SimInputBoard, limbGroups: readonly string[]): void {
+    const disabled = emptyOutput()
+    for (const g of limbGroups) {
+      this.publishChain(board, g, disabled)
+    }
+    this.publish(board)
+  }
+
+  /** Engine IKTargetsGraphInput::Init defaults onto the board. */
+  initBoard(board: SimInputBoard): void {
+    const disabled = emptyOutput()
+    for (const m of this.machines) {
+      this.publishChain(board, m.chainName, disabled)
+    }
+  }
+
+  /** Init standard HumanIk limb slots + machine chains (bind / deactivate). */
+  initHumanIkBoard(board: SimInputBoard, limbGroups: readonly string[]): void {
+    const disabled = emptyOutput()
+    for (const g of limbGroups) {
+      this.publishChain(board, g, disabled)
+    }
+    this.initBoard(board)
+  }
+
+  private publishChain(
+    board: SimInputBoard,
+    g: string,
+    o: IkSmOutput
+  ): void {
+    board.setBoolFeature(g, 'isEnabled', o.isEnabled)
+    board.setVectorFeature(g, 'position', {
+      x: o.targetPositionMs.x,
+      y: o.targetPositionMs.y,
+      z: o.targetPositionMs.z,
+      w: 0,
+    } as SimVec4)
+    board.setQuatFeature(g, 'rotation', {
+      x: o.targetOrientationMs.x,
+      y: o.targetOrientationMs.y,
+      z: o.targetOrientationMs.z,
+      w: o.targetOrientationMs.w,
+    })
+    board.setFeature(g, 'weightPosition', o.weightPosition)
+    board.setFeature(g, 'weightRotation', o.weightOrientation)
+    board.setVectorFeature(g, 'poleVector', {
+      x: o.poleVectorMs.x,
+      y: o.poleVectorMs.y,
+      z: o.poleVectorMs.z,
+      w: 0,
+    } as SimVec4)
+    // Engine GraphInput typo
+    board.setFeature(g, 'poleVectorOverideWeight', o.poleVectorOverrideWeight)
+    board.setFeature(g, 'poleVectorOverrideWeight', o.poleVectorOverrideWeight)
+    board.setBoolFeature(g, 'setPosition', o.weightPosition > 1e-7)
+    board.setBoolFeature(g, 'setRotation', o.weightOrientation > 1e-7)
   }
 
   /**
@@ -892,12 +933,12 @@ export function resolveHumanIkChainSettings(
   return first ? parseIkChainSettings(first.ikChainSettings) : []
 }
 
-export function compileIkTargetsControllerNode(
+/** IKTargetParams_* → controller (GenerateIk + HumanIk). */
+export function registerIkTargetsServiceEvents(
   node: AnimgraphNode,
   ctx: SimCompileCtx,
   settings: IKChainSettings[]
 ): void {
-  ensureIkTargetsController(ctx.instanceStore, node.HandleId, settings)
   ctx.addEventListener(
     ['IKTargetParams_Add', 'IKTargetParams_Remove', 'IKTargetParams_Update'],
     (events, rt) => {
@@ -907,11 +948,28 @@ export function compileIkTargetsControllerNode(
         settings
       )
       c.applyServiceEvents(events)
-      for (const e of events) {
-        if (e.kind === 'IKTargetParams_Add') {
-          c.setChainEnabledOnBoard(rt.board, e.ref.part, true)
+      for (const event of events) {
+        if (event.kind === 'IKTargetParams_Add') {
+          // Engine SetIsEnabled(true) before Sample; weight still 0 until publish.
+          c.setChainEnabledOnBoard(rt.board, event.ref.part, true)
         }
       }
     }
   )
+}
+
+/** GenerateIk compile — service events; GraphInput Init on init pass. */
+export function compileIkTargetsControllerNode(
+  node: AnimgraphNode,
+  ctx: SimCompileCtx,
+  settings: IKChainSettings[]
+): void {
+  ctx.addInitListener((rt) => {
+    ensureIkTargetsController(
+      rt.instanceStore,
+      node.HandleId,
+      settings
+    ).initBoard(rt.board)
+  })
+  registerIkTargetsServiceEvents(node, ctx, settings)
 }

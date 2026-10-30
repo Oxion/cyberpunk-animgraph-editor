@@ -97,9 +97,12 @@ function writePlayFields(
   if (params.globalBlendDuration !== undefined) {
     api.setFeature(GROUP, P.globalBlendDuration, params.globalBlendDuration)
   }
-  if (params.globalBlendIn !== undefined) {
-    api.setBoolFeature(GROUP, P.globalBlendIn, !!params.globalBlendIn)
-  }
+  // WorkspotInterfaceUpdateData::m_globalBlendIn defaults true.
+  api.setBoolFeature(
+    GROUP,
+    P.globalBlendIn,
+    params.globalBlendIn !== undefined ? !!params.globalBlendIn : true
+  )
   if (params.facialIdleAnimation !== undefined) {
     api.setStringFeature(GROUP, P.facialIdleAnimation, params.facialIdleAnimation)
   }
@@ -267,7 +270,7 @@ export class SimWorkspotHubDriver implements SimDriver {
     return typeof cur === 'number' && Number.isFinite(cur) ? Math.round(cur) : 0
   }
 
-  /** Driver-session active flag (board seeds isActive=true; badge must not follow that). */
+  /** Driver-session active flag (not board; empty feature defaults isActive=false). */
   isActive(): boolean {
     return this.last?.isActive === true
   }

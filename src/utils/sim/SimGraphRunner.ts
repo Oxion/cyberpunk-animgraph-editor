@@ -155,8 +155,11 @@ import {
 } from './signalDyn'
 import {
   compileSimGraph,
+  dispatchCompiledDeactivates,
+  dispatchCompiledInits,
   dispatchCompiledServiceEvents,
   type SimCompiledGraph,
+  type SimServiceDispatchCtx,
 } from './simCompile'
 import { compileSimNode } from './simCompileNodes'
 import {
@@ -686,20 +689,19 @@ export function isGraphSlotType(t: string | null | undefined): boolean {
 }
 
 /** Unique GraphSlot `name` values from a handles registry (for slot materialization). */
-export function collectGraphSlotNames(
-  handles: Map<string, AnimgraphNode> | null | undefined
-): string[] {
-  if (!handles?.size) return []
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const node of handles.values()) {
+export function discoverGraphSlotNames(
+  handleIdToAnimgraphNodeMap: Map<string, AnimgraphNode> | null | undefined
+): Set<string> {
+  if (!handleIdToAnimgraphNodeMap) return new Set<string>()
+  
+  const graphSlotNamesSet = new Set<string>()
+  for (const node of handleIdToAnimgraphNodeMap.values()) {
     if (!isGraphSlotType(handleType(node))) continue
     const name = readCName(node.Data?.name).trim()
-    if (!name || name === 'None' || seen.has(name)) continue
-    seen.add(name)
-    out.push(name)
+    if (!name || name === 'None' || graphSlotNamesSet.has(name)) continue
+    graphSlotNamesSet.add(name)
   }
-  return out
+  return graphSlotNamesSet
 }
 
 /** Record Update walk edge (deduped). Not for weight/value links. */
@@ -1374,8 +1376,9 @@ function readQuatSource(
     const group = readCName(d.group)
     const name = readCName(d.name)
     if (!group || !name || name === 'None') return { ...fallback }
+    // Engine QuaternionInput slot Init → identity; do not use caller fallback when absent.
     const q = fctx.board.getQuatFeature(group, name)
-    if (!q) return { ...fallback }
+    if (!q) return { ...IDENTITY_QUAT_STATE }
     return { x: q.x, y: q.y, z: q.z, w: q.w }
   }
 
@@ -1423,7 +1426,8 @@ function readVectorSource(
     const group = readCName(d.group)
     const name = readCName(d.name)
     if (!group || !name || name === 'None') return fallback
-    return board.getVectorFeature(group, name) ?? fallback
+    // Engine VectorInput slot Init → ZERO; do not use caller fallback when absent.
+    return board.getVectorFeature(group, name) ?? ZERO_VEC4
   }
 
   if (t === 'animAnimNode_VectorConstant') {
@@ -1672,21 +1676,24 @@ function readFloatSource(
   const d = source.Data ?? {}
   const { board, handles } = fctx
 
-  // External AnimFeature: group + name (FloatInput / IntInput)
+  // External AnimFeature: group + name (FloatInput / IntInput).
+  // Engine: sticky TAnimInstanceInput slots (Init/ResetFeatures → 0). Missing board
+  // entry must NOT use caller fallback (often 1 for weights) — that only looked
+  // correct while old drafts wrote 0 onto every discovered feature each tick.
   if (t === 'animAnimNode_FloatInput' || t === 'animAnimNode_IntInput') {
     const group = readCName(d.group)
     const name = readCName(d.name)
+    if (!group || !name || name === 'None') return fallback
     const fromFeature = board.getFeature(group, name)
-    if (fromFeature !== undefined) return fromFeature
-    return fallback
+    return fromFeature !== undefined ? fromFeature : 0
   }
 
   if (t === 'animAnimNode_BoolInput') {
     const group = readCName(d.group)
     const name = readCName(d.name)
+    if (!group || !name || name === 'None') return fallback
     const fromFeature = board.getBoolFeature(group, name)
-    if (fromFeature !== undefined) return fromFeature ? 1 : 0
-    return fallback
+    return fromFeature === true ? 1 : 0
   }
 
   if (t === 'animAnimNode_FloatConstant' || t === 'animAnimNode_IntConstant') {
@@ -3331,6 +3338,13 @@ function updateFromNode(node: AnimgraphNode | null, ctx: SimGraphRunnerWalkCtx):
   })
 }
 
+export type SimGraphRunnerSlot = {
+  readonly slotName: string
+  diagramId?: string
+  diagramLocked?: boolean
+  runnerId?: string
+}
+
 export class SimGraphRunner {
   /** Host-assigned execution-slot id (not diagramId). Set once in constructor. */
   readonly runnerId: string
@@ -3343,15 +3357,8 @@ export class SimGraphRunner {
   get diagramId(): string | undefined {
     return this._diagramId
   }
-  /**
-   * GraphSlot names the host has configured (auto-default or user set, incl. None).
-   * Missing = fresh → may auto-default on materialize.
-   */
-  slotInitialized = new Set<string>()
-  /** GraphSlot name → nested diagram id (absent / missing = None). */
-  slotDiagramIds = new Map<string, string>()
-  /** GraphSlot name → child runner id. */
-  slotRunnerIds = new Map<string, string>()
+
+  private _slotNameToSimGraphRunnerSlotMap = new Map<string, SimGraphRunnerSlot>()
 
   private _snapshot?: SimSnapshot
   private _simStateMachineRuntimes = new Map<string, SimStateMachineRuntime>()
@@ -3488,88 +3495,29 @@ export class SimGraphRunner {
     this.runnerId = id
   }
 
-  isSlotInitialized(slotName: string): boolean {
-    const want = slotName.trim()
-    if (!want) return false
-    return (
-      this.slotInitialized.has(want) ||
-      this.slotInitialized.has(want.toLowerCase())
-    )
+  graphSlots(): MapIterator<SimGraphRunnerSlot> {
+    return this._slotNameToSimGraphRunnerSlotMap.values()
   }
 
-  markSlotInitialized(slotName: string): void {
-    const want = slotName.trim()
-    if (!want || want === 'None') return
-    this.slotInitialized.add(want)
+  getGraphSlot(slotName: string): SimGraphRunnerSlot | undefined {
+    return this._slotNameToSimGraphRunnerSlotMap.get(slotName)
   }
 
-  clearSlotInitialized(slotName: string): void {
-    const want = slotName.trim()
-    if (!want) return
-    this.slotInitialized.delete(want)
-    const lower = want.toLowerCase()
-    if (lower !== want) this.slotInitialized.delete(lower)
+  addGraphSlot(slotName: string, data: Omit<SimGraphRunnerSlot, 'slotName'>): SimGraphRunnerSlot {
+    const simGraphRunnerSlot: SimGraphRunnerSlot = { slotName, ...data }
+    this._slotNameToSimGraphRunnerSlotMap.set(slotName, simGraphRunnerSlot)
+    return simGraphRunnerSlot
   }
 
-  getSlotDiagramId(slotName: string): string | undefined {
-    const want = slotName.trim()
-    if (!want) return undefined
-    return (
-      this.slotDiagramIds.get(want) ??
-      this.slotDiagramIds.get(want.toLowerCase())
-    )
+  removeGraphSlot(slotName: string): void {
+    this._slotNameToSimGraphRunnerSlotMap.delete(slotName)
   }
 
-  /**
-   * Bind slot → diagram. Empty / null = None (passthrough); marks initialized.
-   * Use `forgetSlotDiagram` when pruning a GraphSlot name from the parent graph.
-   */
-  setSlotDiagramId(slotName: string, diagramId: string | null): void {
-    const _slotName = slotName.trim()
-    if (!_slotName || _slotName === 'None') return
-
-    const lowerCaseSlotName = _slotName.toLowerCase()
-
-    this.slotInitialized.add(_slotName)
-    this.slotInitialized.add(lowerCaseSlotName)
-
-    if (!diagramId) {
-      this.slotDiagramIds.delete(_slotName)
-      this.slotDiagramIds.delete(lowerCaseSlotName)
-    } else {
-      this.slotDiagramIds.set(_slotName, diagramId)
-      this.slotDiagramIds.set(lowerCaseSlotName, diagramId)
+  haveLockedGraphSlots(): boolean {
+    for (const slot of this._slotNameToSimGraphRunnerSlotMap.values()) {
+      if (slot.diagramLocked) return true
     }
-  }
-
-  /** Remove slot config entirely (GraphSlot pruned from parent diagram). */
-  forgetSlotDiagram(slotName: string): void {
-    if (!slotName || slotName === 'None') return
-
-    this.clearSlotInitialized(slotName)
-
-    this.slotDiagramIds.delete(slotName)
-    this.slotDiagramIds.delete(slotName.toLowerCase())
-  }
-
-  getSlotRunnerId(slotName: string): string | undefined {
-    const want = slotName.trim()
-    if (!want) return undefined
-    return (
-      this.slotRunnerIds.get(want) ?? this.slotRunnerIds.get(want.toLowerCase())
-    )
-  }
-
-  setSlotRunnerId(slotName: string, runnerId: string | null): void {
-    if (!slotName || slotName === 'None') return
-
-    if (!runnerId) {
-      this.slotRunnerIds.delete(slotName)
-      this.slotRunnerIds.delete(slotName.toLowerCase())
-    } else {
-      this.slotRunnerIds.set(slotName, runnerId)
-      this.slotRunnerIds.set(slotName.toLowerCase(), runnerId)
-    }
+    return false
   }
 
   setClipLibrary(library: ClipLibrary | null): void {
@@ -3761,9 +3709,7 @@ export class SimGraphRunner {
   dispose(): void {
     this.clearGraphState()
     this.activeRig = null
-    this.slotInitialized.clear()
-    this.slotDiagramIds.clear()
-    this.slotRunnerIds.clear()
+    this._slotNameToSimGraphRunnerSlotMap.clear()
   }
 
   /**
@@ -3794,16 +3740,19 @@ export class SimGraphRunner {
       const def = readNumber(sm.Data?.defaultStateIndex, 0)
       this._simStateMachineRuntimes.set(sm.HandleId, new SimStateMachineRuntime(sm.HandleId, def))
     }
-    // Compile may seed board feature defaults (WorkspotHub, …).
+    // Layout + listeners (engine BuildDataLayout / AddEventListener).
     this.compiled = compileSimGraph(
       this.handles,
       this._instanceStore,
       compileSimNode,
       board
     )
+    // Instance OnInit (engine AnimGraph::Init) — needs board tags/rig ready.
+    this._dispatchInits(board)
   }
 
-  reset(): void {
+  /** Soft CreateInstance: clear dyn/store, re-fire OnInit (keeps compiled layout). */
+  reset(board: SimInputBoard): void {
     this._prevNodes = undefined
     this.floatDyn.clear()
     this.vectorDyn.clear()
@@ -3840,6 +3789,7 @@ export class SimGraphRunner {
       if (rt) rt.reset(def)
       else this._simStateMachineRuntimes.set(sm.HandleId, new SimStateMachineRuntime(sm.HandleId, def))
     }
+    this._dispatchInits(board)
   }
 
   pushServiceEvent(event: SimServiceEvent): void {
@@ -3852,6 +3802,18 @@ export class SimGraphRunner {
       const i = this.preSampleHooks.indexOf(hook)
       if (i >= 0) this.preSampleHooks.splice(i, 1)
     }
+  }
+
+  /** Engine AnimGraph::Init — fire compile-registered OnInit handlers. */
+  private _dispatchInits(board: SimInputBoard): void {
+    const rt: SimServiceDispatchCtx = {
+      handles: this.handles,
+      board,
+      instanceStore: this._instanceStore,
+      eyesLookAtDirection: 0,
+      eyesLookAtDirectionEnabled: false,
+    }
+    dispatchCompiledInits(this.compiled, rt)
   }
 
   private _recomputeStaticSwitches(board: SimInputBoard): void {
@@ -4070,6 +4032,12 @@ export class SimGraphRunner {
     for (const id of [...this.blendFromPoseDyn.keys()]) {
       if (!simNodeStateByHandleId[id]?.active) this.blendFromPoseDyn.delete(id)
     }
+    dispatchCompiledDeactivates(
+      this.compiled,
+      this._prevNodes,
+      simNodeStateByHandleId,
+      walkCtx
+    )
     // Cleanup transient store for nodes not updated this frame
     for (const bucket of this._transientStore.buckets()) {
       for (const id of [...bucket.keys()]) {
@@ -4091,9 +4059,7 @@ export class SimGraphRunner {
 
     return this._snapshot = {
       poseGen,
-      playing,
       time,
-      speed,
       update: {
         rootHandleId: rootAnimgraphNode?.HandleId,
         clips: resolveSimActiveClips(

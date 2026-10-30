@@ -1316,8 +1316,51 @@ function stepLookAtController(
     : 0
 }
 
+/** Engine LookAtGraphInput::Init / full Set — sticky board never partial-clears. */
+function writeLookAtGraphInput(
+  board: SimInputBoard,
+  part: string,
+  out: LookAtPartOutput
+): void {
+  board.setBoolFeature(part, 'isEnabled', out.isEnabled)
+  board.setVectorFeature(part, 'target', out.target)
+  board.setVectorFeature(part, 'rawTarget', out.rawTarget)
+  board.setFeature(part, 'distance', out.distance)
+  board.setFeature(part, 'suppress', out.suppress)
+  board.setFeature(part, 'mode', out.mode)
+  board.setFeature(part, 'blendWeight', out.blendWeight)
+}
+
+/** Parts that own a LookAtGraphInput (SMs + dependency slaves). */
+function listLookAtGraphInputParts(node: AnimgraphNode): string[] {
+  const parts: string[] = []
+  const seen = new Set<string>()
+  const add = (p: string) => {
+    if (!p || p === 'None' || seen.has(p)) return
+    seen.add(p)
+    parts.push(p)
+  }
+  for (const s of parseSmSettings(node)) add(s.partName)
+  for (const d of parseDependencies(node)) add(d.slave)
+  return parts
+}
+
+/** Engine LookAtGraphInput::Init for every part — call on compile / rebind. */
+export function initLookAtGraphInputs(
+  board: SimInputBoard,
+  node: AnimgraphNode
+): void {
+  const disabled = emptyLookAtPartOutput()
+  for (const part of listLookAtGraphInputParts(node)) {
+    writeLookAtGraphInput(board, part, disabled)
+  }
+}
+
 /**
  * Publish LookAtGraphInput channels onto the board (group=part, name=property).
+ *
+ * Engine always GraphInput::Set's the full channel group (incl. disabled).
+ * Partial clears are wrong on a sticky board — they leave stale target/mode.
  *
  * TODO(sim/GraphSlot inputs): Engine writes TAnimInstanceInput on that graph's
  * AnimInstanceBuffer only. Nested GraphSlot instances do not copy inputs back
@@ -1333,22 +1376,16 @@ export function publishLookAtGraphInputs(
   dyn: LookAtControllerDyn,
   previousParts: Set<string>
 ): void {
+  const disabled = emptyLookAtPartOutput()
   for (const part of previousParts) {
     if (!dyn.outputs.has(part)) {
-      board.setBoolFeature(part, 'isEnabled', false)
-      board.setFeature(part, 'blendWeight', 0)
+      writeLookAtGraphInput(board, part, disabled)
     }
   }
   previousParts.clear()
   for (const [part, out] of dyn.outputs) {
     previousParts.add(part)
-    board.setBoolFeature(part, 'isEnabled', out.isEnabled)
-    board.setVectorFeature(part, 'target', out.target)
-    board.setVectorFeature(part, 'rawTarget', out.rawTarget)
-    board.setFeature(part, 'distance', out.distance)
-    board.setFeature(part, 'suppress', out.suppress)
-    board.setFeature(part, 'mode', out.mode)
-    board.setFeature(part, 'blendWeight', out.blendWeight)
+    writeLookAtGraphInput(board, part, out)
   }
 }
 
@@ -1414,12 +1451,15 @@ export function refreshLookAtSpheresFromPose(
   }
 }
 
-/** Bind compile: create dyn + register LookAtParams_* ServiceEvent listeners. */
+/** Bind compile: register LookAtParams_* listeners; GraphInput Init on init pass. */
 export function compileLookAtControllerNode(
   node: AnimgraphNode,
   ctx: SimCompileCtx
 ): void {
-  ensureLookAtControllerDyn(ctx.instanceStore, node.HandleId)
+  ctx.addInitListener((rt) => {
+    ensureLookAtControllerDyn(rt.instanceStore, node.HandleId)
+    initLookAtGraphInputs(rt.board, node)
+  })
   ctx.addEventListener(
     ['LookAtParams_Add', 'LookAtParams_Remove', 'LookAtParams_UpdatePositions'],
     (events, rt) => {

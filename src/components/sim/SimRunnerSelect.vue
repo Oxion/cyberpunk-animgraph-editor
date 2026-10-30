@@ -1,5 +1,5 @@
 <template>
-  <Popover v-model:open="open">
+  <Popover v-model:open="openRef">
     <PopoverTrigger as-child>
       <Button
         type="button"
@@ -8,7 +8,7 @@
         class="h-6! max-w-full min-w-0 justify-between gap-1 rounded-sm px-2 py-0 text-[11px] font-normal text-foreground"
         :class="triggerClass"
         :title="$slots.leading ? undefined : triggerTitle"
-        :disabled="!hasOptions"
+        :disabled="!hasOptionsComputed"
       >
         <span
           v-if="$slots.leading"
@@ -19,9 +19,9 @@
         </span>
         <span
           class="min-w-0 flex-1 truncate text-left"
-          :title="selectedTitle || undefined"
+          :title="selectedTitleComputed || undefined"
         >
-          {{ selectedTitle || placeholder }}
+          {{ selectedTitleComputed || placeholder }}
         </span>
         <ChevronsUpDown class="size-3 shrink-0 opacity-60" :size="12" />
       </Button>
@@ -30,17 +30,17 @@
       align="start"
       class="w-max min-w-[var(--reka-popover-trigger-width,8.5rem)] max-w-[min(24rem,90vw)] max-h-64 overflow-y-auto rounded-sm p-1"
     >
-      <p v-if="!hasOptions" class="m-0 px-2 py-1.5 text-[11px] text-muted-foreground">
-        {{ emptyLabel }}
+      <p v-if="!hasOptionsComputed" class="m-0 px-2 py-1.5 text-[11px] text-muted-foreground">
+        {{ emptyLabelComputed }}
       </p>
-      <template v-else-if="flatPaths">
+      <template v-else-if="variantDataComputed.mode === 'flat'">
         <button
-          v-for="opt in pathOptions"
+          v-for="opt in variantDataComputed.options"
           :key="opt.runnerId"
           type="button"
           class="font-data flex w-full min-w-0 rounded-sm px-2 py-1 text-left text-[11px]"
           :class="
-            modelValue === opt.runnerId
+            selectedRunnerIdModel === opt.runnerId
               ? 'bg-accent text-accent-foreground'
               : 'hover:bg-muted/60'
           "
@@ -51,11 +51,10 @@
         </button>
       </template>
       <SimRunnerSelectNode
-        v-else-if="tree"
-        :node="tree"
-        :selected-id="modelValue"
+        v-else-if="variantDataComputed.mode === 'tree' && variantDataComputed.rootNode"
+        :node="variantDataComputed.rootNode"
+        :selected-id="selectedRunnerIdModel"
         :depth="0"
-        :selectable="isSelectable"
         @select="onSelect"
       />
     </PopoverContent>
@@ -68,9 +67,7 @@ import { ChevronsUpDown } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
-  simListBoundRunnerPaths,
-  simListBoundRunnerTree,
-  simRunnersRev,
+  sim,
 } from '../../stores/animgraphSim'
 import { projectRef } from '../../stores/graphProject'
 import type {
@@ -98,37 +95,49 @@ const props = withDefaults(
   }
 )
 
-const modelValue = defineModel<string>({ required: true })
+const selectedRunnerIdModel = defineModel<string>({ required: true })
 
-const open = ref(false)
+const openRef = ref(false)
 
-/** Diagram-filtered pickers use flat ancestry paths, not a nested tree. */
-const flatPaths = computed(() => Boolean(props.diagramId?.trim()))
+type FlatVariantData = {
+  mode: 'flat'
+  options: SimRunnerPathOption[]
+}
 
-const pathOptions = computed((): SimRunnerPathOption[] => {
-  void simRunnersRev.value
+type TreeVariantData = {
+  mode: 'tree'
+  rootNode: SimRunnerTreeNode | null
+}
+
+const variantDataComputed = computed<FlatVariantData | TreeVariantData>(() => {
+  void sim.runnersRev.value
   void projectRef.value
-  if (!flatPaths.value) return []
-  return simListBoundRunnerPaths(props.diagramId)
+
+  if (props.diagramId) {
+    return {
+      mode: 'flat',
+      options: sim.listBoundRunnerPaths(props.diagramId),
+    }
+  }
+
+  return {
+    mode: 'tree',
+    rootNode: sim.listBoundRunnerTree(),
+  }
 })
 
-const tree = computed((): SimRunnerTreeNode | null => {
-  void simRunnersRev.value
-  void projectRef.value
-  if (flatPaths.value) return null
-  return simListBoundRunnerTree()
+const hasOptionsComputed = computed(() => {
+  const variantData = variantDataComputed.value
+  return variantData.mode === 'flat' 
+    ? variantData.options.length > 0 
+    : variantData.rootNode != null
 })
 
-const hasOptions = computed(() =>
-  flatPaths.value ? pathOptions.value.length > 0 : tree.value != null
-)
-
-const emptyLabel = computed(() =>
-  props.diagramId ? 'No runners for this diagram' : 'No bound runners'
-)
-
-/** Synthetic forest wrapper (`__diagram:…`) is not a real runner. */
-const isSelectable = (runnerId: string) => !runnerId.startsWith('__diagram:')
+const emptyLabelComputed = computed(() => {
+  return variantDataComputed.value.mode === 'flat'
+    ? 'No runners for this diagram' 
+    : 'No bound runners'
+})
 
 const findTitleInTree = (node: SimRunnerTreeNode | null, id: string): string => {
   if (!node) return ''
@@ -140,57 +149,47 @@ const findTitleInTree = (node: SimRunnerTreeNode | null, id: string): string => 
   return ''
 }
 
-/** First selectable runner id in tree order. */
-const firstSelectableId = (node: SimRunnerTreeNode | null): string => {
-  if (!node) return ''
-  if (isSelectable(node.runnerId)) return node.runnerId
-  for (const child of node.children) {
-    const hit = firstSelectableId(child)
-    if (hit) return hit
+const selectedTitleComputed = computed(() => {
+  const variantData = variantDataComputed.value
+  const selectedRunnerId = selectedRunnerIdModel.value
+  if (variantData.mode === 'flat') {
+    return variantData.options.find((o) => o.runnerId === selectedRunnerId)?.title ?? ''
   }
-  return ''
-}
-
-const selectedTitle = computed(() => {
-  if (flatPaths.value) {
-    return pathOptions.value.find((o) => o.runnerId === modelValue.value)?.title ?? ''
-  }
-  return findTitleInTree(tree.value, modelValue.value)
+  return findTitleInTree(variantData.rootNode, selectedRunnerId)
 })
 
-watch(
-  [flatPaths, pathOptions, tree],
-  () => {
-    if (flatPaths.value) {
-      const opts = pathOptions.value
-      if (!opts.length) {
-        modelValue.value = ''
-        return
-      }
-      if (!modelValue.value || !opts.some((o) => o.runnerId === modelValue.value)) {
-        modelValue.value = opts[0]!.runnerId
-      }
+watch([variantDataComputed], () => {
+  const variantData = variantDataComputed.value
+  if (variantData.mode === 'flat') {
+    const opts = variantData.options
+    if (!opts.length) {
+      selectedRunnerIdModel.value = ''
       return
     }
-    const t = tree.value
-    if (!t) {
-      modelValue.value = ''
-      return
+
+    if (!selectedRunnerIdModel.value || !opts.some((o) => o.runnerId === selectedRunnerIdModel.value)) {
+      selectedRunnerIdModel.value = opts[0]!.runnerId
     }
-    if (
-      !modelValue.value ||
-      !isSelectable(modelValue.value) ||
-      !findTitleInTree(t, modelValue.value)
-    ) {
-      modelValue.value = firstSelectableId(t)
-    }
-  },
-  { immediate: true }
-)
+
+    return
+  }
+
+  const treeRootNode = variantData.rootNode
+  if (!treeRootNode) {
+    selectedRunnerIdModel.value = ''
+    return
+  }
+
+  if (
+    !selectedRunnerIdModel.value ||
+    !findTitleInTree(treeRootNode, selectedRunnerIdModel.value)
+  ) {
+    selectedRunnerIdModel.value = treeRootNode.runnerId
+  }
+}, { immediate: true })
 
 const onSelect = (runnerId: string) => {
-  if (!flatPaths.value && !isSelectable(runnerId)) return
-  modelValue.value = runnerId
-  open.value = false
+  selectedRunnerIdModel.value = runnerId
+  openRef.value = false
 }
 </script>

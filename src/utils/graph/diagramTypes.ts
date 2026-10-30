@@ -12,6 +12,11 @@ import type { RigLibraryJson } from '../sim/rigResource'
 import type { ClipPoseLibraryJson } from '../sim/clipPoseLibrary'
 import type { SimDriversProjectJson } from '../sim/simDriver'
 
+export type SimRunnerSlotsConfigJsonSlotItem = {
+  diagramId?: string
+  runnerId?: string
+}
+
 /** Persisted sim runner topology (no live dyn). */
 export type SimRunnerSlotsConfigJson = {
   rootRunnerId: string
@@ -25,11 +30,7 @@ export type SimRunnerSlotsConfigJson = {
     {
       /** Nonempty diagram id (bound runner only). */
       diagramId: string
-      /** Slots the host has configured (incl. explicit None). */
-      slotInitialized?: string[]
-      /** Only slots with a assigned diagram (None omitted). */
-      slotDiagramIds: Record<string, string>
-      slotRunnerIds: Record<string, string>
+      slotBySlotName: Partial<Record<string, SimRunnerSlotsConfigJsonSlotItem>>
     }
   >>
 }

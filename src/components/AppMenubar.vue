@@ -32,7 +32,7 @@ import { computed } from 'vue'
 import { isElectron } from '../utils/platform'
 import { isSettingsWindowOpen, toggleSettingsWindow } from '../stores/appWindows'
 import { hasProject } from '../stores/graphProject'
-import { simLiveBridgeActive, simStartLiveBridge, simStopLiveBridge } from '../stores/animgraphSim'
+import { liveBridge } from '../stores/animgraphSim'
 import { selectedNodeRef } from '../stores/graphSession'
 import { commandShortcut } from '../stores/hotkeyBindings'
 import { canToggleAppTool, commandEnabled, whenEnabled } from '../stores/appContext'
@@ -105,8 +105,11 @@ async function onQuit() {
 }
 
 async function onToggleLiveBridge() {
-  if (simLiveBridgeActive.value) await simStopLiveBridge()
-  else await simStartLiveBridge()
+  if (liveBridge.activeComputed.value) {
+    liveBridge.disconnect()
+  } else {
+    liveBridge.connect()
+  }
 }
 </script>
 
@@ -396,7 +399,7 @@ async function onToggleLiveBridge() {
         >
           <Network class="size-3.5" />
           Live Bridge
-          <Check v-if="simLiveBridgeActive" class="ml-auto size-3.5 opacity-80" />
+          <Check v-if="liveBridge.activeComputed.value" class="ml-auto size-3.5 opacity-80" />
         </MenubarItem>
         <MenubarItem
           class="header-menu-item"

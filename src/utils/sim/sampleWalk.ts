@@ -26,7 +26,7 @@ import {
   readFloorIkStaticWeight,
 } from './floorIkSim'
 import { sampleFppCamera } from './fppCameraSample'
-import { applyHumanIk } from './humanIkSim'
+import { applyHumanIk, HUMAN_IK_LIMB_GROUPS } from './humanIkSim'
 import { applyIk2 } from './ik2Solver'
 import {
   ensureIkTargetsController,
@@ -1400,8 +1400,9 @@ function sampleLookAtBoneAim(
   const ok = sampleOnePoseChild(node, ctx, out, visited, 'LookAt')
   const d = node.Data ?? {}
   const snap = ctx.boneOpCache?.lookAtBoneAim.get(node.HandleId)
-  const weight = snap?.weight ?? 1
-  if (!(weight > 0) || !ctx.rig) return ok
+  // No Update snap → weight 0 (not 1). Aiming at origin with full weight contorts.
+  const weight = snap?.weight ?? 0
+  if (!(weight > 0) || !ctx.rig || !snap) return ok
   const transformName = readTransformIndexFromRaw(d.transform)
   if (!transformName) return ok
   const staticCfg = readLookAtBoneAimStatic(d as Record<string, unknown>)
@@ -1409,7 +1410,7 @@ function sampleLookAtBoneAim(
     transformName,
     ...staticCfg,
     weight,
-    targetMs: snap?.targetMs ?? { x: 0, y: 0, z: 0 },
+    targetMs: snap.targetMs,
   })
   return ok
 }
@@ -3017,7 +3018,8 @@ function sampleIk2(
 
   const d = node.Data ?? {}
   const snap = ctx.boneOpCache?.ik2.get(node.HandleId)
-  let weight = snap?.weight ?? 1
+  // No Update snap → 0 (not 1); FloatInput-missing used to inflate via fallback 1.
+  let weight = snap?.weight ?? 0
   if (!resolveHandle(ctx.handles, d.weightNode)) {
     const trackName = readNamedTrackFieldName(d.floatTrack)
     const trackIdx = resolveTrackUnified(out, ctx.rig, trackName)
@@ -3168,19 +3170,25 @@ function sampleAddIkRequest(
   if (boneIdx >= 0) getTransformMs(out, ctx.rig, boneIdx, ms)
 
   const posOff = readVector3FromData(d.positionOffset)
+  // Engine: targetMS.Rotation * m_rotationOffset (offset always present; often identity).
   const rotRaw =
     d.rotationOffset && typeof d.rotationOffset === 'object'
       ? (d.rotationOffset as Record<string, unknown>)
       : null
-  const hasRotOff = !!rotRaw
-  const rotOff = hasRotOff
-    ? {
-        x: readNumber(rotRaw.i ?? rotRaw.X ?? rotRaw.x, 0),
-        y: readNumber(rotRaw.j ?? rotRaw.Y ?? rotRaw.y, 0),
-        z: readNumber(rotRaw.k ?? rotRaw.Z ?? rotRaw.z, 0),
-        w: readNumber(rotRaw.r ?? rotRaw.W ?? rotRaw.w, 1),
-      }
-    : { x: 0, y: 0, z: 0, w: 1 }
+  const ox = rotRaw ? readNumber(rotRaw.i ?? rotRaw.X ?? rotRaw.x, 0) : 0
+  const oy = rotRaw ? readNumber(rotRaw.j ?? rotRaw.Y ?? rotRaw.y, 0) : 0
+  const oz = rotRaw ? readNumber(rotRaw.k ?? rotRaw.Z ?? rotRaw.z, 0) : 0
+  const ow = rotRaw ? readNumber(rotRaw.r ?? rotRaw.W ?? rotRaw.w, 1) : 1
+  const bx = ms.qx
+  const by = ms.qy
+  const bz = ms.qz
+  const bw = ms.qw
+  const rotMs = {
+    x: bw * ox + bx * ow + by * oz - bz * oy,
+    y: bw * oy - bx * oz + by * ow + bz * ox,
+    z: bw * oz + bx * oy - by * ox + bz * ow,
+    w: bw * ow - bx * ox - by * oy - bz * oz,
+  }
   const priority = Math.trunc(readNumber(d.priority, 0))
   const prev = map.get(chain)
   if (prev && prev.priority > priority) return ok
@@ -3193,9 +3201,7 @@ function sampleAddIkRequest(
       y: ms.ty + posOff.y,
       z: ms.tz + posOff.z,
     },
-    rotMs: hasRotOff
-      ? rotOff
-      : { x: ms.qx, y: ms.qy, z: ms.qz, w: ms.qw },
+    rotMs,
     weightPosition: readNumber(d.weightPosition, 1),
     weightRotation: readNumber(d.weightRotation, 1),
     priority,
@@ -3225,7 +3231,8 @@ function runIkTargetsControllerSample(
   node: AnimgraphNode,
   ctx: SimGraphRunnerSampleCtx,
   out: Pose,
-  settings: ReturnType<typeof resolveGenerateIkChainSettings>
+  settings: ReturnType<typeof resolveGenerateIkChainSettings>,
+  opts?: { humanIkLimbs?: boolean }
 ): void {
   if (!ctx.instanceStore) return
   const ctrl = ensureIkTargetsController(
@@ -3244,7 +3251,12 @@ function runIkTargetsControllerSample(
     },
     ctrl.lastDt
   )
-  ctrl.publish(ctx.board)
+  if (opts?.humanIkLimbs) {
+    // Engine Sets all four HumanIk GraphInput groups every Sample.
+    ctrl.publishHumanIk(ctx.board, HUMAN_IK_LIMB_GROUPS)
+  } else {
+    ctrl.publish(ctx.board)
+  }
 }
 
 /** GenerateIkAnimFeatureData: controller update + board publish; pose passthrough. */
@@ -3283,7 +3295,8 @@ function sampleHumanIk(
     node,
     ctx,
     out,
-    resolveHumanIkChainSettings(node, ctx.board)
+    resolveHumanIkChainSettings(node, ctx.board),
+    { humanIkLimbs: true }
   )
   applyHumanIk(out, ctx.rig, ctx.board)
   return ok

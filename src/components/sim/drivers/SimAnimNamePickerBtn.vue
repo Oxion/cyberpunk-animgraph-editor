@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { simClipNames } from '@/stores/animgraphSim'
+import { sim } from '@/stores/animgraphSim'
 
 const props = withDefaults(
   defineProps<{
@@ -28,7 +28,7 @@ const searchInputRef = ref<InstanceType<typeof Input> | null>(null)
 const listRootRef = ref<HTMLElement | null>(null)
 
 const filtered = computed(() => {
-  const names = simClipNames.value ?? []
+  const names = sim.clipNames.value ?? []
   const q = searchQuery.value.trim().toLowerCase()
   const list = q
     ? names.filter((n) => n.toLowerCase().includes(q))
@@ -163,7 +163,7 @@ watch([filtered, () => props.modelValue], () => {
             class="px-2 py-3 text-center text-[11px] text-muted-foreground"
           >
             {{
-              simClipNames.length === 0 ? 'No animations loaded' : 'No matches'
+              sim.clipNames.value.length === 0 ? 'No animations loaded' : 'No matches'
             }}
           </div>
           <button

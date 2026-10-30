@@ -15,11 +15,10 @@ import {
 } from '../utils/sim/simWorkspotHubDriver'
 import type { SimGraphRunner } from '../utils/sim/SimGraphRunner'
 import {
+  sim,
   bumpSimDriversStructural,
   ensureDefaultSimDriver,
   getSimDriverHandle,
-  simGetPrimaryRunner,
-  simGetRunner,
 } from './animgraphSim'
 
 export function simWorkspotHub(): SimWorkspotHubDriver {
@@ -34,7 +33,7 @@ function driverConsoleHost<T extends SimDriver>(
       ensureDefaultSimDriver(handleDef, undefined, { silent: true }).driver,
     attach: (runner?: SimGraphRunner) => {
       const handle = ensureDefaultSimDriver(handleDef)
-      const r = runner ?? simGetPrimaryRunner() ?? undefined
+      const r = runner ?? sim.getPrimaryRunner() ?? undefined
       if (!r) {
         console.warn(
           `[simDriver:${handleDef.driverDef.id}] no runner — open/play a sim diagram first`
@@ -53,9 +52,9 @@ function driverConsoleHost<T extends SimDriver>(
     getAttachedRunner: () => {
       const handle = getSimDriverHandle(handleDef)
       if (!handle?.runnerId) return null
-      return simGetRunner(handle.runnerId)
+      return sim.getRunner(handle.runnerId)
     },
-    getPrimaryRunner: simGetPrimaryRunner,
+    getPrimaryRunner: sim.getPrimaryRunner,
   }
 }
 
