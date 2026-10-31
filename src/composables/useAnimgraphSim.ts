@@ -373,6 +373,8 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
   const active = ref(false)
 
   const draftBoardEntries: DraftBoardEntry[] = []
+  /** Bumps when draft boards register/unregister (UI select lists). */
+  const draftBoardIdsRev = ref(0)
   /** Forces all channels to re-merge (unregister / empty stack orphan clear). */
   let draftAppliedKeysNeedReconcile = false
   const draftChannels = createDraftChannels()
@@ -388,6 +390,10 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
   const getDraftBoard = (draftBoardId: string): IDraftBoard | undefined => {
     return draftBoardEntries.find(draftBoardEntry => draftBoardEntry.draftBoard.id === draftBoardId)?.draftBoard
   }
+
+  const listDraftBoardIds = (): string[] => {
+    return draftBoardEntries.map((entry) => entry.draftBoard.id)
+  }
   
   const registerDraftBoard = (draftBoard: IDraftBoard, priority: number): boolean => {
     if (!draftBoard.id || getDraftBoard(draftBoard.id)) return false
@@ -397,6 +403,7 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
       appliedRevisionInfo: createDraftAppliedRevisionInfo(),
     })
     _sortDraftBoardEntries()
+    draftBoardIdsRev.value++
     return true
   }
   const unregisterDraftBoard = (draftBoardId: string): boolean => {
@@ -404,6 +411,7 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
     if (index === -1) return false
     draftBoardEntries.splice(index, 1)
     draftAppliedKeysNeedReconcile = true
+    draftBoardIdsRev.value++
     return true
   }
 
@@ -2271,7 +2279,10 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
     getCachedClipPoseCompactText,
     applyProjectSimResources,
 
+    board,
     getDraftBoard,
+    listDraftBoardIds,
+    draftBoardIdsRev,
     registerDraftBoard,
     unregisterDraftBoard,
     

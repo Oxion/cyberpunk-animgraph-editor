@@ -9,6 +9,7 @@ import {
   FolderOpenIcon,
   InfoIcon,
   LayoutGrid,
+  Network,
   Redo2,
   SaveIcon,
   SettingsIcon,

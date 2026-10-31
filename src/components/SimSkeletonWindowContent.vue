@@ -5,6 +5,7 @@
       v-model:selected-runner-id="selectedRunnerId"
       v-model:at-node-runner-id="atNodeRunnerId"
       v-model:show-labels="showLabels"
+      v-model:hidden-bones="hiddenBones"
       :node-diagram-id="nodeDiagramId"
     />
 
@@ -27,6 +28,7 @@
           class="min-h-0 flex-1"
           :minimized="Boolean(minimized) || mainTab !== 'viewport'"
           :show-labels="showLabels"
+          v-model:hidden-bones="hiddenBones"
           :status-label="sourceLabel(poseSource)"
           :get-pose="fetchPose"
         />
@@ -91,12 +93,36 @@
                   class="font-data box-border border-b border-border/30 px-0.5 py-1 text-[10px]"
                   :style="{ height: `${rigBoneRowH}px` }"
                 >
-                  <div class="truncate text-[11px] text-foreground/90" :title="item.data">
-                    {{ item.data }}
+                  <div class="flex min-w-0 items-center gap-0.5">
+                    <button
+                      type="button"
+                      class="inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-foreground/80 hover:bg-muted/80"
+                      :title="isBoneHidden(item.data) ? `Show · ${item.data}` : `Hide · ${item.data}`"
+                      :aria-label="isBoneHidden(item.data) ? 'Show bone' : 'Hide bone'"
+                      :aria-pressed="!isBoneHidden(item.data)"
+                      @click.stop="toggleBoneHidden(item.data)"
+                    >
+                      <Bone
+                        class="size-3"
+                        :size="12"
+                        :class="
+                          isBoneHidden(item.data)
+                            ? 'fill-none opacity-50'
+                            : 'fill-current'
+                        "
+                      />
+                    </button>
+                    <div
+                      class="min-w-0 flex-1 truncate text-[11px] text-foreground/90"
+                      :class="isBoneHidden(item.data) ? 'opacity-50' : ''"
+                      :title="item.data"
+                    >
+                      {{ item.data }}
+                    </div>
                   </div>
                   <div
                     v-if="rigTrsLineCount"
-                    class="whitespace-pre text-muted-foreground"
+                    class="pl-[2px] whitespace-pre text-muted-foreground"
                   >
                     {{ formatTrs(rigBoneTrs[item.data], showRigTrs) }}
                   </div>
@@ -148,12 +174,36 @@
                   :key="`stack-${row.name}`"
                   class="font-data border-b border-border/30 px-0.5 py-1 text-[10px] last:border-0"
                 >
-                  <div class="truncate text-[11px] text-cyan-300/90" :title="row.name">
-                    {{ row.name }}
+                  <div class="flex min-w-0 items-center gap-0.5">
+                    <button
+                      type="button"
+                      class="inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-cyan-300/90 hover:bg-muted/80"
+                      :title="
+                        isBoneHidden(row.name) ? `Show · ${row.name}` : `Hide · ${row.name}`
+                      "
+                      :aria-label="isBoneHidden(row.name) ? 'Show bone' : 'Hide bone'"
+                      :aria-pressed="!isBoneHidden(row.name)"
+                      @click.stop="toggleBoneHidden(row.name)"
+                    >
+                      <Bone
+                        class="size-3"
+                        :size="12"
+                        :class="
+                          isBoneHidden(row.name) ? 'fill-none opacity-50' : 'fill-current'
+                        "
+                      />
+                    </button>
+                    <div
+                      class="min-w-0 flex-1 truncate text-[11px] text-cyan-300/90"
+                      :class="isBoneHidden(row.name) ? 'opacity-50' : ''"
+                      :title="row.name"
+                    >
+                      {{ row.name }}
+                    </div>
                   </div>
                   <div
                     v-if="stackTrsLineCount"
-                    class="whitespace-pre-wrap break-all text-muted-foreground"
+                    class="pl-[2px] whitespace-pre-wrap break-all text-muted-foreground"
                   >
                     {{ formatTrs(row.trs, showStackTrs) }}
                   </div>
@@ -203,6 +253,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useVirtualList } from '@vueuse/core'
+import { Bone } from 'lucide-vue-next'
 import SkeletonViewport from './SkeletonViewport.vue'
 import SkeletonViewportHeader, {
   type SkeletonPoseSource,
@@ -276,11 +327,22 @@ const poseSource = ref<SkeletonPoseSource>('full')
 const selectedRunnerId = ref(sim.getRootRunnerId())
 const atNodeRunnerId = ref('')
 const showLabels = ref(false)
+/** Rig / stack bone names hidden in the viewport (replace Set to notify). */
+const hiddenBones = ref<ReadonlySet<string>>(new Set())
 const nameFilter = ref('')
 type TrsParts = Record<TrsPart, boolean>
 const defaultTrsParts = (): TrsParts => ({ t: true, r: true, s: false })
 const showRigTrs = ref(defaultTrsParts())
 const showStackTrs = ref(defaultTrsParts())
+
+const isBoneHidden = (name: string) => hiddenBones.value.has(name)
+
+const toggleBoneHidden = (name: string) => {
+  const next = new Set(hiddenBones.value)
+  if (next.has(name)) next.delete(name)
+  else next.add(name)
+  hiddenBones.value = next
+}
 
 const toggleTrsPart = (list: 'rig' | 'stack', part: TrsPart) => {
   const target = list === 'rig' ? showRigTrs : showStackTrs

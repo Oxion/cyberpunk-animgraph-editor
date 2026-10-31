@@ -1,10 +1,35 @@
 <template>
   <div class="flex h-full min-h-0 w-full flex-col gap-1">
     <div
-      v-if="statusText"
-      class="font-data shrink-0 truncate text-[10px] text-muted-foreground"
+      v-if="statusText || selectedBoneName"
+      class="flex h-6 shrink-0 items-center gap-1"
     >
-      {{ statusText }}
+      <div
+        class="font-data min-w-0 flex-1 truncate text-[10px] leading-none text-muted-foreground"
+      >
+        {{ statusText }}
+      </div>
+      <Button
+        v-if="selectedBoneName"
+        type="button"
+        size="icon-xs"
+        class="size-6 shrink-0"
+        :variant="selectedBoneHidden ? 'ghost' : 'secondary'"
+        :title="
+          selectedBoneHidden
+            ? `Show bone · ${selectedBoneName}`
+            : `Hide bone · ${selectedBoneName}`
+        "
+        :aria-label="selectedBoneHidden ? 'Show selected bone' : 'Hide selected bone'"
+        :aria-pressed="!selectedBoneHidden"
+        @click="toggleSelectedBoneHidden"
+      >
+        <Bone
+          class="size-3.5"
+          :size="14"
+          :class="selectedBoneHidden ? 'fill-none opacity-60' : 'fill-current'"
+        />
+      </Button>
     </div>
     <div
       ref="hostRef"
@@ -43,11 +68,12 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Bone } from 'lucide-vue-next'
+import { Button } from '@/components/ui/button'
 import {
-  createSkeletonView,
+  SkeletonView,
   type SkeletonBoneSelection,
   type SkeletonJointClick,
-  type SkeletonView,
 } from '../utils/sim/skeletonView'
 import type { Pose } from '../utils/sim/pose'
 import type { RigEntry } from '../utils/sim/rigResource'
@@ -71,6 +97,11 @@ const props = withDefaults(
   }
 )
 
+/** Bone / stack slot names omitted from draw + pick. */
+const hiddenBones = defineModel<ReadonlySet<string>>('hiddenBones', {
+  default: () => new Set<string>(),
+})
+
 const hostRef = ref<HTMLElement | null>(null)
 const pickMenuRef = ref<HTMLElement | null>(null)
 const statusText = ref('No pose')
@@ -91,6 +122,10 @@ const pickMenuStyle = computed(() => ({
   top: `${pickMenuPos.value.y}px`,
 }))
 
+const selectedBoneHidden = computed(() =>
+  selectedBoneName.value ? hiddenBones.value.has(selectedBoneName.value) : false
+)
+
 const closePickMenu = () => {
   pickMenu.value = null
 }
@@ -105,6 +140,19 @@ const applyBoneSelection = (c: SkeletonBoneSelection) => {
   selectedBoneName.value = c.name
   pickMenu.value = null
   view?.selectBone(c.unifiedIndex)
+}
+
+const setBoneHidden = (name: string, hidden: boolean) => {
+  const next = new Set(hiddenBones.value)
+  if (hidden) next.add(name)
+  else next.delete(name)
+  hiddenBones.value = next
+}
+
+const toggleSelectedBoneHidden = () => {
+  const name = selectedBoneName.value
+  if (!name) return
+  setBoneHidden(name, !hiddenBones.value.has(name))
 }
 
 const clampPickMenu = async () => {
@@ -148,6 +196,7 @@ const tick = () => {
   if (!pack) {
     statusText.value = 'No pose / rig'
     view.setRig(null)
+    view.updateFromPose(null)
     lastRig = null
     clearBoneSelection()
     view.render()
@@ -192,7 +241,10 @@ const onWindowKeydown = (ev: KeyboardEvent) => {
 onMounted(async () => {
   const host = hostRef.value
   if (!host) return
-  view = createSkeletonView(host, { onJointClick })
+  view = new SkeletonView(host, {
+    onJointClick,
+    hiddenBones: hiddenBones.value,
+  })
   view.setShowLabels(props.showLabels)
   const syncSize = () => {
     if (!view || !hostRef.value) return
@@ -218,6 +270,13 @@ watch(
   () => props.showLabels,
   (on) => {
     view?.setShowLabels(on)
+  }
+)
+
+watch(
+  () => [...hiddenBones.value].sort().join('\0'),
+  () => {
+    view?.setHiddenBones(hiddenBones.value)
   }
 )
 

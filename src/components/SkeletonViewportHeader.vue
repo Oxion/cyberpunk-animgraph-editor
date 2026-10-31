@@ -41,7 +41,20 @@
       trigger-title="Runner executing the node’s diagram"
       placeholder="Runner for node"
     />
-    <div class="ml-auto flex shrink-0 items-center">
+    <div class="ml-auto flex shrink-0 items-center gap-0.5">
+      <Button
+        v-if="hiddenCount > 0"
+        type="button"
+        size="xs"
+        variant="ghost"
+        class="h-6 gap-1 px-1.5 text-[10px] tabular-nums text-muted-foreground"
+        title="Show all bones"
+        aria-label="Show all bones"
+        @click="showAllBones"
+      >
+        <Bone class="size-3.5 fill-none" :size="14" />
+        <span>{{ hiddenCount }}</span>
+      </Button>
       <Button
         type="button"
         size="icon-xs"
@@ -58,7 +71,8 @@
 </template>
 
 <script setup lang="ts">
-import { Tag } from 'lucide-vue-next'
+import { computed } from 'vue'
+import { Bone, Tag } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import SimRunnerSelect from './sim/SimRunnerSelect.vue'
@@ -74,4 +88,14 @@ const poseSource = defineModel<SkeletonPoseSource>('poseSource', { required: tru
 const selectedRunnerId = defineModel<string>('selectedRunnerId', { required: true })
 const atNodeRunnerId = defineModel<string>('atNodeRunnerId', { required: true })
 const showLabels = defineModel<boolean>('showLabels', { default: false })
+const hiddenBones = defineModel<ReadonlySet<string>>('hiddenBones', {
+  default: () => new Set<string>(),
+})
+
+const hiddenCount = computed(() => hiddenBones.value.size)
+
+const showAllBones = () => {
+  if (!hiddenBones.value.size) return
+  hiddenBones.value = new Set()
+}
 </script>
