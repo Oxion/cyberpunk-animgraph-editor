@@ -24,7 +24,14 @@ import type { SimVec4 } from './evalAnimMathExpressionVector'
 /** FiredEvent phase for timeline events (animNode_Signal DurStart/DurEnd split). */
 export type SimAnimEventPhase = 'tick' | 'durStart' | 'durEnd'
 
+export type SimInputBoardOptions = {
+  /** Invoked at the end of `clearAll` (after maps are emptied). */
+  onCleared?: () => void
+}
+
 export class SimInputBoard {
+  private readonly onCleared: (() => void) | undefined
+
   /** lowercase featureName -> lowercase propertyName -> number */
   private features = new Map<string, Map<string, number>>()
   /** Snapshot of features at previous endFrame — IntEdge conditions */
@@ -117,6 +124,10 @@ export class SimInputBoard {
   /** AnimNode_SkAnim::m_anyAnimationEnd */
   static readonly ANY_ANIMATION_ENDED = 'At least one animation ended'
 
+  constructor(options?: SimInputBoardOptions) {
+    this.onCleared = options?.onCleared
+  }
+
   private static norm(s: string): string {
     return s.trim().toLowerCase()
   }
@@ -161,6 +172,7 @@ export class SimInputBoard {
     this.entityTags.clear()
     this.wrapperWeights.clear()
     this.resetDynamics()
+    this.onCleared?.()
   }
 
   setEntityTag(name: string, present = true): void {
@@ -184,11 +196,30 @@ export class SimInputBoard {
     this.wrapperWeights.set(name, value)
   }
 
+  clearWrapperWeight(name: string): void {
+    if (!name || name === 'None') return
+    this.wrapperWeights.delete(name)
+  }
+
   /** FindVariableValue parity: active bit only (weight >= 0.5). */
   isWrapperActive(name: string): boolean {
     if (!name || name === 'None') return false
     const w = this.wrapperWeights.get(name)
     return w !== undefined && w >= SimInputBoard.WRAPPER_ACTIVE_THRESHOLD
+  }
+
+  private static clearFeatMapProp<T>(
+    map: Map<string, Map<string, T>>,
+    featureName: string,
+    propertyName: string,
+  ): void {
+    const key = SimInputBoard.featKey(featureName, propertyName)
+    if (!key) return
+    const [f, p] = key
+    const props = map.get(f)
+    if (!props) return
+    props.delete(p)
+    if (props.size === 0) map.delete(f)
   }
 
   setFeature(featureName: string, propertyName: string, value: number): void {
@@ -201,6 +232,10 @@ export class SimInputBoard {
       this.features.set(f, props)
     }
     props.set(p, value)
+  }
+
+  clearFeature(featureName: string, propertyName: string): void {
+    SimInputBoard.clearFeatMapProp(this.features, featureName, propertyName)
   }
 
   getFeature(featureName: string, propertyName: string): number | undefined {
@@ -224,6 +259,10 @@ export class SimInputBoard {
       z: Number.isFinite(value.z) ? value.z : 0,
       w: Number.isFinite(value.w) ? value.w : 0,
     })
+  }
+
+  clearVectorFeature(featureName: string, propertyName: string): void {
+    SimInputBoard.clearFeatMapProp(this.vectorFeatures, featureName, propertyName)
   }
 
   getVectorFeature(featureName: string, propertyName: string): SimVec4 | undefined {
@@ -250,6 +289,10 @@ export class SimInputBoard {
     })
   }
 
+  clearQuatFeature(featureName: string, propertyName: string): void {
+    SimInputBoard.clearFeatMapProp(this.quatFeatures, featureName, propertyName)
+  }
+
   getQuatFeature(featureName: string, propertyName: string): SimVec4 | undefined {
     const key = SimInputBoard.featKey(featureName, propertyName)
     if (!key) return undefined
@@ -269,6 +312,10 @@ export class SimInputBoard {
     props.set(p, value === true)
   }
 
+  clearBoolFeature(featureName: string, propertyName: string): void {
+    SimInputBoard.clearFeatMapProp(this.boolFeatures, featureName, propertyName)
+  }
+
   getBoolFeature(featureName: string, propertyName: string): boolean | undefined {
     const key = SimInputBoard.featKey(featureName, propertyName)
     if (!key) return undefined
@@ -285,6 +332,10 @@ export class SimInputBoard {
       this.stringFeatures.set(f, props)
     }
     props.set(p, value ?? '')
+  }
+
+  clearStringFeature(featureName: string, propertyName: string): void {
+    SimInputBoard.clearFeatMapProp(this.stringFeatures, featureName, propertyName)
   }
 
   getStringFeature(featureName: string, propertyName: string): string | undefined {
@@ -403,6 +454,18 @@ export class SimInputBoard {
   setTagValue(name: string, value: number): void {
     if (!name || name === 'None' || !Number.isFinite(value)) return
     this.tagValues.set(name, value)
+  }
+
+  clearTagValue(name: string): void {
+    if (!name || name === 'None') return
+    if (this.tagValues.delete(name)) return
+    const lower = name.toLowerCase()
+    for (const k of this.tagValues.keys()) {
+      if (k.toLowerCase() === lower) {
+        this.tagValues.delete(k)
+        return
+      }
+    }
   }
 
   getTagValue(name: string): number | undefined {

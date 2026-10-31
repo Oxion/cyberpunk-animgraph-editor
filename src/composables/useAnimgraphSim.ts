@@ -52,6 +52,15 @@ import { RigLibrary, type RigEntry, type RigEntryView, type RigLibraryJson } fro
 import { addFrameLogId, clearFrameLogIds } from '../utils/sim/simSampleLog'
 import { emptySimSnapshot } from '../utils/sim/simSnapshot'
 import type { SimSnapshot } from '../utils/sim/simTypes'
+import {
+  createDraftAppliedRevisionInfo,
+  type DraftBoardEntry,
+} from './sim/draftBoardEntry'
+import {
+  clearDraftChannels,
+  createDraftChannels,
+  type DraftChannelOnAppliedById,
+} from './sim/draftChannels'
 import { makeFeatureKey } from './sim/features'
 import { IDraftBoard } from './sim/types'
 
@@ -179,33 +188,6 @@ type DerivedCacheEntry = DerivedPoseStats & {
   resolved?: boolean
 }
 
-type DraftBoardAppliedRevisionInfo = {
-  numericFeaturesRevision: number
-  stringFeaturesRevision: number
-  booleanFeaturesRevision: number
-  vectorFeaturesRevision: number
-  quatFeaturesRevision: number
-
-  floatVarsRevision: number
-  intVarsRevision: number
-  boolVarsRevision: number
-  vectorVarsRevision: number
-  quatVarsRevision: number
-
-  wrapperWeightsRevision: number
-
-  tagValuesRevision: number
-  
-  entityTagsRevision: number
-}
-
-type DraftBoardEntry = {
-  draftBoard: IDraftBoard
-  /** Lower priority = higher priority. */
-  priority: number
-  appliedRevisionInfo: DraftBoardAppliedRevisionInfo
-}
-
 const mergeUniqueKeyFeatures = (
   seenFeatureKeysSet: Set<string>, 
   features: { feature: string; property: string }[],
@@ -291,8 +273,6 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
   const playingRef = ref(clock.value.playing)
   const speedRef = ref(clock.value.speed)
 
-  const board = shallowRef(new SimInputBoard())
-  
   const clipLibraryRef = shallowRef(new ClipLibrary())
   const clipLibraryRevisionRef = ref(0)
   const bumpClips = () => {
@@ -393,6 +373,9 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
   const active = ref(false)
 
   const draftBoardEntries: DraftBoardEntry[] = []
+  /** Forces all channels to re-merge (unregister / empty stack orphan clear). */
+  let draftAppliedKeysNeedReconcile = false
+  const draftChannels = createDraftChannels()
   
   const _sortDraftBoardEntries = () => {
     draftBoardEntries.sort((a, b) => {
@@ -411,21 +394,7 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
     draftBoardEntries.push({
       draftBoard,
       priority,
-      appliedRevisionInfo: {
-        numericFeaturesRevision: -1,
-        stringFeaturesRevision: -1,
-        booleanFeaturesRevision: -1,
-        vectorFeaturesRevision: -1,
-        quatFeaturesRevision: -1,
-        floatVarsRevision: -1,
-        intVarsRevision: -1,
-        boolVarsRevision: -1,
-        vectorVarsRevision: -1,
-        quatVarsRevision: -1,
-        wrapperWeightsRevision: -1,
-        tagValuesRevision: -1,
-        entityTagsRevision: -1,
-      },
+      appliedRevisionInfo: createDraftAppliedRevisionInfo(),
     })
     _sortDraftBoardEntries()
     return true
@@ -434,9 +403,19 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
     const index = draftBoardEntries.findIndex(draftBoardEntry => draftBoardEntry.draftBoard.id === draftBoardId)
     if (index === -1) return false
     draftBoardEntries.splice(index, 1)
+    draftAppliedKeysNeedReconcile = true
     return true
   }
 
+  const onSimBoardCleared = () => {
+    clearDraftChannels(draftChannels)
+    for (const entry of draftBoardEntries) {
+      entry.appliedRevisionInfo = createDraftAppliedRevisionInfo()
+    }
+    draftAppliedKeysNeedReconcile = false
+  }
+
+  const board = shallowRef(new SimInputBoard({ onCleared: onSimBoardCleared }))
 
   /** Sample-path diagnostics (Blend2 null inputs, …). Off by default. */
   const sampleWarningsEnabled = ref(false)
@@ -1109,157 +1088,24 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
 
   const boardWrapperWeightsRevisionRef = ref(0)
 
+  const draftChannelOnAppliedById: DraftChannelOnAppliedById = {
+    wrapperWeights: () => {
+      boardWrapperWeightsRevisionRef.value++
+    },
+    entityTags: () => {
+      invalidateAllStaticSwitches()
+    },
+  }
+
   const applyDraftsToBoard = () => {
-    for (let i = draftBoardEntries.length - 1; i >= 0; i--) {
-      const draftBoardEntry = draftBoardEntries[i]
-      const draftBoard = draftBoardEntry.draftBoard
-      const appliedRevisionInfo = draftBoardEntry.appliedRevisionInfo
-      
-      if (appliedRevisionInfo.numericFeaturesRevision !== draftBoard.numericFeaturesRevisionRef.value) {
-        const numericFeatureByKey = draftBoard.numericFeatureByKeyRef.value
-        for (const [key, featureInfo] of draftBoard.populatedNumericFeatureKeyToFeatureMap) {
-          const value = numericFeatureByKey[key]
-          if (value === undefined) continue
-          board.value.setFeature(featureInfo.feature, featureInfo.property, value)
-        }
-        
-        appliedRevisionInfo.numericFeaturesRevision = draftBoard.numericFeaturesRevisionRef.value
-      }
-      
-      if (appliedRevisionInfo.stringFeaturesRevision !== draftBoard.stringFeaturesRevisionRef.value) {
-        const stringFeatureByKey = draftBoard.stringFeatureByKeyRef.value
-        for (const [key, featureInfo] of draftBoard.populatedStringFeatureKeyToFeatureMap) {
-          const value = stringFeatureByKey[key]
-          if (value === undefined) continue
-          board.value.setStringFeature(featureInfo.feature, featureInfo.property, value)
-        }
-
-        appliedRevisionInfo.stringFeaturesRevision = draftBoard.stringFeaturesRevisionRef.value
-      }
-      
-      if (appliedRevisionInfo.booleanFeaturesRevision !== draftBoard.booleanFeaturesRevisionRef.value) {
-        const booleanFeatureByKey = draftBoard.booleanFeatureByKeyRef.value
-        for (const [key, featureInfo] of draftBoard.populatedBooleanFeatureKeyToFeatureMap) {
-          const value = booleanFeatureByKey[key]
-          if (value === undefined) continue
-          board.value.setBoolFeature(featureInfo.feature, featureInfo.property, value)
-        }
-
-        appliedRevisionInfo.booleanFeaturesRevision = draftBoard.booleanFeaturesRevisionRef.value
-      }
-      
-      if (appliedRevisionInfo.vectorFeaturesRevision !== draftBoard.vectorFeaturesRevisionRef.value) {
-        const vectorFeatureByKey = draftBoard.vectorFeatureByKeyRef.value
-        for (const [key, featureInfo] of draftBoard.populatedVectorFeatureKeyToFeatureMap) {
-          const value = vectorFeatureByKey[key]
-          if (value === undefined) continue
-          board.value.setVectorFeature(featureInfo.feature, featureInfo.property, value)
-        }
-
-        appliedRevisionInfo.vectorFeaturesRevision = draftBoard.vectorFeaturesRevisionRef.value
-      }
-
-      if (appliedRevisionInfo.quatFeaturesRevision !== draftBoard.quatFeaturesRevisionRef.value) {
-        const quatFeatureByKey = draftBoard.quatFeatureByKeyRef.value
-        for (const [key, featureInfo] of draftBoard.populatedQuatFeatureKeyToFeatureMap) {
-          const value = quatFeatureByKey[key]
-          if (value === undefined) continue
-          board.value.setQuatFeature(featureInfo.feature, featureInfo.property, value)
-        }
-
-        appliedRevisionInfo.quatFeaturesRevision = draftBoard.quatFeaturesRevisionRef.value
-      }
-
-      if (appliedRevisionInfo.floatVarsRevision !== draftBoard.floatVarsRevisionRef.value) {
-        const floatVarByKey = draftBoard.floatVarByKeyRef.value
-        for (const varName of draftBoard.populatedFloatVarNamesSet) {
-          const value = floatVarByKey[varName]
-          if (value === undefined) continue
-          board.value.floatVars.set(varName, value)
-        }
-
-        appliedRevisionInfo.floatVarsRevision = draftBoard.floatVarsRevisionRef.value
-      }
-
-      if (appliedRevisionInfo.intVarsRevision !== draftBoard.intVarsRevisionRef.value) {
-        const intVarByKey = draftBoard.intVarByKeyRef.value
-        for (const varName of draftBoard.populatedIntVarNamesSet) {
-          const value = intVarByKey[varName]
-          if (value === undefined) continue
-          board.value.intVars.set(varName, value)
-        }
-
-        appliedRevisionInfo.intVarsRevision = draftBoard.intVarsRevisionRef.value
-      }
-
-      if (appliedRevisionInfo.boolVarsRevision !== draftBoard.boolVarsRevisionRef.value) {
-        const boolVarByKey = draftBoard.boolVarByKeyRef.value
-        for (const varName of draftBoard.populatedBoolVarNamesSet) {
-          const value = boolVarByKey[varName]
-          if (value === undefined) continue
-          board.value.boolVars.set(varName, value)
-        }
-
-        appliedRevisionInfo.boolVarsRevision = draftBoard.boolVarsRevisionRef.value
-      }
-
-      if (appliedRevisionInfo.vectorVarsRevision !== draftBoard.vectorVarsRevisionRef.value) {
-        const vectorVarByKey = draftBoard.vectorVarByKeyRef.value
-        for (const varName of draftBoard.populatedVectorVarNamesSet) {
-          const value = vectorVarByKey[varName]
-          if (value === undefined) continue
-          board.value.vectorVars.set(varName, value)
-        }
-
-        appliedRevisionInfo.vectorVarsRevision = draftBoard.vectorVarsRevisionRef.value
-      }
-
-      if (appliedRevisionInfo.quatVarsRevision !== draftBoard.quatVarsRevisionRef.value) {
-        const quatVarByKey = draftBoard.quatVarByKeyRef.value
-        for (const varName of draftBoard.populatedQuatVarNamesSet) {
-          const value = quatVarByKey[varName]
-          if (value === undefined) continue
-          board.value.quatVars.set(varName, value)
-        }
-
-        appliedRevisionInfo.quatVarsRevision = draftBoard.quatVarsRevisionRef.value
-      }
-
-      if (appliedRevisionInfo.wrapperWeightsRevision !== draftBoard.wrapperWeightsRevisionRef.value) {
-        const wrapperWeightByKey = draftBoard.wrapperWeightByKeyRef.value
-        for (const varName of draftBoard.populatedWrapperWeightNamesSet) {
-          const value = wrapperWeightByKey[varName]
-          if (value === undefined) continue
-          board.value.setWrapperWeight(varName, value)
-        }
-
-        appliedRevisionInfo.wrapperWeightsRevision = draftBoard.wrapperWeightsRevisionRef.value
-        boardWrapperWeightsRevisionRef.value++
-      }
-
-      if (appliedRevisionInfo.tagValuesRevision !== draftBoard.tagValuesRevisionRef.value) {
-        const tagValueByKey = draftBoard.tagValueByKeyRef.value
-        for (const varName of draftBoard.populatedTagValueNamesSet) {
-          const value = tagValueByKey[varName]
-          if (value === undefined) continue
-          board.value.setTagValue(varName, value)
-        }
-
-        appliedRevisionInfo.tagValuesRevision = draftBoard.tagValuesRevisionRef.value
-      }
-
-      if (appliedRevisionInfo.entityTagsRevision !== draftBoard.entityTagsRevisionRef.value) {
-        const entityTagByKey = draftBoard.entityTagByKeyRef.value
-        for (const varName of draftBoard.populatedEntityTagNamesSet) {
-          const value = entityTagByKey[varName]
-          if (value === undefined) continue
-          board.value.setEntityTag(varName, value)
-        }
-
-        appliedRevisionInfo.entityTagsRevision = draftBoard.entityTagsRevisionRef.value
-        invalidateAllStaticSwitches()
+    const simBoard = board.value
+    const needReconcile = draftAppliedKeysNeedReconcile
+    for (const channel of draftChannels) {
+      if (channel.apply(needReconcile, draftBoardEntries, simBoard)) {
+        draftChannelOnAppliedById[channel.id]?.()
       }
     }
+    draftAppliedKeysNeedReconcile = false
   }
 
   const updateRunner = (

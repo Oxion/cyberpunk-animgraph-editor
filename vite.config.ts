@@ -5,6 +5,7 @@ import path from 'path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { createFsApiApp } from './server/fsApi'
+import { attachLiveBridgeWs } from './server/liveBridgeWs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -26,6 +27,13 @@ function mountFsApi(middlewares: ViteDevServer['middlewares']) {
   })
 }
 
+/** Post-hook: Vite's httpServer is ready after configureServer returns. */
+function mountLiveBridgeWs(server: ViteDevServer | PreviewServer) {
+  return () => {
+    if (server.httpServer) attachLiveBridgeWs(server.httpServer)
+  }
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
 
@@ -43,9 +51,11 @@ export default defineConfig(({ mode }) => {
         name: 'api-server',
         configureServer(server: ViteDevServer) {
           mountFsApi(server.middlewares)
+          return mountLiveBridgeWs(server)
         },
         configurePreviewServer(server: PreviewServer) {
           mountFsApi(server.middlewares)
+          return mountLiveBridgeWs(server)
         },
       },
     ],

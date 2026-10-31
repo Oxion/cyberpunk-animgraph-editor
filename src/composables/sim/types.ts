@@ -23,11 +23,16 @@ export interface IDraftBoard {
   readonly populatedQuatFeatureKeyToFeatureMap: ReadonlyMap<string, { feature: string; property: string }>
 
   setNumericFeatureValue(feature: string, property: string, value: number): void
+  clearNumericFeatureValue(feature: string, property: string): void
   setStringFeatureValue(feature: string, property: string, value: string): void
+  clearStringFeatureValue(feature: string, property: string): void
   setBooleanFeatureValue(feature: string, property: string, value: boolean): void
+  clearBooleanFeatureValue(feature: string, property: string): void
   setVectorFeatureValue(feature: string, property: string, value: SimVec4): void
+  clearVectorFeatureValue(feature: string, property: string): void
   setVectorFeatureAxisValue(feature: string, property: string, axis: keyof SimVec4, value: number): void
   setQuatFeatureValue(feature: string, property: string, value: SimVec4): void
+  clearQuatFeatureValue(feature: string, property: string): void
   setQuatFeatureAxisValue(feature: string, property: string, axis: keyof SimVec4, value: number): void
 
   readonly floatVarByKeyRef: Readonly<Ref<Readonly<Partial<Record<string, number>>>>>
@@ -49,11 +54,16 @@ export interface IDraftBoard {
   readonly populatedQuatVarNamesSet: ReadonlySet<string>
 
   setFloatVarValue(varName: string, value: number): void
+  clearFloatVarValue(varName: string): void
   setIntVarValue(varName: string, value: number): void
+  clearIntVarValue(varName: string): void
   setBoolVarValue(varName: string, value: boolean): void
+  clearBoolVarValue(varName: string): void
   setVectorVarValue(varName: string, value: SimVec4): void
+  clearVectorVarValue(varName: string): void
   setVectorVarAxisValue(varName: string, axis: keyof SimVec4, value: number): void
   setQuatVarValue(varName: string, value: SimVec4): void
+  clearQuatVarValue(varName: string): void
   setQuatVarAxisValue(varName: string, axis: keyof SimVec4, value: number): void
 
   readonly wrapperWeightByKeyRef: Readonly<Ref<Readonly<Partial<Record<string, number>>>>>
@@ -63,6 +73,7 @@ export interface IDraftBoard {
   readonly populatedWrapperWeightNamesSet: ReadonlySet<string>
 
   setWrapperWeightValue(weightName: string, value: number): void
+  clearWrapperWeightValue(weightName: string): void
 
   readonly tagValueByKeyRef: Readonly<Ref<Readonly<Partial<Record<string, number>>>>>
 
@@ -71,6 +82,7 @@ export interface IDraftBoard {
   readonly populatedTagValueNamesSet: ReadonlySet<string>
 
   setTagValueValue(tagName: string, value: number): void
+  clearTagValueValue(tagName: string): void
 
   readonly entityTagByKeyRef: Readonly<Ref<Readonly<Partial<Record<string, boolean>>>>>
 
@@ -79,4 +91,5 @@ export interface IDraftBoard {
   readonly populatedEntityTagNamesSet: ReadonlySet<string>
 
   setEntityTagValue(tagName: string, value: boolean): void
+  clearEntityTagValue(tagName: string): void
 }

@@ -52,8 +52,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
 
-  liveBridgeStart: () =>
-    ipcRenderer.invoke('live-bridge:start') as Promise<{ enabled: boolean; connected: boolean }>,
+  liveBridgeStart: (settings?: {
+    host?: string
+    port?: number
+    reconnectMs?: number
+  }) =>
+    ipcRenderer.invoke('live-bridge:start', settings) as Promise<{
+      enabled: boolean
+      connected: boolean
+    }>,
   liveBridgeStop: () =>
     ipcRenderer.invoke('live-bridge:stop') as Promise<{ enabled: boolean; connected: boolean }>,
   liveBridgeStatus: () =>

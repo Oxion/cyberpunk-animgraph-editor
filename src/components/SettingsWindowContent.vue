@@ -225,6 +225,61 @@
           </p>
         </template>
 
+        <template v-else-if="activeSection === 'live-bridge'">
+          <div class="flex items-center justify-between gap-2">
+            <h3 class="m-0 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+              Live Bridge
+            </h3>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              class="h-7 rounded-sm px-2 text-xs"
+              @click="resetLiveBridgeSettings"
+            >
+              Reset defaults
+            </Button>
+          </div>
+
+          <p class="m-0 text-[11px] text-muted-foreground">
+            Applied when connecting (Simulation → Live Bridge).
+          </p>
+
+          <div class="flex items-center gap-3">
+            <Label class="w-28 shrink-0 text-[11px] text-muted-foreground">Host</Label>
+            <Input
+              class="h-7 flex-1 rounded-sm px-2 text-xs"
+              :model-value="liveBridgeSettings.host"
+              @update:model-value="(v) => setLiveBridgeSettings({ host: String(v ?? '') })"
+            />
+          </div>
+
+          <div class="flex items-center gap-3">
+            <Label class="w-28 shrink-0 text-[11px] text-muted-foreground">Port</Label>
+            <Input
+              type="number"
+              min="1"
+              max="65535"
+              step="1"
+              class="h-7 flex-1 rounded-sm px-2 font-data text-xs"
+              :model-value="liveBridgeSettings.port"
+              @update:model-value="(v) => setLiveBridgeSettings({ port: Number(v) })"
+            />
+          </div>
+
+          <div class="flex items-center gap-3">
+            <Label class="w-28 shrink-0 text-[11px] text-muted-foreground">Reconnect ms</Label>
+            <Input
+              type="number"
+              min="0"
+              step="100"
+              class="h-7 flex-1 rounded-sm px-2 font-data text-xs"
+              :model-value="liveBridgeSettings.reconnectMs"
+              @update:model-value="(v) => setLiveBridgeSettings({ reconnectMs: Number(v) })"
+            />
+          </div>
+        </template>
+
         <template v-else-if="activeSection === 'debug'">
           <h3 class="m-0 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
             Debug
@@ -485,8 +540,13 @@ import {
   resetHotkeyBinding,
   setHotkeyChords,
 } from '../stores/hotkeyBindings'
+import {
+  liveBridgeSettings,
+  resetLiveBridgeSettings,
+  setLiveBridgeSettings,
+} from '../stores/liveBridgeSettings'
 
-export type SettingsSectionId = 'connections' | 'canvas' | 'hotkeys' | 'debug'
+export type SettingsSectionId = 'connections' | 'canvas' | 'live-bridge' | 'hotkeys' | 'debug'
 
 export type ConnectionSettingsModel = {
   highlightSelectedNodeConnections: boolean
@@ -528,6 +588,7 @@ const emit = defineEmits<{
 const sections = [
   { id: 'connections' as const, label: 'Connections' },
   { id: 'canvas' as const, label: 'Canvas' },
+  { id: 'live-bridge' as const, label: 'Live Bridge' },
   { id: 'hotkeys' as const, label: 'Hotkeys' },
   { id: 'debug' as const, label: 'Debug' },
 ]

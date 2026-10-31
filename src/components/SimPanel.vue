@@ -1,47 +1,60 @@
 <template>
   <div class="flex h-full min-h-0 flex-1 flex-col gap-2 text-xs text-foreground">
     <div class="flex shrink-0 flex-wrap items-center gap-1.5">
-      <Button
-        type="button"
-        :disabled="animgraphSimLiveBridgeActiveComputed"
-        size="sm"
-        :variant="simPlayingRef ? 'default' : 'secondary'"
-        class="h-7 rounded-sm px-2.5 text-xs"
-        :aria-pressed="simPlayingRef"
-        @click="sim.toggle"
-      >
-        {{ simPlayingRef ? 'Pause' : 'Play' }}
-      </Button>
-      <Button
-        type="button"
-        :disabled="animgraphSimLiveBridgeActiveComputed"
-        size="sm"
-        variant="secondary"
-        class="h-7 rounded-sm px-2.5 text-xs"
-        @click="sim.step"
-      >
-        Step
-      </Button>
-      <Button
-        type="button"
-        :disabled="animgraphSimLiveBridgeActiveComputed"
-        size="sm"
-        variant="secondary"
-        class="h-7 rounded-sm px-2.5 text-xs"
-        @click="sim.reset"
-      >
-        Reset
-      </Button>
+      <template v-if="animgraphSimLiveBridgeActiveComputed">
+        <span
+          class="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground"
+          :title="liveBridgeStatusTitleComputed"
+        >
+          <span
+            class="size-2 shrink-0 rounded-full"
+            :class="liveBridgeStatusDiscClassComputed"
+            aria-hidden="true"
+          />
+          {{ liveBridgeStatusLabelComputed }}
+        </span>
+      </template>
+      <template v-else>
+        <Button
+          type="button"
+          size="sm"
+          :variant="simPlayingRef ? 'default' : 'secondary'"
+          class="h-7 rounded-sm px-2.5 text-xs"
+          :aria-pressed="simPlayingRef"
+          @click="sim.toggle"
+        >
+          {{ simPlayingRef ? 'Pause' : 'Play' }}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          class="h-7 rounded-sm px-2.5 text-xs"
+          @click="sim.step"
+        >
+          Step
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          class="h-7 rounded-sm px-2.5 text-xs"
+          @click="sim.reset"
+        >
+          Reset
+        </Button>
+      </template>
       <div class="ml-auto flex shrink-0 items-center gap-1">
         <Button
           type="button"
-          :disabled="animgraphSimLiveBridgeActiveComputed"
           size="sm"
-          :variant="simActiveRef ? 'default' : 'secondary'"
+          :variant="simActiveRef || animgraphSimLiveBridgeActiveComputed ? 'default' : 'secondary'"
           class="h-7 rounded-sm px-2.5 text-xs"
-          @click="sim.toggleActivation"
+          @click="onToggleActivationOrLiveBridge"
         >
-          {{ simActiveRef ? 'Deactivate' : 'Activate' }}
+          {{
+            simActiveRef || animgraphSimLiveBridgeActiveComputed ? 'Deactivate' : 'Activate'
+          }}
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger as-child>
@@ -56,6 +69,18 @@
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" class="min-w-48">
+            <DropdownMenuItem
+              class="gap-2 text-xs"
+              @select="onToggleLiveBridge"
+            >
+              <Network class="size-3.5" />
+              Live Bridge
+              <Check
+                v-if="animgraphSimLiveBridgeActiveComputed"
+                class="ml-auto size-3.5 opacity-80"
+              />
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
             <DropdownMenuItem
               class="gap-2 text-xs"
               @select="onToggleUpdateWarningsEnabled"
@@ -448,29 +473,83 @@
               "
               class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto"
             >
-              <PropertyNumberControl
+              <div
                 v-for="f in filteredFeatures"
                 :key="`${f.feature}.${f.property}`.toLowerCase()"
-                :label="`${f.feature}.${f.property}`"
-                :model-value="draftNumericFeatureValueGetterComputed(f.feature, f.property)"
-                :decimals="2"
-                @update:model-value="(v) => onNumericFeatureValueChange(f.feature, f.property, v)"
-              />
-              <PropertyBoolToggle
+                class="flex items-center gap-1"
+              >
+                <div class="min-w-0 flex-1">
+                  <PropertyNumberControl
+                    :label="`${f.feature}.${f.property}`"
+                    :model-value="draftNumericFeatureValueGetterComputed(f.feature, f.property)"
+                    :decimals="2"
+                    @update:model-value="(v) => onNumericFeatureValueChange(f.feature, f.property, v)"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="secondary"
+                  class="size-[26px] shrink-0 rounded-sm text-muted-foreground"
+                  title="Reset"
+                  :aria-label="`Reset ${f.feature}.${f.property}`"
+                  :disabled="!isDraftNumericFeaturePopulated(f.feature, f.property)"
+                  @click="onResetNumericFeatureValue(f.feature, f.property)"
+                >
+                  <RotateCcw :size="12" />
+                </Button>
+              </div>
+              <div
                 v-for="f in filteredBoolFeatures"
                 :key="`b-${f.feature}.${f.property}`.toLowerCase()"
-                :label="`${f.feature}.${f.property}`"
-                :model-value="draftBoolFeatureValueGetterComputed(f.feature, f.property)"
-                @update:model-value="(v) => onBoolFeatureValueChange(f.feature, f.property, v)"
-              />
-              <PropertyTextField
+                class="flex items-center gap-1"
+              >
+                <div class="min-w-0 flex-1">
+                  <PropertyBoolToggle
+                    :label="`${f.feature}.${f.property}`"
+                    :model-value="draftBoolFeatureValueGetterComputed(f.feature, f.property)"
+                    @update:model-value="(v) => onBoolFeatureValueChange(f.feature, f.property, v)"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="secondary"
+                  class="size-[26px] shrink-0 rounded-sm text-muted-foreground"
+                  title="Reset"
+                  :aria-label="`Reset ${f.feature}.${f.property}`"
+                  :disabled="!isDraftBoolFeaturePopulated(f.feature, f.property)"
+                  @click="onResetBoolFeatureValue(f.feature, f.property)"
+                >
+                  <RotateCcw :size="12" />
+                </Button>
+              </div>
+              <div
                 v-for="f in filteredStringFeatures"
                 :key="`s-${f.feature}.${f.property}`.toLowerCase()"
-                :label="`${f.feature}.${f.property}`"
-                :model-value="draftStringFeatureValueGetterComputed(f.feature, f.property)"
-                placeholder="None"
-                @update:model-value="(v) => onStringFeatureValueChange(f.feature, f.property, v)"
-              />
+                class="flex items-center gap-1"
+              >
+                <div class="min-w-0 flex-1">
+                  <PropertyTextField
+                    :label="`${f.feature}.${f.property}`"
+                    :model-value="draftStringFeatureValueGetterComputed(f.feature, f.property)"
+                    placeholder="None"
+                    @update:model-value="(v) => onStringFeatureValueChange(f.feature, f.property, v)"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="secondary"
+                  class="size-[26px] shrink-0 rounded-sm text-muted-foreground"
+                  title="Reset"
+                  :aria-label="`Reset ${f.feature}.${f.property}`"
+                  :disabled="!isDraftStringFeaturePopulated(f.feature, f.property)"
+                  @click="onResetStringFeatureValue(f.feature, f.property)"
+                >
+                  <RotateCcw :size="12" />
+                </Button>
+              </div>
               <PropertyVecBlock
                 v-for="f in filteredVectorFeatures"
                 :key="`v-${f.feature}.${f.property}`.toLowerCase()"
@@ -478,7 +557,22 @@
                 :axes="vector4Axes"
                 :target="draftVectorFeatureValueGetterComputed(f.feature, f.property)"
                 @change="(p) => onVectorFeatureAxisValueChange(f.feature, f.property, p.axis, p.value)"
-              />
+              >
+                <template #actions>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="secondary"
+                    class="size-[22px] shrink-0 rounded-sm text-muted-foreground"
+                    title="Reset"
+                    :aria-label="`Reset ${f.feature}.${f.property}`"
+                    :disabled="!isDraftVectorFeaturePopulated(f.feature, f.property)"
+                    @click="onResetVectorFeatureValue(f.feature, f.property)"
+                  >
+                    <RotateCcw :size="12" />
+                  </Button>
+                </template>
+              </PropertyVecBlock>
               <PropertyVecBlock
                 v-for="f in filteredQuatFeatures"
                 :key="`q-${f.feature}.${f.property}`.toLowerCase()"
@@ -486,7 +580,22 @@
                 :axes="vector4Axes"
                 :target="draftQuatFeatureValueGetterComputed(f.feature, f.property)"
                 @change="(p) => onQuatFeatureAxisValueChange(f.feature, f.property, p.axis, p.value)"
-              />
+              >
+                <template #actions>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="secondary"
+                    class="size-[22px] shrink-0 rounded-sm text-muted-foreground"
+                    title="Reset"
+                    :aria-label="`Reset quat ${f.feature}.${f.property}`"
+                    :disabled="!isDraftQuatFeaturePopulated(f.feature, f.property)"
+                    @click="onResetQuatFeatureValue(f.feature, f.property)"
+                  >
+                    <RotateCcw :size="12" />
+                  </Button>
+                </template>
+              </PropertyVecBlock>
             </div>
             <p v-else-if="featuresTabCount" class="m-0 text-[11px] text-muted-foreground">No matching features</p>
             <p v-else class="m-0 text-[11px] text-muted-foreground">No features</p>
@@ -500,29 +609,83 @@
               v-model="varsFilter"
             />
             <div v-if="hasFilteredVars" class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-              <PropertyNumberControl
+              <div
                 v-for="name in filteredFloatVars"
                 :key="`f-${name}`"
-                :label="name"
-                :model-value="draftFloatVarValueGetterComputed(name)"
-                :decimals="2"
-                @update:model-value="(v) => onFloatVarValueChange(name, v)"
-              />
-              <PropertyNumberControl
+                class="flex items-center gap-1"
+              >
+                <div class="min-w-0 flex-1">
+                  <PropertyNumberControl
+                    :label="name"
+                    :model-value="draftFloatVarValueGetterComputed(name)"
+                    :decimals="2"
+                    @update:model-value="(v) => onFloatVarValueChange(name, v)"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="secondary"
+                  class="size-[26px] shrink-0 rounded-sm text-muted-foreground"
+                  title="Reset"
+                  :aria-label="`Reset ${name}`"
+                  :disabled="!isDraftFloatVarPopulated(name)"
+                  @click="onResetFloatVarValue(name)"
+                >
+                  <RotateCcw :size="12" />
+                </Button>
+              </div>
+              <div
                 v-for="name in filteredIntVars"
                 :key="`i-${name}`"
-                :label="name"
-                :model-value="draftIntVarValueGetterComputed(name)"
-                :decimals="0"
-                @update:model-value="(v) => onIntVarValueChange(name, v)"
-              />
-              <PropertyBoolToggle
+                class="flex items-center gap-1"
+              >
+                <div class="min-w-0 flex-1">
+                  <PropertyNumberControl
+                    :label="name"
+                    :model-value="draftIntVarValueGetterComputed(name)"
+                    :decimals="0"
+                    @update:model-value="(v) => onIntVarValueChange(name, v)"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="secondary"
+                  class="size-[26px] shrink-0 rounded-sm text-muted-foreground"
+                  title="Reset"
+                  :aria-label="`Reset ${name}`"
+                  :disabled="!isDraftIntVarPopulated(name)"
+                  @click="onResetIntVarValue(name)"
+                >
+                  <RotateCcw :size="12" />
+                </Button>
+              </div>
+              <div
                 v-for="name in filteredBoolVars"
                 :key="`b-${name}`"
-                :label="name"
-                :model-value="draftBoolVarValueGetterComputed(name)"
-                @update:model-value="(v) => onBoolVarValueChange(name, v)"
-              />
+                class="flex items-center gap-1"
+              >
+                <div class="min-w-0 flex-1">
+                  <PropertyBoolToggle
+                    :label="name"
+                    :model-value="draftBoolVarValueGetterComputed(name)"
+                    @update:model-value="(v) => onBoolVarValueChange(name, v)"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="secondary"
+                  class="size-[26px] shrink-0 rounded-sm text-muted-foreground"
+                  title="Reset"
+                  :aria-label="`Reset ${name}`"
+                  :disabled="!isDraftBoolVarPopulated(name)"
+                  @click="onResetBoolVarValue(name)"
+                >
+                  <RotateCcw :size="12" />
+                </Button>
+              </div>
               <PropertyVecBlock
                 v-for="name in filteredVectorVars"
                 :key="`vv-${name}`"
@@ -530,7 +693,22 @@
                 :axes="vector4Axes"
                 :target="draftVectorVarValueGetterComputed(name)"
                 @change="(p) => onVectorVarAxisValueChange(name, p.axis, p.value)"
-              />
+              >
+                <template #actions>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="secondary"
+                    class="size-[22px] shrink-0 rounded-sm text-muted-foreground"
+                    title="Reset"
+                    :aria-label="`Reset vec ${name}`"
+                    :disabled="!isDraftVectorVarPopulated(name)"
+                    @click="onResetVectorVarValue(name)"
+                  >
+                    <RotateCcw :size="12" />
+                  </Button>
+                </template>
+              </PropertyVecBlock>
               <PropertyVecBlock
                 v-for="name in filteredQuatVars"
                 :key="`qv-${name}`"
@@ -538,7 +716,22 @@
                 :axes="vector4Axes"
                 :target="draftQuatVarValueGetterComputed(name)"
                 @change="(p) => onQuatVarAxisValueChange(name, p.axis, p.value)"
-              />
+              >
+                <template #actions>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="secondary"
+                    class="size-[22px] shrink-0 rounded-sm text-muted-foreground"
+                    title="Reset"
+                    :aria-label="`Reset quat ${name}`"
+                    :disabled="!isDraftQuatVarPopulated(name)"
+                    @click="onResetQuatVarValue(name)"
+                  >
+                    <RotateCcw :size="12" />
+                  </Button>
+                </template>
+              </PropertyVecBlock>
             </div>
             <p v-else-if="hasAnyVars" class="m-0 text-[11px] text-muted-foreground">No matching vars</p>
             <p v-else class="m-0 text-[11px] text-muted-foreground">No float / vector / int / bool vars</p>
@@ -552,19 +745,37 @@
               v-model="wrappersFilter"
             />
             <div v-if="filteredWrappers.length" class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-              <PropertyNumberSlider
+              <div
                 v-for="name in filteredWrappers"
                 :key="name"
-                :label="name"
-                :model-value="draftWrapperWeightValueGetterComputed(name)"
-                :value-min="0"
-                :value-max="1"
-                :slider-min="0"
-                :slider-max="1"
-                :step="0.01"
-                :decimals="2"
-                @update:model-value="(v) => onWrapperWeightValueChange(name, v)"
-              />
+                class="flex items-center gap-1"
+              >
+                <div class="min-w-0 flex-1">
+                  <PropertyNumberSlider
+                    :label="name"
+                    :model-value="draftWrapperWeightValueGetterComputed(name)"
+                    :value-min="0"
+                    :value-max="1"
+                    :slider-min="0"
+                    :slider-max="1"
+                    :step="0.01"
+                    :decimals="2"
+                    @update:model-value="(v) => onWrapperWeightValueChange(name, v)"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="secondary"
+                  class="size-[26px] shrink-0 rounded-sm text-muted-foreground"
+                  title="Reset"
+                  :aria-label="`Reset ${name}`"
+                  :disabled="!isDraftWrapperWeightPopulated(name)"
+                  @click="onResetWrapperWeightValue(name)"
+                >
+                  <RotateCcw :size="12" />
+                </Button>
+              </div>
             </div>
             <p v-else-if="simDiscovered.wrapperNames.length" class="m-0 text-[11px] text-muted-foreground">No matching wrappers</p>
             <p v-else class="m-0 text-[11px] text-muted-foreground">
@@ -580,14 +791,32 @@
               v-model="tagsFilter"
             />
             <div v-if="filteredTagVars.length" class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-              <PropertyNumberControl
+              <div
                 v-for="name in filteredTagVars"
                 :key="`t-${name}`"
-                :label="name"
-                :model-value="draftTagValueGetterComputed(name)"
-                :decimals="2"
-                @update:model-value="(v) => onTagValueValueChange(name, v)"
-              />
+                class="flex items-center gap-1"
+              >
+                <div class="min-w-0 flex-1">
+                  <PropertyNumberControl
+                    :label="name"
+                    :model-value="draftTagValueGetterComputed(name)"
+                    :decimals="2"
+                    @update:model-value="(v) => onTagValueValueChange(name, v)"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="secondary"
+                  class="size-[26px] shrink-0 rounded-sm text-muted-foreground"
+                  title="Reset"
+                  :aria-label="`Reset ${name}`"
+                  :disabled="!isDraftTagValuePopulated(name)"
+                  @click="onResetTagValueValue(name)"
+                >
+                  <RotateCcw :size="12" />
+                </Button>
+              </div>
             </div>
             <p v-else-if="hasAnyTagValues" class="m-0 text-[11px] text-muted-foreground">No matching tags</p>
             <p v-else class="m-0 text-[11px] text-muted-foreground">No TagValue tags from graph</p>
@@ -1189,6 +1418,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
@@ -1238,10 +1468,6 @@ import {
   type AppWindowUiState,
 } from '../stores/appWindows'
 import { listDiagramIds, projectRef } from '../stores/graphProject'
-import type {
-  ClipMeta,
-  ClipSetMembership,
-} from '../utils/sim/clipLibrary'
 import type { ClipPoseSetView } from '../utils/sim/clipPoseLibrary'
 import { DEFAULT_SIM_FPS } from '../utils/sim/SimClock'
 
@@ -1274,6 +1500,62 @@ const {
 } = sim
 
 const animgraphSimLiveBridgeActiveComputed = animgraphSimLiveBridge.activeComputed
+const animgraphSimLiveBridgeStatusRef = animgraphSimLiveBridge.connectionStatusRef
+
+const liveBridgeStatusDiscClassComputed = computed(() => {
+  switch (animgraphSimLiveBridgeStatusRef.value) {
+    case 'connected':
+      return 'bg-emerald-500'
+    case 'connecting':
+      return 'bg-amber-500'
+    case 'error':
+      return 'bg-red-500'
+    default:
+      return 'bg-red-500'
+  }
+})
+
+const liveBridgeStatusLabelComputed = computed(() => {
+  switch (animgraphSimLiveBridgeStatusRef.value) {
+    case 'connected':
+      return 'Connected'
+    case 'connecting':
+      return 'Connecting…'
+    case 'error':
+      return 'Error'
+    default:
+      return 'Disconnected'
+  }
+})
+
+const liveBridgeStatusTitleComputed = computed(() => {
+  switch (animgraphSimLiveBridgeStatusRef.value) {
+    case 'connected':
+      return 'Connected to game animgraph bridge'
+    case 'connecting':
+      return 'Connecting to game animgraph bridge…'
+    case 'error':
+      return 'Live Bridge error'
+    default:
+      return 'No connection to game animgraph bridge'
+  }
+})
+
+const onToggleLiveBridge = () => {
+  if (animgraphSimLiveBridgeActiveComputed.value) {
+    animgraphSimLiveBridge.disconnect()
+  } else {
+    animgraphSimLiveBridge.connect()
+  }
+}
+
+const onToggleActivationOrLiveBridge = () => {
+  if (animgraphSimLiveBridgeActiveComputed.value) {
+    animgraphSimLiveBridge.disconnect()
+    return
+  }
+  sim.toggleActivation()
+}
 
 const activeTabRef = ref<'diagrams' | 'control' | 'values' | 'resources'>('diagrams')
 const controlSubTabRef = ref<'events' | 'drivers'>('events')
@@ -1744,6 +2026,14 @@ const draftNumericFeatureValueGetterComputed = computed(() => {
   }
 })
 
+const isDraftNumericFeaturePopulated = computed(() => {
+  void draftBoard.numericFeaturesRevisionRef.value
+  const populated = draftBoard.populatedNumericFeatureKeyToFeatureMap
+  return (feature: string, property: string) => {
+    return populated.has(makeFeatureKey(feature, property))
+  }
+})
+
 const draftStringFeatureValueGetterComputed = computed(() => {
   const stringFeatureByKey = draftBoard.stringFeatureByKeyRef.value
   return (feature: string, property: string) => {
@@ -1751,10 +2041,26 @@ const draftStringFeatureValueGetterComputed = computed(() => {
   }
 })
 
+const isDraftStringFeaturePopulated = computed(() => {
+  void draftBoard.stringFeaturesRevisionRef.value
+  const populated = draftBoard.populatedStringFeatureKeyToFeatureMap
+  return (feature: string, property: string) => {
+    return populated.has(makeFeatureKey(feature, property))
+  }
+})
+
 const draftBoolFeatureValueGetterComputed = computed(() => {
   const booleanFeatureByKey = draftBoard.booleanFeatureByKeyRef.value
   return (feature: string, property: string) => {
     return booleanFeatureByKey[makeFeatureKey(feature, property)] ?? false
+  }
+})
+
+const isDraftBoolFeaturePopulated = computed(() => {
+  void draftBoard.booleanFeaturesRevisionRef.value
+  const populated = draftBoard.populatedBooleanFeatureKeyToFeatureMap
+  return (feature: string, property: string) => {
+    return populated.has(makeFeatureKey(feature, property))
   }
 })
 
@@ -1766,6 +2072,14 @@ const draftVectorFeatureValueGetterComputed = computed(() => {
   }
 })
 
+const isDraftVectorFeaturePopulated = computed(() => {
+  void draftBoard.vectorFeaturesRevisionRef.value
+  const populated = draftBoard.populatedVectorFeatureKeyToFeatureMap
+  return (feature: string, property: string) => {
+    return populated.has(makeFeatureKey(feature, property))
+  }
+})
+
 const draftQuatFeatureValueGetterComputed = computed(() => {
   const quatFeatureByKey = draftBoard.quatFeatureByKeyRef.value
   return (feature: string, property: string) => {
@@ -1774,16 +2088,36 @@ const draftQuatFeatureValueGetterComputed = computed(() => {
   }
 })
 
+const isDraftQuatFeaturePopulated = computed(() => {
+  void draftBoard.quatFeaturesRevisionRef.value
+  const populated = draftBoard.populatedQuatFeatureKeyToFeatureMap
+  return (feature: string, property: string) => {
+    return populated.has(makeFeatureKey(feature, property))
+  }
+})
+
 const onNumericFeatureValueChange = (feature: string, property: string, value: number) => {
   draftBoard.setNumericFeatureValue(feature, property, value)
+}
+
+const onResetNumericFeatureValue = (feature: string, property: string) => {
+  draftBoard.clearNumericFeatureValue(feature, property)
 }
 
 const onStringFeatureValueChange = (feature: string, property: string, raw: string) => {
   draftBoard.setStringFeatureValue(feature, property, raw)
 }
 
+const onResetStringFeatureValue = (feature: string, property: string) => {
+  draftBoard.clearStringFeatureValue(feature, property)
+}
+
 const onBoolFeatureValueChange = (feature: string, property: string, value: boolean) => {
   draftBoard.setBooleanFeatureValue(feature, property, value)
+}
+
+const onResetBoolFeatureValue = (feature: string, property: string) => {
+  draftBoard.clearBooleanFeatureValue(feature, property)
 }
 
 const onVectorFeatureAxisValueChange = (
@@ -1797,6 +2131,10 @@ const onVectorFeatureAxisValueChange = (
   draftBoard.setVectorFeatureAxisValue(feature, property, key, value)
 }
 
+const onResetVectorFeatureValue = (feature: string, property: string) => {
+  draftBoard.clearVectorFeatureValue(feature, property)
+}
+
 const onQuatFeatureAxisValueChange = (
   feature: string,
   property: string,
@@ -1808,11 +2146,21 @@ const onQuatFeatureAxisValueChange = (
   draftBoard.setQuatFeatureAxisValue(feature, property, key, value)
 }
 
+const onResetQuatFeatureValue = (feature: string, property: string) => {
+  draftBoard.clearQuatFeatureValue(feature, property)
+}
+
 const draftFloatVarValueGetterComputed = computed(() => {
   const floatVarByKey = draftBoard.floatVarByKeyRef.value
   return (name: string) => {
     return floatVarByKey[name] ?? 0
   }
+})
+
+const isDraftFloatVarPopulated = computed(() => {
+  void draftBoard.floatVarsRevisionRef.value
+  const populated = draftBoard.populatedFloatVarNamesSet
+  return (name: string) => populated.has(name)
 })
 
 const draftIntVarValueGetterComputed = computed(() => {
@@ -1822,11 +2170,23 @@ const draftIntVarValueGetterComputed = computed(() => {
   }
 })
 
+const isDraftIntVarPopulated = computed(() => {
+  void draftBoard.intVarsRevisionRef.value
+  const populated = draftBoard.populatedIntVarNamesSet
+  return (name: string) => populated.has(name)
+})
+
 const draftBoolVarValueGetterComputed = computed(() => {
   const boolVarByKey = draftBoard.boolVarByKeyRef.value
   return (name: string) => {
     return boolVarByKey[name] ?? false
   }
+})
+
+const isDraftBoolVarPopulated = computed(() => {
+  void draftBoard.boolVarsRevisionRef.value
+  const populated = draftBoard.populatedBoolVarNamesSet
+  return (name: string) => populated.has(name)
 })
 
 const draftVectorVarValueGetterComputed = computed(() => {
@@ -1837,6 +2197,12 @@ const draftVectorVarValueGetterComputed = computed(() => {
   }
 })
 
+const isDraftVectorVarPopulated = computed(() => {
+  void draftBoard.vectorVarsRevisionRef.value
+  const populated = draftBoard.populatedVectorVarNamesSet
+  return (name: string) => populated.has(name)
+})
+
 const draftQuatVarValueGetterComputed = computed(() => {
   const quatVarByKey = draftBoard.quatVarByKeyRef.value
   return (name: string) => {
@@ -1845,16 +2211,34 @@ const draftQuatVarValueGetterComputed = computed(() => {
   }
 })
 
+const isDraftQuatVarPopulated = computed(() => {
+  void draftBoard.quatVarsRevisionRef.value
+  const populated = draftBoard.populatedQuatVarNamesSet
+  return (name: string) => populated.has(name)
+})
+
 const onFloatVarValueChange = (name: string, value: number) => {
   draftBoard.setFloatVarValue(name, value)
+}
+
+const onResetFloatVarValue = (name: string) => {
+  draftBoard.clearFloatVarValue(name)
 }
 
 const onIntVarValueChange = (name: string, value: number) => {
   draftBoard.setIntVarValue(name, value)
 }
 
+const onResetIntVarValue = (name: string) => {
+  draftBoard.clearIntVarValue(name)
+}
+
 const onBoolVarValueChange = (name: string, value: boolean) => {
   draftBoard.setBoolVarValue(name, value)
+}
+
+const onResetBoolVarValue = (name: string) => {
+  draftBoard.clearBoolVarValue(name)
 }
 
 const onVectorVarAxisValueChange = (name: string, axis: string, value: number) => {
@@ -1863,10 +2247,18 @@ const onVectorVarAxisValueChange = (name: string, axis: string, value: number) =
   draftBoard.setVectorVarAxisValue(name, key, value)
 }
 
+const onResetVectorVarValue = (name: string) => {
+  draftBoard.clearVectorVarValue(name)
+}
+
 const onQuatVarAxisValueChange = (name: string, axis: string, value: number) => {
   const key = axis.toLowerCase()
   if (key !== 'x' && key !== 'y' && key !== 'z' && key !== 'w') return
   draftBoard.setQuatVarAxisValue(name, key, value)
+}
+
+const onResetQuatVarValue = (name: string) => {
+  draftBoard.clearQuatVarValue(name)
 }
 
 const draftWrapperWeightValueGetterComputed = computed(() => {
@@ -1876,8 +2268,18 @@ const draftWrapperWeightValueGetterComputed = computed(() => {
   }
 })
 
+const isDraftWrapperWeightPopulated = computed(() => {
+  void draftBoard.wrapperWeightsRevisionRef.value
+  const populated = draftBoard.populatedWrapperWeightNamesSet
+  return (name: string) => populated.has(name)
+})
+
 const onWrapperWeightValueChange = (name: string, value: number) => {
   draftBoard.setWrapperWeightValue(name, value)
+}
+
+const onResetWrapperWeightValue = (name: string) => {
+  draftBoard.clearWrapperWeightValue(name)
 }
 
 const draftTagValueGetterComputed = computed(() => {
@@ -1887,8 +2289,18 @@ const draftTagValueGetterComputed = computed(() => {
   }
 })
 
+const isDraftTagValuePopulated = computed(() => {
+  void draftBoard.tagValuesRevisionRef.value
+  const populated = draftBoard.populatedTagValueNamesSet
+  return (name: string) => populated.has(name)
+})
+
 const onTagValueValueChange = (name: string, value: number) => {
   draftBoard.setTagValueValue(name, value)
+}
+
+const onResetTagValueValue = (name: string) => {
+  draftBoard.clearTagValueValue(name)
 }
 
 // #endregion

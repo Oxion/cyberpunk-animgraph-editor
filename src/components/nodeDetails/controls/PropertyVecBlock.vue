@@ -31,7 +31,12 @@ const rows = computed(() =>
 
 <template>
   <div class="prop-list">
-    <div class="prop-list__head">{{ label }}</div>
+    <div class="prop-list__head gap-1">
+      <span class="min-w-0 flex-1 truncate">{{ label }}</span>
+      <div v-if="$slots.actions" class="prop-list__actions">
+        <slot name="actions" />
+      </div>
+    </div>
     <div class="flex flex-col gap-1.5 px-2 pb-2">
       <PropertyNumberSlider
         v-for="row in rows"

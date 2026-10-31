@@ -25,6 +25,13 @@ import { DraftBoard } from '@/composables/sim/DraftBoard'
 import { SimServiceEvent, SimVec4 } from '@/utils/sim'
 import { makeFeatureKey } from '@/composables/sim/features'
 import { mergeUniqueStrings } from '@/utils/merge'
+import {
+  liveBridgeStart,
+  liveBridgeStop,
+  onLiveBridgeLine,
+  onLiveBridgeStatus,
+} from '@/api/liveBridgeApi'
+import { getLiveBridgeSettings } from '@/stores/liveBridgeSettings'
 
 const animgraphSim = useAnimgraphSim({
   listDiagramIds: () => listDiagramIds.value,
@@ -534,7 +541,10 @@ const _onLiveBridgeLine = (line: string) => {
 }
 
 const _onLiveBridgeStatus = (status: { enabled: boolean; connected: boolean }) => {
+  // enabled=false means backend stopped (or WS died). Ignore while still
+  // connecting — handshake must not cancel an in-flight start.
   if (!status.enabled) {
+    if (liveBridgeConnectionStatusRef.value === 'connecting') return
     disconnectLiveBridge()
     return
   }
@@ -557,12 +567,12 @@ const connectLiveBridge = (): boolean => {
   liveBridgeExternalSimDriverRef.value = externalSimDriver
   externalSimDriver.activate()
 
-  liveBridgeStatusSub = window.electronAPI?.onLiveBridgeStatus(_onLiveBridgeStatus)
-  liveBridgeLineSub = window.electronAPI?.onLiveBridgeLine(_onLiveBridgeLine)
+  liveBridgeStatusSub = onLiveBridgeStatus(_onLiveBridgeStatus)
+  liveBridgeLineSub = onLiveBridgeLine(_onLiveBridgeLine)
 
   liveBridgeConnectionStatusRef.value = 'connecting'
 
-  window.electronAPI?.liveBridgeStart().catch(() => {
+  liveBridgeStart(getLiveBridgeSettings()).catch(() => {
     disconnectLiveBridge()
   })
 
@@ -589,7 +599,7 @@ const disconnectLiveBridge = (): boolean => {
 
   liveBridgeConnectionStatusRef.value = 'disconnected'
 
-  window.electronAPI?.liveBridgeStop().catch(() => {
+  liveBridgeStop().catch(() => {
     console.error('Failed to disconnect from live bridge')
   })
 

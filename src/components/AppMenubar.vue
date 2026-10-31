@@ -9,7 +9,6 @@ import {
   FolderOpenIcon,
   InfoIcon,
   LayoutGrid,
-  Network,
   Redo2,
   SaveIcon,
   SettingsIcon,
@@ -32,7 +31,6 @@ import { computed } from 'vue'
 import { isElectron } from '../utils/platform'
 import { isSettingsWindowOpen, toggleSettingsWindow } from '../stores/appWindows'
 import { hasProject } from '../stores/graphProject'
-import { liveBridge } from '../stores/animgraphSim'
 import { selectedNodeRef } from '../stores/graphSession'
 import { commandShortcut } from '../stores/hotkeyBindings'
 import { canToggleAppTool, commandEnabled, whenEnabled } from '../stores/appContext'
@@ -104,13 +102,6 @@ async function onQuit() {
   await window.electronAPI?.windowClose()
 }
 
-async function onToggleLiveBridge() {
-  if (liveBridge.activeComputed.value) {
-    liveBridge.disconnect()
-  } else {
-    liveBridge.connect()
-  }
-}
 </script>
 
 <template>
@@ -390,16 +381,6 @@ async function onToggleLiveBridge() {
           <Waypoints class="size-3.5" />
           Simulation
           <Check v-if="simOpen" class="ml-auto size-3.5 opacity-80" />
-        </MenubarItem>
-        <MenubarItem
-          v-if="electronApp"
-          class="header-menu-item"
-          :disabled="!hasProject"
-          @select="onToggleLiveBridge"
-        >
-          <Network class="size-3.5" />
-          Live Bridge
-          <Check v-if="liveBridge.activeComputed.value" class="ml-auto size-3.5 opacity-80" />
         </MenubarItem>
         <MenubarItem
           class="header-menu-item"

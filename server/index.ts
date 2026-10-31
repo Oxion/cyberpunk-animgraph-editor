@@ -3,6 +3,7 @@ import path from 'path'
 import express from 'express'
 import { fileURLToPath } from 'node:url'
 import { createFsApiApp } from './fsApi'
+import { attachLiveBridgeWs } from './liveBridgeWs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '..')
@@ -20,6 +21,7 @@ if (fs.existsSync(distDir)) {
   console.warn(`[server] dist/ not found at ${distDir}; serving API only`)
 }
 
-app.listen(port, '0.0.0.0', () => {
+const httpServer = app.listen(port, '0.0.0.0', () => {
   console.log(`[server] Animgraph Editor listening on http://0.0.0.0:${port}`)
 })
+attachLiveBridgeWs(httpServer)
