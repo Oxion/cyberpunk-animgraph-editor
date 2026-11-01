@@ -47,14 +47,15 @@ export function clearSelectionState(diagramId?: string) {
   selectionByDiagram.clear()
 }
 
-function activeSelection(): DiagramSelectionState | null {
+const activeDiagramSelectionStateComputed = computed<DiagramSelectionState | undefined>(() => {
   const id = activeDiagramId.value
-  return id ? ensureSelectionState(id) : null
-}
+  if (!id) return undefined
+  return ensureSelectionState(id)
+})
 
 /** Active-diagram convenience refs for Details / legacy UI bindings. */
 export const selectedNodeRef = computed({
-  get: () => activeSelection()?.selectedNode ?? null,
+  get: () => activeDiagramSelectionStateComputed.value?.selectedNode ?? null,
   set: (node: RenderNode | null) => {
     const id = activeDiagramId.value
     if (!id) return
@@ -64,7 +65,7 @@ export const selectedNodeRef = computed({
 })
 
 export const selectedNodeIdsRef = computed({
-  get: () => activeSelection()?.selectedNodeIds ?? [],
+  get: () => activeDiagramSelectionStateComputed.value?.selectedNodeIds ?? [],
   set: (ids: string[]) => {
     const id = activeDiagramId.value
     if (!id) return
@@ -73,7 +74,7 @@ export const selectedNodeIdsRef = computed({
 })
 
 export const selectedIncomingConnectionsRef = computed({
-  get: () => activeSelection()?.selectedIncomingConnections ?? new Set<string>(),
+  get: () => activeDiagramSelectionStateComputed.value?.selectedIncomingConnections ?? new Set<string>(),
   set: (set: Set<string>) => {
     const id = activeDiagramId.value
     if (!id) return
@@ -82,7 +83,7 @@ export const selectedIncomingConnectionsRef = computed({
 })
 
 export const nodePositionRef = computed({
-  get: () => activeSelection()?.nodePosition ?? { x: 0, y: 0 },
+  get: () => activeDiagramSelectionStateComputed.value?.nodePosition ?? { x: 0, y: 0 },
   set: (v: { x: number; y: number }) => {
     const id = activeDiagramId.value
     if (!id) return
@@ -91,7 +92,7 @@ export const nodePositionRef = computed({
 })
 
 export const nodeSizeRef = computed({
-  get: () => activeSelection()?.nodeSize ?? { width: 120, height: 80 },
+  get: () => activeDiagramSelectionStateComputed.value?.nodeSize ?? { width: 120, height: 80 },
   set: (v: { width: number; height: number }) => {
     const id = activeDiagramId.value
     if (!id) return
@@ -100,7 +101,7 @@ export const nodeSizeRef = computed({
 })
 
 export const nodeDescriptionRef = computed({
-  get: () => activeSelection()?.nodeDescription ?? '',
+  get: () => activeDiagramSelectionStateComputed.value?.nodeDescription ?? '',
   set: (v: string) => {
     const id = activeDiagramId.value
     if (!id) return
@@ -115,14 +116,6 @@ export const nodeDescriptionRef = computed({
 export function bumpConnectionsRevision(diagramId: string) {
   ensureSelectionState(diagramId).connectionsRevision++
 }
-
-/** @deprecated Prefer bumpConnectionsRevision(diagramId). Uses activeDiagramId. */
-export function bumpConnectionsRevisionActive() {
-  const id = activeDiagramId.value
-  if (id) bumpConnectionsRevision(id)
-}
-
-export const connectionsRevisionRef = computed(() => activeSelection()?.connectionsRevision ?? 0)
 
 export function getNodeConnections(
   diagramId: string,

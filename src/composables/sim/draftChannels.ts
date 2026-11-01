@@ -112,14 +112,14 @@ export const createDraftChannels = (): IDraftChannel[] => [
       for (const varName of draftBoard.populatedFloatVarNamesSet) {
         const value = values[varName]
         if (value === undefined) continue
-        board.floatVars.set(varName, value)
+        board.setFloatVar(varName, value)
         nextKeys.set(varName, true)
       }
     },
     syncRevision: (e) => {
       e.appliedRevisionInfo.floatVarsRevision = e.draftBoard.floatVarsRevisionRef.value
     },
-    clearOrphan: (board, key) => { board.floatVars.delete(key) },
+    clearOrphan: (board, key) => board.clearFloatVar(key),
   }),
   new DraftChannel<DraftNameRef>({
     id: 'intVars',
@@ -129,14 +129,14 @@ export const createDraftChannels = (): IDraftChannel[] => [
       for (const varName of draftBoard.populatedIntVarNamesSet) {
         const value = values[varName]
         if (value === undefined) continue
-        board.intVars.set(varName, value)
+        board.setIntVar(varName, value)
         nextKeys.set(varName, true)
       }
     },
     syncRevision: (e) => {
       e.appliedRevisionInfo.intVarsRevision = e.draftBoard.intVarsRevisionRef.value
     },
-    clearOrphan: (board, key) => { board.intVars.delete(key) },
+    clearOrphan: (board, key) => board.clearIntVar(key),
   }),
   new DraftChannel<DraftNameRef>({
     id: 'boolVars',
@@ -146,14 +146,14 @@ export const createDraftChannels = (): IDraftChannel[] => [
       for (const varName of draftBoard.populatedBoolVarNamesSet) {
         const value = values[varName]
         if (value === undefined) continue
-        board.boolVars.set(varName, value)
+        board.setBoolVar(varName, value)
         nextKeys.set(varName, true)
       }
     },
     syncRevision: (e) => {
       e.appliedRevisionInfo.boolVarsRevision = e.draftBoard.boolVarsRevisionRef.value
     },
-    clearOrphan: (board, key) => { board.boolVars.delete(key) },
+    clearOrphan: (board, key) => board.clearBoolVar(key),
   }),
   new DraftChannel<DraftNameRef>({
     id: 'vectorVars',
@@ -163,14 +163,14 @@ export const createDraftChannels = (): IDraftChannel[] => [
       for (const varName of draftBoard.populatedVectorVarNamesSet) {
         const value = values[varName]
         if (value === undefined) continue
-        board.vectorVars.set(varName, value)
+        board.setVectorVar(varName, value)
         nextKeys.set(varName, true)
       }
     },
     syncRevision: (e) => {
       e.appliedRevisionInfo.vectorVarsRevision = e.draftBoard.vectorVarsRevisionRef.value
     },
-    clearOrphan: (board, key) => { board.vectorVars.delete(key) },
+    clearOrphan: (board, key) => board.clearVectorVar(key),
   }),
   new DraftChannel<DraftNameRef>({
     id: 'quatVars',
@@ -180,14 +180,14 @@ export const createDraftChannels = (): IDraftChannel[] => [
       for (const varName of draftBoard.populatedQuatVarNamesSet) {
         const value = values[varName]
         if (value === undefined) continue
-        board.quatVars.set(varName, value)
+        board.setQuatVar(varName, value)
         nextKeys.set(varName, true)
       }
     },
     syncRevision: (e) => {
       e.appliedRevisionInfo.quatVarsRevision = e.draftBoard.quatVarsRevisionRef.value
     },
-    clearOrphan: (board, key) => { board.quatVars.delete(key) },
+    clearOrphan: (board, key) => board.clearQuatVar(key),
   }),
   new DraftChannel<DraftNameRef>({
     id: 'wrapperWeights',

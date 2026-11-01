@@ -131,12 +131,12 @@
         <div
           class="min-h-0 flex-1 overflow-y-auto rounded-sm border border-border bg-canvas px-2 py-1.5"
         >
-          <div v-if="!filteredBoardRows.length" class="font-data text-muted-foreground/70">
+          <div v-if="!filteredBoardRowDefs.length" class="font-data text-muted-foreground/70">
             No values
           </div>
           <div v-else class="flex flex-col gap-1">
             <div
-              v-for="row in filteredBoardRows"
+              v-for="row in filteredBoardRowDefs"
               :key="row.key"
               class="flex min-w-0 items-baseline gap-2"
             >
@@ -151,9 +151,9 @@
               </span>
               <span
                 class="font-data shrink-0 max-w-[45%] truncate text-[10px] text-foreground/90"
-                :title="row.value"
+                :title="boardRowValue(row)"
               >
-                {{ row.value }}
+                {{ boardRowValue(row) }}
               </span>
             </div>
           </div>
@@ -286,11 +286,11 @@ watch(boardSelectOptions, (opts) => {
   }
 })
 
-type BoardRow = {
+type BoardRowDef = {
   key: string
   kind: string
   name: string
-  value: string
+  read: () => string
 }
 
 const fmtVec4 = (v: SimVec4): string =>
@@ -314,7 +314,7 @@ const BOARD_KIND_ORDER: Record<string, number> = {
   entityTag: 40,
 }
 
-const sortBoardRows = (rows: BoardRow[]): BoardRow[] => {
+const sortBoardRowDefs = (rows: BoardRowDef[]): BoardRowDef[] => {
   rows.sort((a, b) => {
     const ai = BOARD_KIND_ORDER[a.kind] ?? 99
     const bi = BOARD_KIND_ORDER[b.kind] ?? 99
@@ -324,46 +324,59 @@ const sortBoardRows = (rows: BoardRow[]): BoardRow[] => {
   return rows
 }
 
-const collectSimulationBoardRows = (board: SimInputBoard): BoardRow[] => {
+const collectSimulationBoardRowDefs = (board: SimInputBoard): BoardRowDef[] => {
   const d = sim.discovered.value
-  const rows: BoardRow[] = []
+  const rows: BoardRowDef[] = []
 
   for (const f of d.floatFeatures) {
-    const name = featLabel(f.feature, f.property)
+    const { feature, property } = f
+    const name = featLabel(feature, property)
     rows.push({
       key: `feat.num-${name}`,
       kind: 'feat.num',
       name,
-      value: String(board.getFeature(f.feature, f.property) ?? 0),
+      read: () => String(board.getFeature(feature, property) ?? 0),
     })
   }
   for (const f of d.boolFeatures) {
-    const name = featLabel(f.feature, f.property)
+    const { feature, property } = f
+    const name = featLabel(feature, property)
     rows.push({
       key: `feat.bool-${name}`,
       kind: 'feat.bool',
       name,
-      value: String(board.getBoolFeature(f.feature, f.property) ?? false),
+      read: () => String(board.getBoolFeature(feature, property) ?? false),
     })
   }
   for (const f of d.stringFeatures) {
-    const name = featLabel(f.feature, f.property)
+    const { feature, property } = f
+    const name = featLabel(feature, property)
     rows.push({
       key: `feat.str-${name}`,
       kind: 'feat.str',
       name,
-      value: board.getStringFeature(f.feature, f.property) ?? '',
+      read: () => board.getStringFeature(feature, property) ?? '',
     })
   }
   for (const f of d.vectorFeatures) {
-    const name = featLabel(f.feature, f.property)
-    const v = board.getVectorFeature(f.feature, f.property) ?? ZERO_VEC4
-    rows.push({ key: `feat.vec-${name}`, kind: 'feat.vec', name, value: fmtVec4(v) })
+    const { feature, property } = f
+    const name = featLabel(feature, property)
+    rows.push({
+      key: `feat.vec-${name}`,
+      kind: 'feat.vec',
+      name,
+      read: () => fmtVec4(board.getVectorFeature(feature, property) ?? ZERO_VEC4),
+    })
   }
   for (const f of d.quatFeatures) {
-    const name = featLabel(f.feature, f.property)
-    const v = board.getQuatFeature(f.feature, f.property) ?? IDENTITY_QUAT_VEC4
-    rows.push({ key: `feat.quat-${name}`, kind: 'feat.quat', name, value: fmtVec4(v) })
+    const { feature, property } = f
+    const name = featLabel(feature, property)
+    rows.push({
+      key: `feat.quat-${name}`,
+      kind: 'feat.quat',
+      name,
+      read: () => fmtVec4(board.getQuatFeature(feature, property) ?? IDENTITY_QUAT_VEC4),
+    })
   }
 
   for (const name of d.floatVarNames) {
@@ -371,7 +384,7 @@ const collectSimulationBoardRows = (board: SimInputBoard): BoardRow[] => {
       key: `float-${name}`,
       kind: 'float',
       name,
-      value: String(board.floatVars.get(name) ?? 0),
+      read: () => String(board.floatVars.get(name) ?? 0),
     })
   }
   for (const name of d.intVarNames) {
@@ -379,7 +392,7 @@ const collectSimulationBoardRows = (board: SimInputBoard): BoardRow[] => {
       key: `int-${name}`,
       kind: 'int',
       name,
-      value: String(board.intVars.get(name) ?? 0),
+      read: () => String(board.intVars.get(name) ?? 0),
     })
   }
   for (const name of d.boolVarNames) {
@@ -387,23 +400,31 @@ const collectSimulationBoardRows = (board: SimInputBoard): BoardRow[] => {
       key: `bool-${name}`,
       kind: 'bool',
       name,
-      value: String(board.boolVars.get(name) ?? false),
+      read: () => String(board.boolVars.get(name) ?? false),
     })
   }
   for (const name of d.vectorVarNames) {
-    const v = board.vectorVars.get(name) ?? ZERO_VEC4
-    rows.push({ key: `vec-${name}`, kind: 'vec', name, value: fmtVec4(v) })
+    rows.push({
+      key: `vec-${name}`,
+      kind: 'vec',
+      name,
+      read: () => fmtVec4(board.vectorVars.get(name) ?? ZERO_VEC4),
+    })
   }
   for (const name of d.quatVarNames) {
-    const v = board.quatVars.get(name) ?? IDENTITY_QUAT_VEC4
-    rows.push({ key: `quat-${name}`, kind: 'quat', name, value: fmtVec4(v) })
+    rows.push({
+      key: `quat-${name}`,
+      kind: 'quat',
+      name,
+      read: () => fmtVec4(board.quatVars.get(name) ?? IDENTITY_QUAT_VEC4),
+    })
   }
   for (const name of d.wrapperNames) {
     rows.push({
       key: `wrapper-${name}`,
       kind: 'wrapper',
       name,
-      value: String(board.wrapperWeights.get(name) ?? 0),
+      read: () => String(board.wrapperWeights.get(name) ?? 0),
     })
   }
   for (const name of d.tagNames) {
@@ -411,7 +432,7 @@ const collectSimulationBoardRows = (board: SimInputBoard): BoardRow[] => {
       key: `tag-${name}`,
       kind: 'tag',
       name,
-      value: String(board.getTagValue(name) ?? 0),
+      read: () => String(board.getTagValue(name) ?? 0),
     })
   }
   for (const name of animgraphSimDiscovered.entityTagsInfoComputed.value.entityTagNames) {
@@ -419,128 +440,168 @@ const collectSimulationBoardRows = (board: SimInputBoard): BoardRow[] => {
       key: `entityTag-${name}`,
       kind: 'entityTag',
       name,
-      value: String(board.hasEntityTag(name)),
+      read: () => String(board.hasEntityTag(name)),
     })
   }
 
-  return sortBoardRows(rows)
+  return sortBoardRowDefs(rows)
 }
 
-const collectDraftBoardRows = (draft: IDraftBoard): BoardRow[] => {
-  const rows: BoardRow[] = []
+const collectDraftBoardRowDefs = (draft: IDraftBoard): BoardRowDef[] => {
+  const rows: BoardRowDef[] = []
 
   for (const [key, meta] of draft.populatedNumericFeatureKeyToFeatureMap) {
-    const v = draft.numericFeatureByKeyRef.value[key]
-    if (v === undefined) continue
     const name = featLabel(meta.feature, meta.property)
-    rows.push({ key: `feat.num-${key}`, kind: 'feat.num', name, value: String(v) })
+    rows.push({
+      key: `feat.num-${key}`,
+      kind: 'feat.num',
+      name,
+      read: () => String(draft.numericFeatureByKeyRef.value[key] ?? 0),
+    })
   }
   for (const [key, meta] of draft.populatedBooleanFeatureKeyToFeatureMap) {
-    const v = draft.booleanFeatureByKeyRef.value[key]
-    if (v === undefined) continue
     const name = featLabel(meta.feature, meta.property)
-    rows.push({ key: `feat.bool-${key}`, kind: 'feat.bool', name, value: String(v) })
+    rows.push({
+      key: `feat.bool-${key}`,
+      kind: 'feat.bool',
+      name,
+      read: () => String(draft.booleanFeatureByKeyRef.value[key] ?? false),
+    })
   }
   for (const [key, meta] of draft.populatedStringFeatureKeyToFeatureMap) {
-    const v = draft.stringFeatureByKeyRef.value[key]
-    if (v === undefined) continue
     const name = featLabel(meta.feature, meta.property)
-    rows.push({ key: `feat.str-${key}`, kind: 'feat.str', name, value: v })
+    rows.push({
+      key: `feat.str-${key}`,
+      kind: 'feat.str',
+      name,
+      read: () => draft.stringFeatureByKeyRef.value[key] ?? '',
+    })
   }
   for (const [key, meta] of draft.populatedVectorFeatureKeyToFeatureMap) {
-    const v = draft.vectorFeatureByKeyRef.value[key]
-    if (!v) continue
     const name = featLabel(meta.feature, meta.property)
-    rows.push({ key: `feat.vec-${key}`, kind: 'feat.vec', name, value: fmtVec4(v) })
+    rows.push({
+      key: `feat.vec-${key}`,
+      kind: 'feat.vec',
+      name,
+      read: () => fmtVec4(draft.vectorFeatureByKeyRef.value[key] ?? ZERO_VEC4),
+    })
   }
   for (const [key, meta] of draft.populatedQuatFeatureKeyToFeatureMap) {
-    const v = draft.quatFeatureByKeyRef.value[key]
-    if (!v) continue
     const name = featLabel(meta.feature, meta.property)
-    rows.push({ key: `feat.quat-${key}`, kind: 'feat.quat', name, value: fmtVec4(v) })
+    rows.push({
+      key: `feat.quat-${key}`,
+      kind: 'feat.quat',
+      name,
+      read: () => fmtVec4(draft.quatFeatureByKeyRef.value[key] ?? IDENTITY_QUAT_VEC4),
+    })
   }
 
   for (const name of draft.populatedFloatVarNamesSet) {
-    const v = draft.floatVarByKeyRef.value[name]
-    if (v === undefined) continue
-    rows.push({ key: `float-${name}`, kind: 'float', name, value: String(v) })
+    rows.push({
+      key: `float-${name}`,
+      kind: 'float',
+      name,
+      read: () => String(draft.floatVarByKeyRef.value[name] ?? 0),
+    })
   }
   for (const name of draft.populatedIntVarNamesSet) {
-    const v = draft.intVarByKeyRef.value[name]
-    if (v === undefined) continue
-    rows.push({ key: `int-${name}`, kind: 'int', name, value: String(v) })
+    rows.push({
+      key: `int-${name}`,
+      kind: 'int',
+      name,
+      read: () => String(draft.intVarByKeyRef.value[name] ?? 0),
+    })
   }
   for (const name of draft.populatedBoolVarNamesSet) {
-    const v = draft.boolVarByKeyRef.value[name]
-    if (v === undefined) continue
-    rows.push({ key: `bool-${name}`, kind: 'bool', name, value: String(v) })
+    rows.push({
+      key: `bool-${name}`,
+      kind: 'bool',
+      name,
+      read: () => String(draft.boolVarByKeyRef.value[name] ?? false),
+    })
   }
   for (const name of draft.populatedVectorVarNamesSet) {
-    const v = draft.vectorVarByKeyRef.value[name]
-    if (!v) continue
-    rows.push({ key: `vec-${name}`, kind: 'vec', name, value: fmtVec4(v) })
+    rows.push({
+      key: `vec-${name}`,
+      kind: 'vec',
+      name,
+      read: () => fmtVec4(draft.vectorVarByKeyRef.value[name] ?? ZERO_VEC4),
+    })
   }
   for (const name of draft.populatedQuatVarNamesSet) {
-    const v = draft.quatVarByKeyRef.value[name]
-    if (!v) continue
-    rows.push({ key: `quat-${name}`, kind: 'quat', name, value: fmtVec4(v) })
+    rows.push({
+      key: `quat-${name}`,
+      kind: 'quat',
+      name,
+      read: () => fmtVec4(draft.quatVarByKeyRef.value[name] ?? IDENTITY_QUAT_VEC4),
+    })
   }
   for (const name of draft.populatedWrapperWeightNamesSet) {
-    const v = draft.wrapperWeightByKeyRef.value[name]
-    if (v === undefined) continue
-    rows.push({ key: `wrapper-${name}`, kind: 'wrapper', name, value: String(v) })
+    rows.push({
+      key: `wrapper-${name}`,
+      kind: 'wrapper',
+      name,
+      read: () => String(draft.wrapperWeightByKeyRef.value[name] ?? 0),
+    })
   }
   for (const name of draft.populatedTagValueNamesSet) {
-    const v = draft.tagValueByKeyRef.value[name]
-    if (v === undefined) continue
-    rows.push({ key: `tag-${name}`, kind: 'tag', name, value: String(v) })
+    rows.push({
+      key: `tag-${name}`,
+      kind: 'tag',
+      name,
+      read: () => String(draft.tagValueByKeyRef.value[name] ?? 0),
+    })
   }
   for (const name of draft.populatedEntityTagNamesSet) {
-    const v = draft.entityTagByKeyRef.value[name]
-    if (v === undefined) continue
-    rows.push({ key: `entityTag-${name}`, kind: 'entityTag', name, value: String(v) })
+    rows.push({
+      key: `entityTag-${name}`,
+      kind: 'entityTag',
+      name,
+      read: () => String(draft.entityTagByKeyRef.value[name] ?? false),
+    })
   }
 
-  return sortBoardRows(rows)
+  return sortBoardRowDefs(rows)
 }
 
-const boardRows = computed((): BoardRow[] => {
-  // Resample simulation board each frame while status snapshots update.
-  void selectedRunnerSnapshotComputed.value
-
+/** Row structure only — rebuilds on discovered / draft key membership. */
+const boardRowDefs = computed((): BoardRowDef[] => {
   if (selectedBoardId.value === SIMULATION_BOARD_ID) {
-    return collectSimulationBoardRows(sim.board.value)
+    void sim.discovered.value
+    void animgraphSimDiscovered.entityTagsInfoComputed.value
+    return collectSimulationBoardRowDefs(sim.board.value)
   }
 
   const draft = sim.getDraftBoard(selectedBoardId.value)
   if (!draft) return []
-
-  // Touch revision refs so edits recompute the list.
-  void draft.numericFeaturesRevisionRef.value
-  void draft.stringFeaturesRevisionRef.value
-  void draft.booleanFeaturesRevisionRef.value
-  void draft.vectorFeaturesRevisionRef.value
-  void draft.quatFeaturesRevisionRef.value
-  void draft.floatVarsRevisionRef.value
-  void draft.intVarsRevisionRef.value
-  void draft.boolVarsRevisionRef.value
-  void draft.vectorVarsRevisionRef.value
-  void draft.quatVarsRevisionRef.value
-  void draft.wrapperWeightsRevisionRef.value
-  void draft.tagValuesRevisionRef.value
-  void draft.entityTagsRevisionRef.value
-
-  return collectDraftBoardRows(draft)
+  void draft.keysRevisionRef.value
+  return collectDraftBoardRowDefs(draft)
 })
 
-const filteredBoardRows = computed((): BoardRow[] => {
+/** Value invalidation only — does not rebuild row structure. */
+const boardValuesRev = computed(() => {
+  if (selectedBoardId.value === SIMULATION_BOARD_ID) {
+    return sim.boardValuesRev.value
+  }
+  const draft = sim.getDraftBoard(selectedBoardId.value)
+  return draft?.valuesRevisionRef.value ?? 0
+})
+
+const boardRowValue = (row: BoardRowDef): string => {
+  void boardValuesRev.value
+  return row.read()
+}
+
+const filteredBoardRowDefs = computed((): BoardRowDef[] => {
   const q = boardFilter.value.trim().toLowerCase()
-  if (!q) return boardRows.value
-  return boardRows.value.filter(
+  const defs = boardRowDefs.value
+  if (!q) return defs
+  void boardValuesRev.value
+  return defs.filter(
     (row) =>
       row.name.toLowerCase().includes(q) ||
-      row.value.toLowerCase().includes(q) ||
-      row.kind.toLowerCase().includes(q),
+      row.kind.toLowerCase().includes(q) ||
+      row.read().toLowerCase().includes(q),
   )
 })
 </script>

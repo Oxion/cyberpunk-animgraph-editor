@@ -27,10 +27,15 @@ export type SimAnimEventPhase = 'tick' | 'durStart' | 'durEnd'
 export type SimInputBoardOptions = {
   /** Invoked at the end of `clearAll` (after maps are emptied). */
   onCleared?: () => void
+  /** Invoked after `valuesRevision` bumps. */
+  onValuesRevision?: (revision: number) => void
 }
 
 export class SimInputBoard {
   private readonly onCleared: (() => void) | undefined
+  private readonly onValuesRevision: ((revision: number) => void) | undefined
+  /** Bumps when persisted inputs change (features / vars / wrappers / tags). */
+  private _valuesRevision = 0
 
   /** lowercase featureName -> lowercase propertyName -> number */
   private features = new Map<string, Map<string, number>>()
@@ -126,6 +131,17 @@ export class SimInputBoard {
 
   constructor(options?: SimInputBoardOptions) {
     this.onCleared = options?.onCleared
+    this.onValuesRevision = options?.onValuesRevision
+  }
+
+  get valuesRevision(): number {
+    return this._valuesRevision
+  }
+
+  /** Explicit bump for callers that mutate maps directly (draft var channels). */
+  bumpValuesRevision(): void {
+    this._valuesRevision++
+    this.onValuesRevision?.(this._valuesRevision)
   }
 
   private static norm(s: string): string {
@@ -137,6 +153,10 @@ export class SimInputBoard {
     const p = SimInputBoard.norm(propertyName)
     if (!f || !p) return null
     return [f, p]
+  }
+
+  private static vecEq(a: SimVec4, b: SimVec4): boolean {
+    return a.x === b.x && a.y === b.y && a.z === b.z && a.w === b.w
   }
 
   resetDynamics(): void {
@@ -172,13 +192,31 @@ export class SimInputBoard {
     this.entityTags.clear()
     this.wrapperWeights.clear()
     this.resetDynamics()
+    this.bumpValuesRevision()
     this.onCleared?.()
   }
 
   setEntityTag(name: string, present = true): void {
     if (!name || name === 'None') return
-    if (present) this.entityTags.add(name)
-    else this.entityTags.delete(name)
+    if (present) {
+      if (this.entityTags.has(name)) return
+      this.entityTags.add(name)
+      this.bumpValuesRevision()
+      return
+    }
+    if (!this.entityTags.delete(name)) {
+      const lower = name.toLowerCase()
+      let removed = false
+      for (const t of this.entityTags) {
+        if (t.toLowerCase() === lower) {
+          this.entityTags.delete(t)
+          removed = true
+          break
+        }
+      }
+      if (!removed) return
+    }
+    this.bumpValuesRevision()
   }
 
   hasEntityTag(name: string): boolean {
@@ -193,12 +231,15 @@ export class SimInputBoard {
 
   setWrapperWeight(name: string, value: number): void {
     if (!name || name === 'None' || !Number.isFinite(value)) return
+    if (this.wrapperWeights.get(name) === value) return
     this.wrapperWeights.set(name, value)
+    this.bumpValuesRevision()
   }
 
   clearWrapperWeight(name: string): void {
     if (!name || name === 'None') return
-    this.wrapperWeights.delete(name)
+    if (!this.wrapperWeights.delete(name)) return
+    this.bumpValuesRevision()
   }
 
   /** FindVariableValue parity: active bit only (weight >= 0.5). */
@@ -212,14 +253,15 @@ export class SimInputBoard {
     map: Map<string, Map<string, T>>,
     featureName: string,
     propertyName: string,
-  ): void {
+  ): boolean {
     const key = SimInputBoard.featKey(featureName, propertyName)
-    if (!key) return
+    if (!key) return false
     const [f, p] = key
     const props = map.get(f)
-    if (!props) return
+    if (!props?.has(p)) return false
     props.delete(p)
     if (props.size === 0) map.delete(f)
+    return true
   }
 
   setFeature(featureName: string, propertyName: string, value: number): void {
@@ -230,12 +272,17 @@ export class SimInputBoard {
     if (!props) {
       props = new Map()
       this.features.set(f, props)
+    } else if (props.get(p) === value) {
+      return
     }
     props.set(p, value)
+    this.bumpValuesRevision()
   }
 
   clearFeature(featureName: string, propertyName: string): void {
-    SimInputBoard.clearFeatMapProp(this.features, featureName, propertyName)
+    if (SimInputBoard.clearFeatMapProp(this.features, featureName, propertyName)) {
+      this.bumpValuesRevision()
+    }
   }
 
   getFeature(featureName: string, propertyName: string): number | undefined {
@@ -248,21 +295,28 @@ export class SimInputBoard {
     const key = SimInputBoard.featKey(featureName, propertyName)
     if (!key) return
     const [f, p] = key
-    let props = this.vectorFeatures.get(f)
-    if (!props) {
-      props = new Map()
-      this.vectorFeatures.set(f, props)
-    }
-    props.set(p, {
+    const next = {
       x: Number.isFinite(value.x) ? value.x : 0,
       y: Number.isFinite(value.y) ? value.y : 0,
       z: Number.isFinite(value.z) ? value.z : 0,
       w: Number.isFinite(value.w) ? value.w : 0,
-    })
+    }
+    let props = this.vectorFeatures.get(f)
+    if (!props) {
+      props = new Map()
+      this.vectorFeatures.set(f, props)
+    } else {
+      const prev = props.get(p)
+      if (prev && SimInputBoard.vecEq(prev, next)) return
+    }
+    props.set(p, next)
+    this.bumpValuesRevision()
   }
 
   clearVectorFeature(featureName: string, propertyName: string): void {
-    SimInputBoard.clearFeatMapProp(this.vectorFeatures, featureName, propertyName)
+    if (SimInputBoard.clearFeatMapProp(this.vectorFeatures, featureName, propertyName)) {
+      this.bumpValuesRevision()
+    }
   }
 
   getVectorFeature(featureName: string, propertyName: string): SimVec4 | undefined {
@@ -276,21 +330,28 @@ export class SimInputBoard {
     const key = SimInputBoard.featKey(featureName, propertyName)
     if (!key) return
     const [f, p] = key
-    let props = this.quatFeatures.get(f)
-    if (!props) {
-      props = new Map()
-      this.quatFeatures.set(f, props)
-    }
-    props.set(p, {
+    const next = {
       x: Number.isFinite(value.x) ? value.x : 0,
       y: Number.isFinite(value.y) ? value.y : 0,
       z: Number.isFinite(value.z) ? value.z : 0,
       w: Number.isFinite(value.w) ? value.w : 1,
-    })
+    }
+    let props = this.quatFeatures.get(f)
+    if (!props) {
+      props = new Map()
+      this.quatFeatures.set(f, props)
+    } else {
+      const prev = props.get(p)
+      if (prev && SimInputBoard.vecEq(prev, next)) return
+    }
+    props.set(p, next)
+    this.bumpValuesRevision()
   }
 
   clearQuatFeature(featureName: string, propertyName: string): void {
-    SimInputBoard.clearFeatMapProp(this.quatFeatures, featureName, propertyName)
+    if (SimInputBoard.clearFeatMapProp(this.quatFeatures, featureName, propertyName)) {
+      this.bumpValuesRevision()
+    }
   }
 
   getQuatFeature(featureName: string, propertyName: string): SimVec4 | undefined {
@@ -304,16 +365,22 @@ export class SimInputBoard {
     const key = SimInputBoard.featKey(featureName, propertyName)
     if (!key) return
     const [f, p] = key
+    const next = value === true
     let props = this.boolFeatures.get(f)
     if (!props) {
       props = new Map()
       this.boolFeatures.set(f, props)
+    } else if (props.get(p) === next) {
+      return
     }
-    props.set(p, value === true)
+    props.set(p, next)
+    this.bumpValuesRevision()
   }
 
   clearBoolFeature(featureName: string, propertyName: string): void {
-    SimInputBoard.clearFeatMapProp(this.boolFeatures, featureName, propertyName)
+    if (SimInputBoard.clearFeatMapProp(this.boolFeatures, featureName, propertyName)) {
+      this.bumpValuesRevision()
+    }
   }
 
   getBoolFeature(featureName: string, propertyName: string): boolean | undefined {
@@ -326,16 +393,22 @@ export class SimInputBoard {
     const key = SimInputBoard.featKey(featureName, propertyName)
     if (!key) return
     const [f, p] = key
+    const next = value ?? ''
     let props = this.stringFeatures.get(f)
     if (!props) {
       props = new Map()
       this.stringFeatures.set(f, props)
+    } else if (props.get(p) === next) {
+      return
     }
-    props.set(p, value ?? '')
+    props.set(p, next)
+    this.bumpValuesRevision()
   }
 
   clearStringFeature(featureName: string, propertyName: string): void {
-    SimInputBoard.clearFeatMapProp(this.stringFeatures, featureName, propertyName)
+    if (SimInputBoard.clearFeatMapProp(this.stringFeatures, featureName, propertyName)) {
+      this.bumpValuesRevision()
+    }
   }
 
   getStringFeature(featureName: string, propertyName: string): string | undefined {
@@ -451,18 +524,104 @@ export class SimInputBoard {
     return this.lastFrameAnimEventValues.get(name)
   }
 
+  setFloatVar(name: string, value: number): void {
+    if (!name || name === 'None' || !Number.isFinite(value)) return
+    if (this.floatVars.get(name) === value) return
+    this.floatVars.set(name, value)
+    this.bumpValuesRevision()
+  }
+
+  clearFloatVar(name: string): void {
+    if (!name || name === 'None') return
+    if (!this.floatVars.delete(name)) return
+    this.bumpValuesRevision()
+  }
+
+  setIntVar(name: string, value: number): void {
+    if (!name || name === 'None' || !Number.isFinite(value)) return
+    if (this.intVars.get(name) === value) return
+    this.intVars.set(name, value)
+    this.bumpValuesRevision()
+  }
+
+  clearIntVar(name: string): void {
+    if (!name || name === 'None') return
+    if (!this.intVars.delete(name)) return
+    this.bumpValuesRevision()
+  }
+
+  setBoolVar(name: string, value: boolean): void {
+    if (!name || name === 'None') return
+    const next = value === true
+    if (this.boolVars.get(name) === next) return
+    this.boolVars.set(name, next)
+    this.bumpValuesRevision()
+  }
+
+  clearBoolVar(name: string): void {
+    if (!name || name === 'None') return
+    if (!this.boolVars.delete(name)) return
+    this.bumpValuesRevision()
+  }
+
+  setVectorVar(name: string, value: SimVec4): void {
+    if (!name || name === 'None') return
+    const next = {
+      x: Number.isFinite(value.x) ? value.x : 0,
+      y: Number.isFinite(value.y) ? value.y : 0,
+      z: Number.isFinite(value.z) ? value.z : 0,
+      w: Number.isFinite(value.w) ? value.w : 0,
+    }
+    const prev = this.vectorVars.get(name)
+    if (prev && SimInputBoard.vecEq(prev, next)) return
+    this.vectorVars.set(name, next)
+    this.bumpValuesRevision()
+  }
+
+  clearVectorVar(name: string): void {
+    if (!name || name === 'None') return
+    if (!this.vectorVars.delete(name)) return
+    this.bumpValuesRevision()
+  }
+
+  setQuatVar(name: string, value: SimVec4): void {
+    if (!name || name === 'None') return
+    const next = {
+      x: Number.isFinite(value.x) ? value.x : 0,
+      y: Number.isFinite(value.y) ? value.y : 0,
+      z: Number.isFinite(value.z) ? value.z : 0,
+      w: Number.isFinite(value.w) ? value.w : 1,
+    }
+    const prev = this.quatVars.get(name)
+    if (prev && SimInputBoard.vecEq(prev, next)) return
+    this.quatVars.set(name, next)
+    this.bumpValuesRevision()
+  }
+
+  clearQuatVar(name: string): void {
+    if (!name || name === 'None') return
+    if (!this.quatVars.delete(name)) return
+    this.bumpValuesRevision()
+  }
+
   setTagValue(name: string, value: number): void {
     if (!name || name === 'None' || !Number.isFinite(value)) return
+    if (this.tagValues.get(name) === value) return
     this.tagValues.set(name, value)
+    this.bumpValuesRevision()
   }
 
   clearTagValue(name: string): void {
     if (!name || name === 'None') return
-    if (this.tagValues.delete(name)) return
+    if (this.tagValues.delete(name)) {
+      this.bumpValuesRevision()
+      return
+    }
     const lower = name.toLowerCase()
     for (const k of this.tagValues.keys()) {
       if (k.toLowerCase() === lower) {
         this.tagValues.delete(k)
+        this.bumpValuesRevision()
         return
       }
     }

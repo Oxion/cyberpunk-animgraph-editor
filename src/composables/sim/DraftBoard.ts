@@ -6,6 +6,9 @@ import { makeFeatureKey } from "./features"
 export class DraftBoard implements IDraftBoard {
   readonly id: string
 
+  private readonly _keysRevisionRef: Ref<number> = ref(0)
+  private readonly _valuesRevisionRef: Ref<number> = ref(0)
+
   private readonly _numericFeatureByKeyRef: Ref<Partial<Record<string, number>>> = ref({})
   private readonly _stringFeatureByKeyRef: Ref<Partial<Record<string, string>>> = ref({})
   private readonly _booleanFeatureByKeyRef: Ref<Partial<Record<string, boolean>>> = ref({})
@@ -58,6 +61,20 @@ export class DraftBoard implements IDraftBoard {
     this.id = id
   }
 
+  get keysRevisionRef(): Readonly<Ref<number>> {
+    return this._keysRevisionRef
+  }
+  get valuesRevisionRef(): Readonly<Ref<number>> {
+    return this._valuesRevisionRef
+  }
+
+  private bumpKeys(): void {
+    this._keysRevisionRef.value++
+  }
+  private bumpValues(): void {
+    this._valuesRevisionRef.value++
+  }
+
   get numericFeatureByKeyRef(): Readonly<Ref<Readonly<Partial<Record<string, number>>>>> {
     return this._numericFeatureByKeyRef
   }
@@ -108,9 +125,12 @@ export class DraftBoard implements IDraftBoard {
 
   setNumericFeatureValue(feature: string, property: string, value: number): void {
     const key = makeFeatureKey(feature, property)
+    const isNew = !this._populatedNumericFeatureKeyToFeatureMap.has(key)
     this._numericFeatureByKeyRef.value[key] = value
     this._numericFeaturesRevisionRef.value++
     this._populatedNumericFeatureKeyToFeatureMap.set(key, { feature, property })
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._numericFeatureByKeyRef)
   }
   clearNumericFeatureValue(feature: string, property: string): void {
@@ -118,13 +138,18 @@ export class DraftBoard implements IDraftBoard {
     if (!this._populatedNumericFeatureKeyToFeatureMap.delete(key)) return
     delete this._numericFeatureByKeyRef.value[key]
     this._numericFeaturesRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._numericFeatureByKeyRef)
   }
   setStringFeatureValue(feature: string, property: string, value: string): void {
     const key = makeFeatureKey(feature, property)
+    const isNew = !this._populatedStringFeatureKeyToFeatureMap.has(key)
     this._stringFeatureByKeyRef.value[key] = value
     this._stringFeaturesRevisionRef.value++
     this._populatedStringFeatureKeyToFeatureMap.set(key, { feature, property })
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._stringFeatureByKeyRef)
   }
   clearStringFeatureValue(feature: string, property: string): void {
@@ -132,13 +157,18 @@ export class DraftBoard implements IDraftBoard {
     if (!this._populatedStringFeatureKeyToFeatureMap.delete(key)) return
     delete this._stringFeatureByKeyRef.value[key]
     this._stringFeaturesRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._stringFeatureByKeyRef)
   }
   setBooleanFeatureValue(feature: string, property: string, value: boolean): void {
     const key = makeFeatureKey(feature, property)
+    const isNew = !this._populatedBooleanFeatureKeyToFeatureMap.has(key)
     this._booleanFeatureByKeyRef.value[key] = value
     this._booleanFeaturesRevisionRef.value++
     this._populatedBooleanFeatureKeyToFeatureMap.set(key, { feature, property })
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._booleanFeatureByKeyRef)
   }
   clearBooleanFeatureValue(feature: string, property: string): void {
@@ -146,13 +176,18 @@ export class DraftBoard implements IDraftBoard {
     if (!this._populatedBooleanFeatureKeyToFeatureMap.delete(key)) return
     delete this._booleanFeatureByKeyRef.value[key]
     this._booleanFeaturesRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._booleanFeatureByKeyRef)
   }
   setVectorFeatureValue(feature: string, property: string, value: SimVec4): void {
     const key = makeFeatureKey(feature, property)
+    const isNew = !this._populatedVectorFeatureKeyToFeatureMap.has(key)
     this._vectorFeatureByKeyRef.value[key] = value
     this._vectorFeaturesRevisionRef.value++
     this._populatedVectorFeatureKeyToFeatureMap.set(key, { feature, property })
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._vectorFeatureByKeyRef)
   }
   clearVectorFeatureValue(feature: string, property: string): void {
@@ -160,6 +195,8 @@ export class DraftBoard implements IDraftBoard {
     if (!this._populatedVectorFeatureKeyToFeatureMap.delete(key)) return
     delete this._vectorFeatureByKeyRef.value[key]
     this._vectorFeaturesRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._vectorFeatureByKeyRef)
   }
   setVectorFeatureAxisValue(feature: string, property: string, axis: keyof SimVec4, value: number): void {
@@ -173,9 +210,12 @@ export class DraftBoard implements IDraftBoard {
   }
   setQuatFeatureValue(feature: string, property: string, value: SimVec4): void {
     const key = makeFeatureKey(feature, property)
+    const isNew = !this._populatedQuatFeatureKeyToFeatureMap.has(key)
     this._quatFeatureByKeyRef.value[key] = value
     this._quatFeaturesRevisionRef.value++
     this._populatedQuatFeatureKeyToFeatureMap.set(key, { feature, property })
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._quatFeatureByKeyRef)
   }
   clearQuatFeatureValue(feature: string, property: string): void {
@@ -183,6 +223,8 @@ export class DraftBoard implements IDraftBoard {
     if (!this._populatedQuatFeatureKeyToFeatureMap.delete(key)) return
     delete this._quatFeatureByKeyRef.value[key]
     this._quatFeaturesRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._quatFeatureByKeyRef)
   }
   setQuatFeatureAxisValue(feature: string, property: string, axis: keyof SimVec4, value: number): void {
@@ -244,51 +286,71 @@ export class DraftBoard implements IDraftBoard {
   }
 
   setFloatVarValue(varName: string, value: number): void {
+    const isNew = !this._populatedFloatVarNamesSet.has(varName)
     this._floatVarByKeyRef.value[varName] = value
     this._floatVarsRevisionRef.value++
     this._populatedFloatVarNamesSet.add(varName)
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._floatVarByKeyRef)
   }
   clearFloatVarValue(varName: string): void {
     if (!this._populatedFloatVarNamesSet.delete(varName)) return
     delete this._floatVarByKeyRef.value[varName]
     this._floatVarsRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._floatVarByKeyRef)
   }
   setIntVarValue(varName: string, value: number): void {
+    const isNew = !this._populatedIntVarNamesSet.has(varName)
     this._intVarByKeyRef.value[varName] = value
     this._intVarsRevisionRef.value++
     this._populatedIntVarNamesSet.add(varName)
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._intVarByKeyRef)
   }
   clearIntVarValue(varName: string): void {
     if (!this._populatedIntVarNamesSet.delete(varName)) return
     delete this._intVarByKeyRef.value[varName]
     this._intVarsRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._intVarByKeyRef)
   }
   setBoolVarValue(varName: string, value: boolean): void {
+    const isNew = !this._populatedBoolVarNamesSet.has(varName)
     this._boolVarByKeyRef.value[varName] = value
     this._boolVarsRevisionRef.value++
     this._populatedBoolVarNamesSet.add(varName)
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._boolVarByKeyRef)
   }
   clearBoolVarValue(varName: string): void {
     if (!this._populatedBoolVarNamesSet.delete(varName)) return
     delete this._boolVarByKeyRef.value[varName]
     this._boolVarsRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._boolVarByKeyRef)
   }
   setVectorVarValue(varName: string, value: SimVec4): void {
+    const isNew = !this._populatedVectorVarNamesSet.has(varName)
     this._vectorVarByKeyRef.value[varName] = value
     this._vectorVarsRevisionRef.value++
     this._populatedVectorVarNamesSet.add(varName)
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._vectorVarByKeyRef)
   }
   clearVectorVarValue(varName: string): void {
     if (!this._populatedVectorVarNamesSet.delete(varName)) return
     delete this._vectorVarByKeyRef.value[varName]
     this._vectorVarsRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._vectorVarByKeyRef)
   }
   setVectorVarAxisValue(varName: string, axis: keyof SimVec4, value: number): void {
@@ -300,15 +362,20 @@ export class DraftBoard implements IDraftBoard {
     this.setVectorVarValue(varName, nextValue)
   }
   setQuatVarValue(varName: string, value: SimVec4): void {
+    const isNew = !this._populatedQuatVarNamesSet.has(varName)
     this._quatVarByKeyRef.value[varName] = value
     this._quatVarsRevisionRef.value++
     this._populatedQuatVarNamesSet.add(varName)
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._quatVarByKeyRef)
   }
   clearQuatVarValue(varName: string): void {
     if (!this._populatedQuatVarNamesSet.delete(varName)) return
     delete this._quatVarByKeyRef.value[varName]
     this._quatVarsRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._quatVarByKeyRef)
   }
   setQuatVarAxisValue(varName: string, axis: keyof SimVec4, value: number): void {
@@ -330,15 +397,20 @@ export class DraftBoard implements IDraftBoard {
     return this._populatedWrapperWeightNamesSet
   }
   setWrapperWeightValue(weightName: string, value: number): void {
+    const isNew = !this._populatedWrapperWeightNamesSet.has(weightName)
     this._wrapperWeightByKeyRef.value[weightName] = value
     this._wrapperWeightsRevisionRef.value++
     this._populatedWrapperWeightNamesSet.add(weightName)
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._wrapperWeightByKeyRef)
   }
   clearWrapperWeightValue(weightName: string): void {
     if (!this._populatedWrapperWeightNamesSet.delete(weightName)) return
     delete this._wrapperWeightByKeyRef.value[weightName]
     this._wrapperWeightsRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._wrapperWeightByKeyRef)
   }
 
@@ -352,15 +424,20 @@ export class DraftBoard implements IDraftBoard {
     return this._populatedTagValueNamesSet
   }
   setTagValueValue(tagName: string, value: number): void {
+    const isNew = !this._populatedTagValueNamesSet.has(tagName)
     this._tagValueByKeyRef.value[tagName] = value
     this._tagValuesRevisionRef.value++
     this._populatedTagValueNamesSet.add(tagName)
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._tagValueByKeyRef)
   }
   clearTagValueValue(tagName: string): void {
     if (!this._populatedTagValueNamesSet.delete(tagName)) return
     delete this._tagValueByKeyRef.value[tagName]
     this._tagValuesRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._tagValueByKeyRef)
   }
 
@@ -374,15 +451,20 @@ export class DraftBoard implements IDraftBoard {
     return this._populatedEntityTagNamesSet
   }
   setEntityTagValue(tagName: string, value: boolean): void {
+    const isNew = !this._populatedEntityTagNamesSet.has(tagName)
     this._entityTagByKeyRef.value[tagName] = value
     this._entityTagsRevisionRef.value++
     this._populatedEntityTagNamesSet.add(tagName)
+    if (isNew) this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._entityTagByKeyRef)
   }
   clearEntityTagValue(tagName: string): void {
     if (!this._populatedEntityTagNamesSet.delete(tagName)) return
     delete this._entityTagByKeyRef.value[tagName]
     this._entityTagsRevisionRef.value++
+    this.bumpKeys()
+    this.bumpValues()
     triggerRef(this._entityTagByKeyRef)
   }
 }

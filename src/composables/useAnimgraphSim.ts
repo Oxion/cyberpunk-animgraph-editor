@@ -415,6 +415,8 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
     return true
   }
 
+  const boardValuesRevRef = ref(0)
+
   const onSimBoardCleared = () => {
     clearDraftChannels(draftChannels)
     for (const entry of draftBoardEntries) {
@@ -423,7 +425,14 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
     draftAppliedKeysNeedReconcile = false
   }
 
-  const board = shallowRef(new SimInputBoard({ onCleared: onSimBoardCleared }))
+  const onSimBoardValuesRevision = (revision: number) => {
+    boardValuesRevRef.value = revision
+  }
+
+  const board = shallowRef(new SimInputBoard({
+    onCleared: onSimBoardCleared,
+    onValuesRevision: onSimBoardValuesRevision,
+  }))
 
   /** Sample-path diagnostics (Blend2 null inputs, …). Off by default. */
   const sampleWarningsEnabled = ref(false)
@@ -2280,6 +2289,7 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
     applyProjectSimResources,
 
     board,
+    boardValuesRev: boardValuesRevRef,
     getDraftBoard,
     listDraftBoardIds,
     draftBoardIdsRev,

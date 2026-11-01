@@ -4,6 +4,11 @@ import { Ref } from "vue"
 export interface IDraftBoard {
   readonly id: string
 
+  /** Bumps only when populated key membership changes (add/remove). */
+  readonly keysRevisionRef: Readonly<Ref<number>>
+  /** Bumps on any value write/clear. */
+  readonly valuesRevisionRef: Readonly<Ref<number>>
+
   readonly numericFeatureByKeyRef: Readonly<Ref<Readonly<Partial<Record<string, number>>>>>
   readonly stringFeatureByKeyRef: Readonly<Ref<Readonly<Partial<Record<string, string>>>>>
   readonly booleanFeatureByKeyRef: Readonly<Ref<Readonly<Partial<Record<string, boolean>>>>>
