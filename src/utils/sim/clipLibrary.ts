@@ -71,7 +71,7 @@ export type ClipSetMembership = {
   sourceLabel: string
   priority: number
   active: boolean
-  /** This entry wins resolveClip for the name (active + lowest priority) */
+  /** This entry wins resolveClip for the name (active + lowest priority, later index on ties) */
   resolves: boolean
   duration: number
   eventCount: number
@@ -187,8 +187,8 @@ export class ClipLibrary {
   }
 
   /**
-   * Active gameplay sets sorted by priority ascending (then insertion order).
-   * Matches BuildRuntimeAnimSetup sort + Acquire walk order.
+   * Active gameplay sets sorted by priority ascending, then insertion order descending.
+   * Equal priority → later entry wins (game acquire parity).
    */
   orderedActiveEntries(isWrapperActive: (name: string) => boolean): AnimSetupEntry[] {
     const indexed = this.entries
@@ -196,7 +196,7 @@ export class ClipLibrary {
       .filter(({ e }) => this.isEntryActive(e, isWrapperActive))
     indexed.sort((a, b) => {
       if (a.e.priority !== b.e.priority) return a.e.priority - b.e.priority
-      return a.index - b.index
+      return b.index - a.index
     })
     return indexed.map(({ e }) => e)
   }
@@ -279,7 +279,7 @@ export class ClipLibrary {
 
   /**
    * All loaded sets that contain `name` (case-insensitive).
-   * Sorted by priority ↑ then insertion order; `resolves` marks the acquire winner.
+   * Sorted by priority ↑ then insertion ↓; `resolves` marks the acquire winner.
    */
   entriesContainingClip(
     name: string,
@@ -295,7 +295,7 @@ export class ClipLibrary {
     }
     indexed.sort((a, b) => {
       if (a.e.priority !== b.e.priority) return a.e.priority - b.e.priority
-      return a.index - b.index
+      return b.index - a.index
     })
     let winnerId: string | null = null
     if (isWrapperActive) {

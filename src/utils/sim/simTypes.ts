@@ -79,7 +79,11 @@ export type SimSampleWarning = {
 
 /** Update-path diagnostic (clip clocks / speed / AnimEnd). */
 export type SimUpdateWarning = {
-  code: 'clip-zero-speed' | 'snap-to-terrain-partial' | 'floor-ik-partial'
+  code:
+    | 'clip-zero-speed'
+    | 'snap-to-terrain-partial'
+    | 'floor-ik-partial'
+    | 'spring-ringing-suppressed'
   handleId: string
   message: string
   /** Effective playback speed when code is clip-zero-speed */

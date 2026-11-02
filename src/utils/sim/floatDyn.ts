@@ -261,6 +261,47 @@ export function stepSpringDamp(
   }
 }
 
+/** Position band matching BlendMultiple NORMALIZED_WEIGHT_THRESHOLD. */
+export const SPRING_RING_SUPPRESS_POS_EPS = 0.001
+
+/**
+ * Editor assist (SimGraphRunnerOptions.suppressSpringRinging):
+ * snap to dest when the step crossed destination or landed within posEps.
+ * Returns true when a snap was applied this call.
+ */
+export function suppressSpringRinging(
+  state: FloatDynState,
+  destinationValue: number,
+  wrap: boolean,
+  rangeMin: number,
+  rangeMax: number,
+  valueBeforeStep: number,
+  posEps = SPRING_RING_SUPPRESS_POS_EPS
+): boolean {
+  const dest = wrapAroundRange(destinationValue, wrap, rangeMin, rangeMax)
+  const errBefore = shortestSignedDistance(
+    valueBeforeStep,
+    dest,
+    wrap,
+    rangeMin,
+    rangeMax
+  )
+  const errAfter = shortestSignedDistance(
+    state.value,
+    dest,
+    wrap,
+    rangeMin,
+    rangeMax
+  )
+  const crossed = errBefore !== 0 && errBefore * errAfter <= 0
+  const close = Math.abs(errAfter) <= posEps
+  if (!crossed && !close) return false
+  if (errAfter === 0 && state.velocity === 0) return false
+  state.value = dest
+  state.velocity = 0
+  return true
+}
+
 /**
  * TDamper_CriticalDampPolicy::Update + TDamper::Update(curr, vel, dest, dt)
  * DiffPolicy: curr - dest.

@@ -86,6 +86,7 @@ import {
   stepFloatRandom,
   stepFloatTimeDependentSinus,
   stepSpringDamp,
+  suppressSpringRinging,
   wrapAroundRange,
   type FloatDynState,
   type FloatRandomState,
@@ -173,7 +174,14 @@ import {
   readVector4,
   resolveHandle,
 } from './simDataUtils'
-import type { FloatEvalCtx, SampleCtx, WalkCtx as SimGraphRunnerWalkCtx, SimGraphSampleSlotHost, SimGraphUpdateSlotHost } from './SimGraphRunner.types'
+import type {
+  FloatEvalCtx,
+  SampleCtx,
+  SimGraphRunnerOptions,
+  WalkCtx as SimGraphRunnerWalkCtx,
+  SimGraphSampleSlotHost,
+  SimGraphUpdateSlotHost,
+} from './SimGraphRunner.types'
 import type { SimInputBoard } from './SimInputBoard'
 import {
   createSimSampleLog,
@@ -2101,6 +2109,7 @@ function evalStatefulFloatNode(
       state = { value: init, velocity: 0 }
       fctx.floatDyn.set(id, state)
     }
+    const valueBefore = state.value
     stepSpringDamp(
       state,
       inputValue,
@@ -2113,6 +2122,23 @@ function evalStatefulFloatNode(
       defs.timeStep,
       dt
     )
+    if (
+      fctx.options.suppressSpringRinging &&
+      suppressSpringRinging(
+        state,
+        inputValue,
+        defs.wrap,
+        defs.rangeMin,
+        defs.rangeMax,
+        valueBefore
+      )
+    ) {
+      pushUpdateWarning(fctx as SimGraphRunnerWalkCtx, {
+        code: 'spring-ringing-suppressed',
+        handleId: id,
+        message: `SpringDamp ringing suppressed (#${id})`,
+      })
+    }
     fctx.floatUpdated.add(id)
     return state.value
   }
@@ -3446,6 +3472,11 @@ export class SimGraphRunner {
    */
   updateWarningsEnabled = false
   /**
+   * Extensible per-runner assists (suppressSpringRinging, …).
+   * Mutate in place or replace the object; read each Update.
+   */
+  options: SimGraphRunnerOptions = { suppressSpringRinging: true }
+  /**
    * Handles whose full pose is snapshotted during Sample (at that node).
    * Selection registers any node — inspect/stack HUD use the capture.
    */
@@ -3912,6 +3943,7 @@ export class SimGraphRunner {
       board,
       dt,
       rawDt: rawDt ?? dt,
+      options: this.options,
       floatDyn: this.floatDyn,
       floatUpdated,
       vectorDyn: this.vectorDyn,

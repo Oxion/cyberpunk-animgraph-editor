@@ -27,6 +27,19 @@ import { SimInputBoard } from "./SimInputBoard"
 import { SimSampleLog } from "./simSampleLog"
 import { SimNodeState, SimSampleWarning, SimSnapshot, SimUpdateWarning } from "./simTypes"
 
+/**
+ * Per-runner sim assists / editor overrides (extend over time).
+ * Some flags opt into non-parity editor assists (default may be on).
+ */
+export interface SimGraphRunnerOptions {
+  /**
+   * Snap SpringDamp when it crosses or settles near its destination
+   * (kills underdamped endpoint ring that chatters Blend2 active gates).
+   * Default: true.
+   */
+  suppressSpringRinging?: boolean
+}
+
 export type SimGraphUpdateSlotHost = {
   updateNested(slotName: string, updateInput?: () => void): {
     diagramId: string
@@ -49,6 +62,8 @@ export type FloatEvalCtx = {
   dt: number
   /** Undilated dt (rawTimeDelta); defaults to dt when omitted. */
   rawDt: number
+  /** Runner options (spring-ring suppress, …). */
+  options: SimGraphRunnerOptions
   floatDyn: Map<string, FloatDynState>
   floatUpdated: Set<string>
   /** VectorLatch / DampVector latched or damped Vector4. */

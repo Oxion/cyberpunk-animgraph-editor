@@ -437,6 +437,8 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
   /** Sample-path diagnostics (Blend2 null inputs, …). Off by default. */
   const sampleWarningsEnabled = ref(false)
   const updateWarningsEnabled = ref(false)
+  /** SimGraphRunnerOptions.suppressSpringRinging — synced to all runners. */
+  const suppressSpringRinging = ref(true)
 
   let raf = 0
   let lastTs = 0
@@ -462,6 +464,7 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
     r.setActiveRig(rigLibrary.value.getActive())
     r.sampleWarningsEnabled = sampleWarningsEnabled.value
     r.updateWarningsEnabled = updateWarningsEnabled.value
+    r.options.suppressSpringRinging = suppressSpringRinging.value
   }
 
   /**
@@ -1731,6 +1734,14 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
     _publish(0)
   }
 
+  const setSuppressSpringRinging = (on: boolean) => {
+    suppressSpringRinging.value = on
+    for (const runner of runnerIdToRunnerMap.values()) {
+      runner.options.suppressSpringRinging = on
+    }
+    _publish(0)
+  }
+
   const resolveRunnerPose = (
     runnerId: string,
     poseRef: DerivedPoseRef
@@ -2275,6 +2286,8 @@ export function useAnimgraphSim(props: useAnimgraphSimProps) {
     setSampleWarningsEnabled,
     updateWarningsEnabled,
     setUpdateWarningsEnabled,
+    suppressSpringRinging,
+    setSuppressSpringRinging,
     setStackCaptureHandleIds,
     loadAnimDatabaseJson,
     loadAnimDatabaseLibraryJson,

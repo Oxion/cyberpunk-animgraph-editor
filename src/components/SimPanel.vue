@@ -97,6 +97,15 @@
               Sample warnings
               <Check v-if="simSampleWarningsEnabledRef" class="ml-auto size-3.5 opacity-80" />
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              class="gap-2 text-xs"
+              @select="onToggleSuppressSpringRinging"
+            >
+              <Activity class="size-3.5" />
+              Suppress spring ringing
+              <Check v-if="simSuppressSpringRingingRef" class="ml-auto size-3.5 opacity-80" />
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -1494,6 +1503,7 @@ const {
   clipPoseSets: simClipPoseSetsRef,
   updateWarningsEnabled: simUpdateWarningsEnabledRef,
   sampleWarningsEnabled: simSampleWarningsEnabledRef,
+  suppressSpringRinging: simSuppressSpringRingingRef,
   getClipGlbInfo: simGetClipGlbInfo,
   listGlbAnimNames: simListGlbAnimNames,
   isClipActive: simIsClipActive,
@@ -2376,6 +2386,10 @@ const onToggleUpdateWarningsEnabled = () => {
 
 const onToggleSampleWarningsEnabled = () => {
   sim.setSampleWarningsEnabled(!sim.sampleWarningsEnabled.value)
+}
+
+const onToggleSuppressSpringRinging = () => {
+  sim.setSuppressSpringRinging(!sim.suppressSpringRinging.value)
 }
 
 const onSetActiveRig = (rigId: string | null) => {
