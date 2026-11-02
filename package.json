@@ -18,6 +18,8 @@
     "gen:app-icon": "node scripts/gen-app-icon.mjs",
     "electron:clean": "node scripts/electron-clean.mjs",
     "electron:build": "npm run electron:clean && npm run gen:app-icon && npm run build && npm run electron:compile && electron-builder --win --dir",
+    "electron:package": "node scripts/electron-package.mjs",
+    "electron:dist": "node scripts/electron-package.mjs --build",
     "electron": "npm run electron:compile && electron .",
     "dev:electron": "npm run electron:compile && concurrently -k \"vite\" \"wait-on http://127.0.0.1:5001 && electron .\""
   },
