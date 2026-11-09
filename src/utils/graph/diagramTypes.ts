@@ -115,8 +115,7 @@ export interface RenderData {
   handlesRegistry: Map<string, AnimgraphNode>
   originalAnimgraph: AnimgraphData
   /**
-   * Handles that live in handlesRegistry but are NOT part of animgraph nodesToInit /
-   * wired graph yet (e.g. conditions before path to TransitionDescription).
+   * Unattached handles: zero outbound ∧ not contained ∧ not root.
    */
   floatingHandleIds?: Set<string>
 }

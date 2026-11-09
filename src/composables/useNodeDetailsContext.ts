@@ -1,5 +1,5 @@
 import { provide, type ComputedRef, type InjectionKey, type Ref } from 'vue'
-import type { AnimgraphNode } from '../utils/graph/animgraphTypes'
+import type { AnimgraphNode, AnimgraphObject } from '../utils/graph/animgraphTypes'
 import type { DiagramConnection, RenderNode } from '../utils/graph/diagramTypes'
 import type { StateMachineRingPresentation } from '../utils/graph/DiagramConversion'
 import { setFlushPendingHandleFieldEdit } from '../stores/graphHistory'
@@ -13,6 +13,7 @@ import {
   renamePinHandleId,
   reorderPinArraySlot,
   selectedHandleData,
+  selectedHandleMutationTarget,
   snapshotHandleField,
   snapshotHandleFields,
 } from '../stores/graphHandleEdits'
@@ -46,6 +47,11 @@ export interface NodeDetailsContext {
   notifySelectedHandleDataChanged: () => void
   snapshotHandleField: (key: string) => unknown
   snapshotHandleFields: (keys: readonly string[]) => Record<string, unknown>
+  mutateSelectedHandleData: (
+    rootKeys: readonly string[],
+    mutator: (data: AnimgraphObject) => void
+  ) => boolean
+  selectedHandleMutationTarget: typeof selectedHandleMutationTarget
   recordHandleFieldEdit: (
     key: string,
     before: unknown,
@@ -95,6 +101,8 @@ export {
   snapshotHandleFields,
   recordHandleFieldsEdit,
   recordHandleFieldEdit,
+  mutateSelectedHandleData,
+  selectedHandleMutationTarget,
 } from '../stores/graphHandleEdits'
 
 export function setupNodeDetailsContext(ctx: NodeDetailsContext) {

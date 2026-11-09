@@ -21,6 +21,8 @@ import {
   collectFloatingHandleIdsForSave,
   collectHandlesRegistryForSave,
 } from '../utils/graph/floatingHandles'
+import { buildNodesToInitFromRoot } from '../utils/graph/animgraphMutation'
+import { mutationCtxFromRenderData } from '../utils/graph/diagramMutationCtx'
 import { clearGraphHistory } from './graphHistory'
 import {
   clearProjectDirty,
@@ -825,13 +827,19 @@ export const exportToPath = async (
   }
 }
 
-/** Clone unwrapped animgraph + flat registry (no game/WKit wrap). */
+/** Clone unwrapped animgraph + flat registry; rebuild nodesToInit from root tree. */
 function serializeAnimgraphPayload(renderData: RenderData): Pick<
   AnimgraphVisualizerData,
   'originalAnimgraph' | 'handlesRegistry' | 'floatingHandleIds'
 > {
+  const originalAnimgraph = JSON.parse(
+    JSON.stringify(renderData.originalAnimgraph)
+  ) as AnimgraphData
+  originalAnimgraph.nodesToInit = buildNodesToInitFromRoot(
+    mutationCtxFromRenderData(renderData)
+  )
   return {
-    originalAnimgraph: JSON.parse(JSON.stringify(renderData.originalAnimgraph)) as AnimgraphData,
+    originalAnimgraph,
     handlesRegistry: collectHandlesRegistryForSave(renderData),
     floatingHandleIds: collectFloatingHandleIdsForSave(renderData),
   }

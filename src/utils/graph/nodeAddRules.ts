@@ -6,7 +6,9 @@
  */
 
 import type { AnimgraphNode, AnimgraphNodeLike, AnimgraphObject } from './animgraphTypes'
+import type { AnimgraphData } from './animgraphTypes'
 import type { RenderNode } from './diagramTypes'
+import { addHandleRefs, createHandle, deleteHandles } from './animgraphMutation'
 import { NodeDefinitionRegistry, type ChildSlotDef } from '../NodeDefinition'
 import {
   resolveDiagramAddPlace,
@@ -214,48 +216,47 @@ export function makeAnimgraphAddTarget(
 
 export function attachNewHandleToSlot(
   ctx: NodeAddRulesContext & {
-    originalAnimgraph: { nodesToInit: AnimgraphNodeLike[] }
+    originalAnimgraph: AnimgraphData | { nodesToInit: AnimgraphNodeLike[] }
   },
   handleId: string,
   nodeType: string,
   attach: AnimgraphAttachContext,
   dataPatch?: AnimgraphObject,
-  options?: { initInAnimgraph?: boolean }
+  _options?: { initInAnimgraph?: boolean }
 ): { ok: true } | { ok: false; message: string } {
   const parent = attach.parentHandle
   const slotName = attach.slot.name
-  const existing = parent.Data?.[slotName]
-  const initInAnimgraph = options?.initInAnimgraph !== false
 
   const template = NodeDefinitionRegistry.getHandleTypeDataTemplate(nodeType)
-  const newHandle: AnimgraphNode = {
-    HandleId: handleId,
-    Data: {
-      $type: nodeType,
-      ...(template ? structuredClone(template) : {}),
-      ...(dataPatch ?? {}),
-    } as AnimgraphObject,
-  }
-  ctx.handlesRegistry.set(handleId, newHandle)
+  const data = {
+    $type: nodeType,
+    ...(template ? structuredClone(template) : {}),
+    ...(dataPatch ?? {}),
+  } as AnimgraphObject
 
-  if (attach.slot.kind === 'array') {
-    const list = Array.isArray(existing) ? [...(existing as AnimgraphNodeLike[])] : []
-    list.push({ HandleRefId: handleId })
-    parent.Data[slotName] = list
-    const handler = NodeDefinitionRegistry.getHandleTypeChildrenHandler(
-      attach.parentType,
-      slotName
-    )
-    handler?.ensureOrder(ctx.handlesRegistry, parent, slotName)
-  } else if (existing == null) {
-    parent.Data[slotName] = { HandleRefId: handleId }
-  } else {
-    ctx.handlesRegistry.delete(handleId)
-    return { ok: false, message: `${attach.parentType}.${slotName} already occupied` }
-  }
+  const animgraph: AnimgraphData =
+    'rootNode' in ctx.originalAnimgraph
+      ? (ctx.originalAnimgraph as AnimgraphData)
+      : {
+          nodesToInit: ctx.originalAnimgraph.nodesToInit,
+          rootNode: { HandleRefId: '' },
+        }
 
-  if (initInAnimgraph && NodeDefinitionRegistry.isNodesToInitType(nodeType)) {
-    ctx.originalAnimgraph.nodesToInit.push({ HandleRefId: handleId })
+  const mutationCtx = {
+    handlesRegistry: ctx.handlesRegistry,
+    animgraph,
+  }
+  createHandle(mutationCtx, handleId, data)
+
+  const attachResult = addHandleRefs(
+    mutationCtx,
+    parent.HandleId,
+    slotName,
+    [handleId]
+  )
+  if (!attachResult.ok) {
+    deleteHandles(mutationCtx, [handleId])
+    return { ok: false, message: attachResult.message }
   }
 
   return { ok: true }

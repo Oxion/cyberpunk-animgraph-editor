@@ -14,6 +14,12 @@ import {
 } from '../../../utils/animFieldSchema'
 import { allocateNextNumericId } from '../../../utils/graph/nodeAddBootstrap'
 import { resolveHandleId } from '../../../utils/graph/diagramMaterialize'
+import {
+  createHandle,
+  mutateHandleData,
+  renameHandle,
+  replaceHandleData,
+} from '../../../utils/graph/animgraphMutation'
 import type {
   AnimgraphNode,
   AnimgraphNodeLike,
@@ -57,6 +63,8 @@ const {
   notifySelectedHandleDataChanged,
   snapshotHandleField,
   recordHandleFieldEdit,
+  mutateSelectedHandleData,
+  selectedHandleMutationTarget,
   handlesRegistry,
   allNodes,
   renamePinHandleId,
@@ -118,39 +126,40 @@ function slotValue(): EmbedSlotValue | undefined {
   return raw[props.index]
 }
 
-function ensureSlotArray(root: Record<string, unknown>, p: string[]): EmbedSlotValue[] {
-  const existing = getAtDataPath(root, p)
-  if (isEmbedSlotArray(existing)) return existing
-  const next: EmbedSlotValue[] = []
-  setAtDataPath(root, p, next)
-  return next
-}
-
-function setSlotValue(value: EmbedSlotValue): void {
-  const d = data.value
-  if (!d) return
+function writeSlotOnOwnerData(
+  ownerData: Record<string, unknown>,
+  value: EmbedSlotValue
+): void {
   const p = path()
   if (props.index == null) {
-    setAtDataPath(d, p, value)
+    setAtDataPath(ownerData, p, value)
     return
   }
-  const list = ensureSlotArray(d, p)
+  const existing = getAtDataPath(ownerData, p)
+  const list = isEmbedSlotArray(existing) ? existing : []
+  if (!isEmbedSlotArray(existing)) setAtDataPath(ownerData, p, list)
   while (list.length <= props.index) list.push(null)
   list[props.index] = value
 }
 
-/**
- * Point this slot at `refId` without destroying link wrappers
- * (`animPoseLink` / floatLink → keep `$type` + replace `node` with a ref stub).
- */
-function writeSlotHandleRef(refId: string): void {
+function writeSlotHandleRefOnOwnerData(
+  ownerData: Record<string, unknown>,
+  refId: string
+): void {
   const ref: AnimgraphNodeReference = { HandleRefId: refId }
-  const slot = slotValue()
-  if (isAnimgraphLinkObject(slot)) {
-    slot.node = ref
+  const p = path()
+  const raw =
+    props.index == null
+      ? getAtDataPath(ownerData, p)
+      : (() => {
+          const arr = getAtDataPath(ownerData, p)
+          return isEmbedSlotArray(arr) ? arr[props.index!] : undefined
+        })()
+  if (isAnimgraphLinkObject(raw)) {
+    raw.node = ref
     return
   }
-  setSlotValue(ref)
+  writeSlotOnOwnerData(ownerData, ref)
 }
 
 function fieldValue(): EmbedSlotValue | undefined {
@@ -223,20 +232,18 @@ const payloadFields = computed(() => {
   return resolveAnimFields(typeName)
 })
 
-function mutate(immediate: boolean, fn: () => void) {
-  const d = data.value
-  if (!d) return
+function mutateOwner(immediate: boolean, fn: (ownerData: AnimgraphObject) => void) {
   const key = rootKey()
   const before = snapshotHandleField(key)
-  fn()
+  if (!mutateSelectedHandleData([key], fn)) return
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(key, before, { immediate })
 }
 
 function ensureHandle(typeName: string): AnimgraphObject | null {
-  const d = data.value
+  const target = selectedHandleMutationTarget()
   const reg = registry()
-  if (!d || !reg) return null
+  if (!target || !reg) return null
 
   const existing = payload()
   const id = handleId()
@@ -244,11 +251,8 @@ function ensureHandle(typeName: string): AnimgraphObject | null {
 
   const next = blankPayload(typeName)
   if (id) {
-    const handle = reg.get(id)
-    if (handle) {
-      handle.Data = next
-      return next
-    }
+    replaceHandleData(target.ctx, id, next)
+    return next
   }
 
   const nodes = allNodes.value
@@ -256,25 +260,32 @@ function ensureHandle(typeName: string): AnimgraphObject | null {
     handlesRegistry: reg,
     allNodes: nodes ?? undefined,
   })
-  const created: AnimgraphNode = { HandleId: newId, Data: next }
-  reg.set(newId, created)
-  setSlotValue({ HandleRefId: newId })
+  createHandle(target.ctx, newId, next)
+  mutateHandleData(target.ctx, target.handleId, [rootKey()], (ownerData) => {
+    writeSlotOnOwnerData(ownerData, { HandleRefId: newId })
+  })
   return next
 }
 
 function setType(typeName: string): void {
   if (props.pinBound) return
-  mutate(true, () => {
-    if (!typeName) {
-      setSlotValue(null)
-      return
-    }
-    if (payload() && !handleId()) {
-      setSlotValue(blankPayload(typeName))
-      return
-    }
-    ensureHandle(typeName)
-  })
+  if (!typeName) {
+    mutateOwner(true, (ownerData) => {
+      writeSlotOnOwnerData(ownerData, null)
+    })
+    return
+  }
+  if (payload() && !handleId()) {
+    mutateOwner(true, (ownerData) => {
+      writeSlotOnOwnerData(ownerData, blankPayload(typeName))
+    })
+    return
+  }
+  const key = rootKey()
+  const before = snapshotHandleField(key)
+  ensureHandle(typeName)
+  notifySelectedHandleDataChanged()
+  recordHandleFieldEdit(key, before, { immediate: true })
 }
 
 function applyPathInPlace(
@@ -306,15 +317,37 @@ function applyPathInPlace(
 }
 
 function onChildField(key: string, patch: StructValuePatch): void {
-  mutate(patch.immediate, () => {
-    const typeName = currentType.value
+  const typeName = currentType.value
+  const fieldPath = [key, ...patch.path]
+  if (fieldPath.length === 0) return
+  const rootKeyName = rootKey()
+  const before = snapshotHandleField(rootKeyName)
+  const target = selectedHandleMutationTarget()
+  if (!target) return
+
+  const refId = handleId()
+  if (refId) {
     let root = payload()
-    if (!root && typeName) root = ensureHandle(typeName)
+    if (!root && typeName) {
+      root = ensureHandle(typeName)
+    }
     if (!root) return
-    const fieldPath = [key, ...patch.path]
-    if (fieldPath.length === 0) return
-    applyPathInPlace(root, fieldPath, patch.value, typeName)
-  })
+    mutateHandleData(target.ctx, refId, [fieldPath[0]!], (data) => {
+      applyPathInPlace(data, fieldPath, patch.value, typeName)
+    })
+  } else {
+    mutateSelectedHandleData([rootKeyName], (ownerData) => {
+      let root = payload()
+      if (!root && typeName) {
+        writeSlotOnOwnerData(ownerData, blankPayload(typeName))
+        root = getAtDataPath(ownerData, path()) as AnimgraphObject
+      }
+      if (!root || !isAnimgraphObject(root)) return
+      applyPathInPlace(root, fieldPath, patch.value, typeName)
+    })
+  }
+  notifySelectedHandleDataChanged()
+  recordHandleFieldEdit(rootKeyName, before, { immediate: patch.immediate })
 }
 
 function fieldValueAt(key: string): unknown {
@@ -377,41 +410,47 @@ function commitHandleId() {
       cancelEditId()
       return
     }
-    mutate(true, () => {
-      writeSlotHandleRef(next)
+    mutateOwner(true, (ownerData) => {
+      writeSlotHandleRefOnOwnerData(ownerData, next)
     })
     editingId.value = false
     return
   }
 
-  mutate(true, () => {
-    const d = data.value
-    const reg = registry()
-    if (!d || !reg) return
+  const target = selectedHandleMutationTarget()
+  const reg = registry()
+  if (!target || !reg) return
+  const key = rootKey()
+  const before = snapshotHandleField(key)
 
-    const taken = reg.get(next)
-    if (taken) {
-      writeSlotHandleRef(next)
+  const taken = reg.get(next)
+  if (taken) {
+    mutateHandleData(target.ctx, target.handleId, [key], (ownerData) => {
+      writeSlotHandleRefOnOwnerData(ownerData, next)
+    })
+  } else if (current) {
+    const renamed = renameHandle(target.ctx, current, next)
+    if (!renamed.ok) {
+      alert(renamed.message)
+      cancelEditId()
       return
     }
+    mutateHandleData(target.ctx, target.handleId, [key], (ownerData) => {
+      writeSlotHandleRefOnOwnerData(ownerData, next)
+    })
+  } else {
+    const typeName = currentType.value
+    const body: AnimgraphObject | null =
+      payload() ?? (typeName ? blankPayload(typeName) : null)
+    if (!body) return
+    createHandle(target.ctx, next, body)
+    mutateHandleData(target.ctx, target.handleId, [key], (ownerData) => {
+      writeSlotHandleRefOnOwnerData(ownerData, next)
+    })
+  }
 
-    if (current) {
-      const handle = reg.get(current)
-      if (handle) {
-        reg.delete(current)
-        handle.HandleId = next
-        reg.set(next, handle)
-      }
-    } else {
-      const typeName = currentType.value
-      const body: AnimgraphObject | null =
-        payload() ?? (typeName ? blankPayload(typeName) : null)
-      if (!body) return
-      const created: AnimgraphNode = { HandleId: next, Data: body }
-      reg.set(next, created)
-    }
-    writeSlotHandleRef(next)
-  })
+  notifySelectedHandleDataChanged()
+  recordHandleFieldEdit(key, before, { immediate: true })
   editingId.value = false
 }
 

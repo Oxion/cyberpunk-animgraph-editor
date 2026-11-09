@@ -570,6 +570,7 @@ import {
 import './stores/simDriverConsoles'
 import {
   flushPendingHandleFieldEditImpl,
+  mutateSelectedHandleData,
   notifySelectedHandleDataChanged,
   recordHandleFieldEdit,
   recordHandleFieldsEdit,
@@ -577,6 +578,7 @@ import {
   renamePinHandleId,
   reorderPinArraySlot,
   selectedHandleData,
+  selectedHandleMutationTarget,
   setupNodeDetailsContext,
   snapshotHandleField,
   snapshotHandleFields,
@@ -786,7 +788,8 @@ import type { AnimgraphNode } from './utils/graph/animgraphTypes'
 import type { DiagramConnection, RenderData } from './utils/graph/diagramTypes'
 import type { DirectChildrenLayoutMode } from './utils/graph/DirectChildrenLayout'
 import { getConnectionKey } from './utils/graph/diagramModel'
-import { NodeDefinitionRegistry } from './utils/NodeDefinition'
+import { applyOwnerFieldEffects } from './utils/graph/animgraphMutation'
+import { mutationCtxFromRenderData } from './utils/graph/diagramMutationCtx'
 import { PixiGraphRenderer } from './utils/PixiGraphRenderer'
 import {
   buildStateMachineRingPresentation,
@@ -2097,6 +2100,8 @@ setupNodeDetailsContext({
   notifySelectedHandleDataChanged,
   snapshotHandleField,
   snapshotHandleFields,
+  mutateSelectedHandleData,
+  selectedHandleMutationTarget,
   recordHandleFieldEdit: (key, before, options) =>
     recordHandleFieldEdit(requireActiveDiagramId(), key, before, options),
   recordHandleFieldsEdit: (keys, before) =>
@@ -2162,10 +2167,11 @@ const animgraphEditorRef = {
     const _handle = typeof handle === 'string' ? data.handlesRegistry.get(handle) : handle
     if (!_handle) return
 
-    const handleChildrenHandler = NodeDefinitionRegistry.getHandleTypeChildrenHandler(_handle.Data.$type, childrenPropName)
-    if (handleChildrenHandler) {
-      handleChildrenHandler.ensureOrder(data.handlesRegistry, _handle, childrenPropName)
-    }
+    applyOwnerFieldEffects(
+      mutationCtxFromRenderData(data),
+      String(_handle.HandleId),
+      [childrenPropName]
+    )
   }
 }
 

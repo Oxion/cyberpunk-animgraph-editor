@@ -59,6 +59,7 @@ export const NODE_HEADER_FILL: Readonly<Record<string, string>> = {
   'animAnimNode_ForegroundSegmentBegin': '#795f32',
   'animAnimNode_ForegroundSegmentEnd': '#6e572e',
   'animAnimNode_FPPCamera': '#735c30',
+  'nrAnimNode_HybridFPPLook': '#3c735c',
   'animAnimNode_FPPCameraSharedVar': '#203c3c',
   'animAnimNode_GenerateIkAnimFeatureData': '#796132',
   'animAnimNode_GraphSlot': '#412b51',

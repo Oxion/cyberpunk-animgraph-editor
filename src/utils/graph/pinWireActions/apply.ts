@@ -1,16 +1,21 @@
 import type { DiagramConnection, RenderData } from '../diagramTypes'
 import { getConnectionKey } from '../diagramModel'
-import { NodeDefinitionRegistry } from '../../NodeDefinition'
 import { DIAGRAM_CONNECTION_TYPE_INPUT } from '../diagramConnectionTypes'
 import { bridgePortalHostId, collectPortalChainForCrossView, invalidateCrossViewPortalPinIndex, isPortalHopConnection } from '../portalTopology'
 import { ensureCrossViewPortalChain, findStateMachineDiagramRootAncestor, isDiagramPortalNode } from '../DiagramConversion'
+import { runContainMemberPromote } from '../animgraphContainOwner'
+import {
+  clearHandleRef,
+  deleteHandles,
+  setHandleRef,
+  setPinSlot,
+} from '../animgraphMutation'
+import { mutationCtxFromRenderData } from '../diagramMutationCtx'
 import {
   clearFloatingMark,
-  isFloatingHandle,
   promoteFloatingHandle,
-  removeFloatingHandle,
 } from '../floatingHandles'
-import { getNodeInputHandler, parsePinName } from '../NodePins'
+import { parsePinName } from '../NodePins'
 import { areSameDiagramBranch } from './branchGate'
 import { classifyConnectWire } from './classify'
 import {
@@ -45,27 +50,20 @@ function removeConnectionExact(
 function clearPin(
   renderData: RenderData,
   ownerHandleId: string,
-  ownerType: string,
+  _ownerType: string,
   inputName: string,
   index: number
 ): { lengthChanged: boolean; linkCleared: boolean } {
-  const handle = renderData.handlesRegistry.get(ownerHandleId)
-  if (!handle) return { lengthChanged: false, linkCleared: false }
-  const before = handle.Data?.[inputName]
-  const beforeLen = Array.isArray(before) ? before.length : -1
-  const handler = getNodeInputHandler(inputName, ownerType)
-  let linkCleared = false
-  if (handler.clearLink) {
-    linkCleared = handler.clearLink(handle, index)
-  } else {
-    handler.delete(handle, index)
+  const cleared = clearHandleRef(
+    mutationCtxFromRenderData(renderData),
+    ownerHandleId,
+    inputName,
+    index
+  )
+  return {
+    lengthChanged: cleared.lengthChanged,
+    linkCleared: cleared.linkCleared,
   }
-  const remaining = handle.Data?.[inputName]
-  if (Array.isArray(remaining) && 'numInputs' in handle.Data) {
-    handle.Data.numInputs = remaining.length
-  }
-  const afterLen = Array.isArray(remaining) ? remaining.length : -1
-  return { lengthChanged: beforeLen !== afterLen, linkCleared }
 }
 
 function markFootprintDirty(result: PinWireApplyResult, boxId: string | undefined | null) {
@@ -78,21 +76,23 @@ function markFootprintDirty(result: PinWireApplyResult, boxId: string | undefine
 function wireHandleRef(
   renderData: RenderData,
   ownerHandleId: string,
-  ownerType: string,
+  _ownerType: string,
   inputName: string,
   index: number,
   fromHandleId: string
 ): void {
-  const handle = renderData.handlesRegistry.get(ownerHandleId)
-  if (!handle) return
-  const handler = getNodeInputHandler(inputName, ownerType)
-  handler.set(handle, { HandleRefId: fromHandleId }, index)
+  setHandleRef(
+    mutationCtxFromRenderData(renderData),
+    ownerHandleId,
+    inputName,
+    index,
+    fromHandleId
+  )
 }
 
 function wireInlineEmbed(
   renderData: RenderData,
   ownerHandleId: string,
-  ownerType: string,
   inputName: string,
   index: number,
   fromBoxId: string,
@@ -106,8 +106,8 @@ function wireInlineEmbed(
   if (!ownerHandle || !fromHandle?.Data || !fromBox || !ownerBox) return
 
   const embedded = structuredClone(fromHandle.Data) as Record<string, unknown>
-  const handler = getNodeInputHandler(inputName, ownerType)
-  handler.set(ownerHandle, embedded as never, index)
+  const ctx = mutationCtxFromRenderData(renderData)
+  setPinSlot(ctx, ownerHandleId, inputName, index, embedded)
 
   fromBox.metadata = { ...fromBox.metadata, inline: true }
   delete fromBox.data?.originalNodeId
@@ -123,34 +123,23 @@ function wireInlineEmbed(
   }
   ownerBox.data = { ...ownerBox.data, inlines }
 
-  removeFloatingHandle(renderData, fromHandleId, { deleteFromRegistry: true })
+  clearFloatingMark(renderData, fromHandleId)
+  deleteHandles(ctx, [fromHandleId])
 }
 
-function promoteFrom(
+/**
+ * After a shared/exclusive wire:
+ * - contain membership (State.nodes / …) — diagram ancestry, always
+ * - floating mark — clear on attach (outbound pin / contain); no reachability gate
+ */
+function afterSharedExclusiveWire(
   renderData: RenderData,
-  handleId: string,
-  appendNodesToInit: boolean
+  fromHandleId: string,
+  result: PinWireApplyResult
 ): void {
-  if (!isFloatingHandle(renderData, handleId)) {
-    clearFloatingMark(renderData, handleId)
-  } else {
-    promoteFloatingHandle(renderData, handleId)
-  }
-  if (!appendNodesToInit) return
-  const nodesToInit = renderData.originalAnimgraph?.nodesToInit
-  if (!nodesToInit) return
-  if (
-    nodesToInit.some(
-      (r) =>
-        typeof r === 'object' &&
-        r &&
-        'HandleRefId' in r &&
-        String((r as { HandleRefId: string }).HandleRefId) === handleId
-    )
-  ) {
-    return
-  }
-  nodesToInit.push({ HandleRefId: handleId })
+  const ownerDiagramId = runContainMemberPromote(renderData, fromHandleId)
+  markFootprintDirty(result, ownerDiagramId)
+  promoteFloatingHandle(renderData, fromHandleId)
 }
 
 function collectAutodetach(
@@ -322,12 +311,16 @@ export function applyDisconnectPlan(
     }
   }
 
-  result.demotedHandleIds = demoteOrphanNodesToInitAfterDisconnect(
+  const demoteResult = demoteOrphanNodesToInitAfterDisconnect(
     renderData,
     conn,
     ownerHandleId,
     ownerType
   )
+  result.demotedHandleIds = demoteResult.demotedHandleIds
+  for (const ownerId of demoteResult.containOwnerRefreshIds) {
+    markFootprintDirty(result, ownerId)
+  }
 
   result.connection = conn
   return result
@@ -462,7 +455,6 @@ export function applyConnectPlan(
     wireInlineEmbed(
       renderData,
       toHandleId,
-      ownerType,
       inputName,
       index,
       logicalFrom.id,
@@ -489,14 +481,8 @@ export function applyConnectPlan(
   }
   pushConnection(renderData, newConnection)
 
-  if (consumerReachable) {
-    if (wireKind === 'sharedRef' || wireKind === 'exclusiveRef') {
-      promoteFrom(
-        renderData,
-        fromHandleId,
-        NodeDefinitionRegistry.isNodesToInitType(fromType)
-      )
-    }
+  if (wireKind === 'sharedRef' || wireKind === 'exclusiveRef') {
+    afterSharedExclusiveWire(renderData, fromHandleId, result)
   }
 
   if (wasAppend) {

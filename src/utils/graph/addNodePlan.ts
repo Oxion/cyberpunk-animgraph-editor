@@ -14,9 +14,26 @@ import {
   type PlaceInParentMode,
 } from './addNodeActions'
 import { buildDiagramNode } from './diagramAddBuilders'
-import { isPropertyGroupNode } from './diagramAddPolicy'
 import { fitDiagramFrameToChildren, isDiagramFrameNode } from './diagramFrameNodes'
-import { addFloatingHandle, removeFloatingHandle } from './floatingHandles'
+import {
+  addFloatingHandle,
+  ensureFloatingHandleIds,
+  removeFloatingHandle,
+} from './floatingHandles'
+import {
+  createHandle,
+  deleteHandles,
+  replaceHandleData,
+} from './animgraphMutation'
+import { mutationCtxFromRenderData } from './diagramMutationCtx'
+import {
+  hasMembershipSlot,
+  resolveContainOwnerForMember,
+} from './animgraphContainOwner'
+import {
+  getPropertyGroupSlotName,
+  isPropertyGroupNode,
+} from './diagramAddPolicy'
 import {
   captureAddedNodePlacement,
   removeNodeFromGraphData,
@@ -84,11 +101,11 @@ export function applyHandleDataOverlay(
   const handle = graphData.handlesRegistry.get(handleId)
   if (!handle?.Data) return
   const type = handle.Data.$type
-  handle.Data = {
+  replaceHandleData(mutationCtxFromRenderData(graphData), handleId, {
     ...handle.Data,
     ...structuredClone(overlay),
     $type: type,
-  } as AnimgraphObject
+  } as AnimgraphObject)
 }
 
 export type AddNodePlan = {
@@ -220,35 +237,17 @@ export function revertHandleMutation(
   graphData: RenderData,
   snapshot: HandleMutationSnapshot
 ): void {
+  const bootstrapIds = snapshot.bootstrapHandles.map((h) => h.handleId)
   if (snapshot.kind === 'floating') {
-    for (const h of snapshot.bootstrapHandles) {
-      graphData.handlesRegistry.delete(h.handleId)
-    }
+    for (const id of bootstrapIds) removeFloatingHandle(graphData, id)
     removeFloatingHandle(graphData, snapshot.handleId)
-    const nodesToInit = graphData.originalAnimgraph?.nodesToInit
-    if (nodesToInit) {
-      while (nodesToInit.length > snapshot.nodesToInitLen) nodesToInit.pop()
-    }
     return
   }
 
-  const { parentHandle, slotName } = {
-    parentHandle: snapshot.attach.parentHandle,
-    slotName: snapshot.attach.slot.name,
-  }
-  if (snapshot.beforeSlot === undefined) {
-    delete parentHandle.Data[slotName]
-  } else {
-    parentHandle.Data[slotName] = structuredClone(snapshot.beforeSlot) as never
-  }
-  for (const h of snapshot.bootstrapHandles) {
-    graphData.handlesRegistry.delete(h.handleId)
-  }
-  graphData.handlesRegistry.delete(snapshot.handleId)
-  const nodesToInit = graphData.originalAnimgraph?.nodesToInit
-  if (nodesToInit) {
-    while (nodesToInit.length > snapshot.nodesToInitLen) nodesToInit.pop()
-  }
+  deleteHandles(mutationCtxFromRenderData(graphData), [
+    ...bootstrapIds,
+    snapshot.handleId,
+  ])
 }
 
 export function replayHandleMutation(
@@ -627,12 +626,9 @@ export function applyAddNodePlan(
           $type: action.animgraphNodeType,
           ...(template ? structuredClone(template) : {}),
         } as AnimgraphObject
-        const floating: AnimgraphNode = {
-          HandleId: action.handleId,
-          Data: data,
-        }
-        const nodesToInitLen = graphData.originalAnimgraph?.nodesToInit?.length ?? 0
-        addFloatingHandle(graphData, floating)
+        const nodesToInitLen = graphData.originalAnimgraph.nodesToInit.length
+        createHandle(mutationCtxFromRenderData(graphData), action.handleId, data)
+        ensureFloatingHandleIds(graphData).add(action.handleId)
         handle = {
           kind: 'floating',
           handleId: action.handleId,
@@ -667,7 +663,7 @@ export function applyAddNodePlan(
     .filter((p): p is AddedNodePlacement => !!p)
 
   const placements = [placement, ...ensuredPlacements]
-  const parentRefreshIds = plan.diagramParent ? [plan.diagramParent.id] : []
+  const parentRefreshIds = collectAddNodeParentRefreshIds(graphData, plan, handle)
 
   return {
     ok: true,
@@ -678,6 +674,36 @@ export function applyAddNodePlan(
     allAddedIds: placements.map((p) => p.node.id),
     label: addNodeLabel(handle, ensuredIds.length),
   }
+}
+
+/**
+ * Diagram parent + membership owner (e.g. State overview reads Data.nodes.length).
+ */
+function collectAddNodeParentRefreshIds(
+  graphData: RenderData,
+  plan: AddNodePlan,
+  handle: HandleMutationSnapshot | undefined
+): string[] {
+  const ids: string[] = []
+  if (plan.diagramParent) ids.push(plan.diagramParent.id)
+
+  if (plan.diagramParent && isPropertyGroupNode(plan.diagramParent)) {
+    const ownerBox = plan.diagramParent.parent
+    const slot = getPropertyGroupSlotName(plan.diagramParent)
+    if (ownerBox && slot) {
+      const ownerHandleId = String(ownerBox.data?.originalNodeId ?? ownerBox.id)
+      const ownerHandle = graphData.handlesRegistry.get(ownerHandleId)
+      const parentType = String(ownerHandle?.Data?.$type ?? ownerBox.type ?? '')
+      if (hasMembershipSlot(parentType, slot)) ids.push(ownerBox.id)
+    }
+  }
+
+  if (handle?.handleId) {
+    const owner = resolveContainOwnerForMember(graphData, handle.handleId)
+    if (owner) ids.push(owner.ownerDiagramId)
+  }
+
+  return [...new Set(ids)]
 }
 
 /** Restore diagram placements after handles have been replayed (redo path). */

@@ -53,6 +53,7 @@ const {
   notifySelectedHandleDataChanged,
   snapshotHandleField,
   recordHandleFieldEdit,
+  mutateSelectedHandleData,
   removePinArraySlot,
 } = inject<NodeDetailsContext>(nodeDetailsContextKey)!
 
@@ -81,15 +82,19 @@ function socketsOf(group: SocketGroupKey): Record<string, unknown>[] {
 }
 
 function mutateExpressionData(immediate: boolean, fn: (container: Record<string, unknown>) => void) {
-  const d = data.value
-  if (!d) return
   const before = snapshotHandleField(props.dataKey)
-  let container = asRecord(d[props.dataKey])
-  if (!container) {
-    container = { $type: MATH_EXPRESSION_TYPE }
-    d[props.dataKey] = container
+  if (
+    !mutateSelectedHandleData([props.dataKey], (d) => {
+      let container = asRecord(d[props.dataKey])
+      if (!container) {
+        container = { $type: MATH_EXPRESSION_TYPE }
+        d[props.dataKey] = container
+      }
+      fn(container)
+    })
+  ) {
+    return
   }
-  fn(container)
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(props.dataKey, before, { immediate })
 }
@@ -100,7 +105,7 @@ function ensureSocketArray(container: Record<string, unknown>, group: SocketGrou
     arr = []
     container[group] = arr
   }
-  return arr
+  return arr as unknown[]
 }
 
 function varId(group: SocketGroupKey, index: number): number {

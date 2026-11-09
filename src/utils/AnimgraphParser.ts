@@ -34,6 +34,8 @@ import {
   collectHandlesRegistryForSave,
   registryFromSavedHandles,
 } from './graph/floatingHandles'
+import { buildNodesToInitFromRoot } from './graph/animgraphMutation'
+import { mutationCtxFromRenderData } from './graph/diagramMutationCtx'
 import { materializeDiagram, snapshotPropertyGroups, type DiagramMaterializeResult } from './graph/diagramMaterialize'
 import type {
   AnimgraphData,
@@ -262,7 +264,15 @@ export class AnimgraphParser {
       metadata: renderData.metadata,
       nodeTypes: nodeTypesArray,
       bounds: renderData.bounds,
-      originalAnimgraph: JSON.parse(JSON.stringify(renderData.originalAnimgraph)),
+      originalAnimgraph: (() => {
+        const ag = JSON.parse(
+          JSON.stringify(renderData.originalAnimgraph)
+        ) as AnimgraphData
+        ag.nodesToInit = buildNodesToInitFromRoot(
+          mutationCtxFromRenderData(renderData)
+        )
+        return ag
+      })(),
       handlesRegistry: collectHandlesRegistryForSave(renderData),
       floatingHandleIds: collectFloatingHandleIdsForSave(renderData),
     }

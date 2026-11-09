@@ -1,10 +1,18 @@
 /**
- * Floating animgraph handles — in shared handlesRegistry, NOT in nodesToInit.
+ * Floating animgraph handles — unattached:
+ * zero outbound pin uses ∧ not contained ∧ not root.
+ * nodesToInit is export-only (not the inverse of floating).
  * Project save: flat handlesRegistry array + floatingHandleIds.
  */
 
 import type { AnimgraphNode } from './animgraphTypes'
 import type { RenderData } from './diagramTypes'
+import {
+  createHandle,
+  deleteHandles,
+  replaceHandleData,
+} from './animgraphMutation'
+import { mutationCtxFromRenderData } from './diagramMutationCtx'
 
 /** Ensure runtime floating set exists. */
 export function ensureFloatingHandleIds(renderData: RenderData): Set<string> {
@@ -23,14 +31,19 @@ export function isFloatingHandle(
 
 /**
  * Register handle as floating: put/replace in shared registry, mark in bucket.
- * Does not touch nodesToInit.
+ * Does not touch nodesToInit (createHandle is registry-only).
  */
 export function addFloatingHandle(
   renderData: RenderData,
   handle: AnimgraphNode
 ): void {
   const id = String(handle.HandleId)
-  renderData.handlesRegistry.set(id, handle)
+  const ctx = mutationCtxFromRenderData(renderData)
+  if (!ctx.handlesRegistry.has(id)) {
+    createHandle(ctx, id, handle.Data)
+  } else {
+    replaceHandleData(ctx, id, handle.Data)
+  }
   ensureFloatingHandleIds(renderData).add(id)
 }
 
@@ -52,9 +65,8 @@ export function removeFloatingHandle(
   options?: { deleteFromRegistry?: boolean }
 ): void {
   clearFloatingMark(renderData, handleId)
-  if (options?.deleteFromRegistry !== false) {
-    renderData.handlesRegistry.delete(handleId)
-  }
+  if (options?.deleteFromRegistry === false) return
+  deleteHandles(mutationCtxFromRenderData(renderData), [handleId])
 }
 
 /** Promote: leave Data in registry, remove floating status (e.g. after connect to Description). */

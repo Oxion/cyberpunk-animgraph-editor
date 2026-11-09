@@ -136,7 +136,8 @@ export function classifyNodeType(diagramNodeType: string): NodeTypeGroupId {
     t.includes('LookAt') ||
     t.includes('Inertialization') ||
     t.includes('MixerSlot') ||
-    t.includes('FPPCamera') && !t.includes('SharedVar') ||
+    (t.includes('FPPCamera') && !t.includes('SharedVar')) ||
+    t.includes('HybridFPPLook') ||
     t.includes('Workspot') ||
     t.includes('SourceChannel') ||
     t.includes('StackTransforms') ||

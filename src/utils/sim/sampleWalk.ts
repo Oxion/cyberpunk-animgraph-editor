@@ -26,6 +26,7 @@ import {
   readFloorIkStaticWeight,
 } from './floorIkSim'
 import { sampleFppCamera } from './fppCameraSample'
+import { sampleHybridFppLook } from './hybridFppLookSample'
 import { applyHumanIk, HUMAN_IK_LIMB_GROUPS } from './humanIkSim'
 import { applyIk2 } from './ik2Solver'
 import {
@@ -493,6 +494,8 @@ function sampleNodeDispatch(
       return sampleDirectConnConstraint(node, ctx, out, visited)
     case 'animAnimNode_FPPCamera':
       return sampleFppCameraNode(node, ctx, out, visited)
+    case 'nrAnimNode_HybridFPPLook':
+      return sampleHybridFppLookNode(node, ctx, out, visited)
     case 'animAnimNode_MixerSlot':
       return sampleMixerSlotNode(node, ctx, out, visited)
     case 'animAnimNode_WorkspotHub':
@@ -2415,6 +2418,20 @@ function sampleFppCameraNode(
   const data = ctx.fppCameraDyn?.get(node.HandleId)
   if (!data) return ok
   sampleFppCamera(data, out, ctx.rig)
+  return ok
+}
+
+/** Editor hybrid FPP look — same dyn as FPPCamera, different gameplay Sample. */
+function sampleHybridFppLookNode(
+  node: AnimgraphNode,
+  ctx: SimGraphRunnerSampleCtx,
+  out: Pose,
+  visited: Set<string>
+): boolean {
+  const ok = sampleOnePoseChild(node, ctx, out, visited, 'HybridFPPLook')
+  const data = ctx.fppCameraDyn?.get(node.HandleId)
+  if (!data) return ok
+  sampleHybridFppLook(data, out, ctx.rig)
   return ok
 }
 

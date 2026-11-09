@@ -1,49 +1,14 @@
 import type { DiagramConnection, RenderData } from '../diagramTypes'
+import { countInboundHandleRefs } from '../animgraphMutation'
+import { mutationCtxFromRenderData } from '../diagramMutationCtx'
 import { ensureFloatingHandleIds } from '../floatingHandles'
-import {
-  collectReverseProducerHandleIds,
-  collectStructuralCoreHandleIds,
-} from './collectStructuralCore'
+import { collectReverseProducerHandleIds } from './collectStructuralCore'
 import { isExecutionInitAnchor, isExecutionSink } from './resolve'
-
-function isInNodesToInit(renderData: RenderData, handleId: string): boolean {
-  const nodesToInit = renderData.originalAnimgraph?.nodesToInit
-  if (!nodesToInit) return false
-  return nodesToInit.some(
-    (ref) =>
-      typeof ref === 'object' &&
-      ref &&
-      'HandleRefId' in ref &&
-      String((ref as { HandleRefId: string }).HandleRefId) === handleId
-  )
-}
-
-function removeFromNodesToInit(renderData: RenderData, handleId: string): void {
-  const nodesToInit = renderData.originalAnimgraph?.nodesToInit
-  if (!nodesToInit) return
-  for (let i = nodesToInit.length - 1; i >= 0; i--) {
-    const ref = nodesToInit[i]
-    if (
-      typeof ref === 'object' &&
-      ref &&
-      'HandleRefId' in ref &&
-      String((ref as { HandleRefId: string }).HandleRefId) === handleId
-    ) {
-      nodesToInit.splice(i, 1)
-    }
-  }
-}
 
 function isProtectedInitSeed(renderData: RenderData, handleId: string): boolean {
   const handle = renderData.handlesRegistry.get(handleId)
   if (!handle?.Data?.$type) return false
   return isExecutionInitAnchor(String(handle.Data.$type))
-}
-
-function unpromoteHandle(renderData: RenderData, handleId: string): void {
-  if (!renderData.handlesRegistry.has(handleId)) return
-  removeFromNodesToInit(renderData, handleId)
-  ensureFloatingHandleIds(renderData).add(handleId)
 }
 
 function resolveFromHandleId(
@@ -56,19 +21,26 @@ function resolveFromHandleId(
   return renderData.handlesRegistry.has(id) ? id : null
 }
 
+export type DemoteOrphanResult = {
+  demotedHandleIds: string[]
+  /** Container owner diagram boxes whose Data.nodes may have changed. */
+  containOwnerRefreshIds: string[]
+}
+
 /**
- * After disconnect: drop nodesToInit seeds that no longer lie on the structural
- * execution core. On disconnect into Output, also demote producer subbranch behind `from`.
+ * After disconnect: mark floating when a handle is unattached
+ * (zero outbound ∧ not contained ∧ not root). No nodesToInit / structural-core.
  */
 export function demoteOrphanNodesToInitAfterDisconnect(
   renderData: RenderData,
   conn: DiagramConnection,
   logicalToHandleId: string,
   logicalToType: string
-): string[] {
-  const core = collectStructuralCoreHandleIds(renderData)
+): DemoteOrphanResult {
   const demoted: string[] = []
+  const containOwnerRefreshIds: string[] = []
   const pending = new Set<string>()
+  const ctx = mutationCtxFromRenderData(renderData)
 
   const toHandle = renderData.handlesRegistry.get(logicalToHandleId)
   const toType = toHandle?.Data?.$type
@@ -91,21 +63,13 @@ export function demoteOrphanNodesToInitAfterDisconnect(
     }
   }
 
-  for (const ref of renderData.originalAnimgraph?.nodesToInit ?? []) {
-    const id =
-      typeof ref === 'object' && ref && 'HandleRefId' in ref
-        ? String((ref as { HandleRefId: string }).HandleRefId)
-        : null
-    queueDemote(id)
-  }
-
   for (const handleId of pending) {
-    if (!isInNodesToInit(renderData, handleId)) continue
+    if (!renderData.handlesRegistry.has(handleId)) continue
     if (isProtectedInitSeed(renderData, handleId)) continue
-    if (core.has(handleId)) continue
-    unpromoteHandle(renderData, handleId)
+    if (countInboundHandleRefs(ctx, handleId) > 0) continue
+    ensureFloatingHandleIds(renderData).add(handleId)
     demoted.push(handleId)
   }
 
-  return demoted
+  return { demotedHandleIds: demoted, containOwnerRefreshIds }
 }

@@ -10,18 +10,10 @@ export interface DisconnectWireAction {
   connection: DiagramConnection
 }
 
-export interface DetachHandleRefAction {
-  kind: 'detach-handle-ref'
-  parentHandleId: string
-  slotName: string
-  /** Array index, or -1 for scalar slot. */
-  index: number
-  handleId: string
-}
-
-export interface UnregisterHandleAction {
-  kind: 'unregister-handle'
-  handleId: string
+/** Batch-delete animgraph handles (strip inbound refs + registry). */
+export interface DeleteAnimgraphHandlesAction {
+  kind: 'delete-animgraph-handles'
+  handleIds: string[]
 }
 
 export interface RemoveDiagramNodeAction {
@@ -41,27 +33,6 @@ export interface ReindexSmStatesAction {
   statesGroupId: string
 }
 
-/**
- * Remap transition/CE targetStateIndex after a state is removed.
- * `>` deleted → decrement; `===` deleted → -1 (target gone).
- */
-export interface RemapTargetStateIndicesAction {
-  kind: 'remap-target-state-indices'
-  smId: string
-  deletedStateIndex: number
-}
-
-/**
- * Remap State.outTransitionIndices after a transition is removed from SM.transitions
- * (or globalTransitions).
- */
-export interface RemapOutTransitionIndicesAction {
-  kind: 'remap-out-transition-indices'
-  smId: string
-  slotName: 'transitions' | 'globalTransitions'
-  deletedIndex: number
-}
-
 /** Vertically restack indexed children in a PropertyGroup (excl. portals). */
 export interface RestackPropertyGroupAction {
   kind: 'restack-property-group'
@@ -79,13 +50,10 @@ export interface SyncSmSectionMetadataAction {
 
 export interface DeleteNodeActionMap {
   'disconnect-wire': DisconnectWireAction
-  'detach-handle-ref': DetachHandleRefAction
-  'unregister-handle': UnregisterHandleAction
+  'delete-animgraph-handles': DeleteAnimgraphHandlesAction
   'remove-diagram-node': RemoveDiagramNodeAction
   'fit-parent-group': FitParentGroupAction
   'reindex-sm-states': ReindexSmStatesAction
-  'remap-target-state-indices': RemapTargetStateIndicesAction
-  'remap-out-transition-indices': RemapOutTransitionIndicesAction
   'restack-property-group': RestackPropertyGroupAction
   'sync-sm-section-metadata': SyncSmSectionMetadataAction
 }

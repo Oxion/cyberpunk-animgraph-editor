@@ -31,6 +31,7 @@ const {
   notifySelectedHandleDataChanged,
   snapshotHandleField,
   recordHandleFieldEdit,
+  mutateSelectedHandleData,
   removePinArraySlot,
   reorderPinArraySlot,
   handlesRegistry,
@@ -80,11 +81,15 @@ const indexBadgeCh = computed(() => {
 })
 
 function mutate(fn: (arr: unknown[]) => void) {
-  const d = data.value
-  if (!d) return
   const key = rootKey()
   const before = snapshotHandleField(key)
-  fn(ensureArrayAtDataPath(d, path()))
+  if (
+    !mutateSelectedHandleData([key], (d) => {
+      fn(ensureArrayAtDataPath(d, path()))
+    })
+  ) {
+    return
+  }
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(key, before, { immediate: true })
 }

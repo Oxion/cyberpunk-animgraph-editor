@@ -19,6 +19,8 @@ import {
 } from './GraphHistory'
 import { DEFAULT_CHILD_SLOT, getChildSlot } from './nodeChildSlots'
 import { getSmPropertyGroup } from './StateMachineDetailLayout'
+import { mutateHandleData } from './animgraphMutation'
+import { mutationCtxFromRenderData } from './diagramMutationCtx'
 import {
   mapIndexAfterMove,
   moveArrayItem,
@@ -119,12 +121,20 @@ export function restoreSmStateMoveAnimgraph(
     (sm
       ? renderData.handlesRegistry.get(String(sm.data?.originalNodeId ?? sm.id))
       : undefined)
-  if (smHandle?.Data) {
-    smHandle.Data.states = cloneJson(snap.states)
+  const ctx = mutationCtxFromRenderData(renderData)
+  const smHandleId = smHandle ? String(smHandle.HandleId) : snap.smHandleId
+  if (smHandle) {
+    mutateHandleData(ctx, smHandleId, ['states'], (data) => {
+      data.states = cloneJson(snap.states)
+    })
     if (snap.defaultStateIndex === undefined) {
-      delete smHandle.Data.defaultStateIndex
+      mutateHandleData(ctx, smHandleId, ['defaultStateIndex'], (data) => {
+        delete data.defaultStateIndex
+      })
     } else {
-      smHandle.Data.defaultStateIndex = cloneJson(snap.defaultStateIndex)
+      mutateHandleData(ctx, smHandleId, ['defaultStateIndex'], (data) => {
+        data.defaultStateIndex = cloneJson(snap.defaultStateIndex)
+      })
     }
   }
 
@@ -158,13 +168,14 @@ export function restoreSmStateMoveAnimgraph(
   }
 
   for (const field of snap.indexFields) {
-    const handle = renderData.handlesRegistry.get(field.handleId)
-    if (handle?.Data) {
-      if (field.targetStateIndex === null) {
-        delete handle.Data.targetStateIndex
-      } else {
-        handle.Data.targetStateIndex = cloneJson(field.targetStateIndex)
-      }
+    if (field.targetStateIndex === null) {
+      mutateHandleData(ctx, field.handleId, ['targetStateIndex'], (data) => {
+        delete data.targetStateIndex
+      })
+    } else {
+      mutateHandleData(ctx, field.handleId, ['targetStateIndex'], (data) => {
+        data.targetStateIndex = cloneJson(field.targetStateIndex)
+      })
     }
     const box = renderData.allNodes.get(field.boxId)
     if (box) {
@@ -186,6 +197,8 @@ function remapIndexRefs(
   toIndex: number,
   dirty: Set<string>
 ): void {
+  const ctx = mutationCtxFromRenderData(renderData)
+
   const touchBox = (box: RenderNode) => {
     const hid = resolveHandleId(box)
     const handle = renderData.handlesRegistry.get(hid)
@@ -194,7 +207,7 @@ function remapIndexRefs(
     if (cur === null || cur < 0) return
     const next = mapIndexAfterMove(cur, fromIndex, toIndex)
     if (next === cur) return
-    writeNumericHandleField(handle, 'targetStateIndex', next)
+    writeNumericHandleField(ctx, hid, handle, 'targetStateIndex', next)
     box.metadata = { ...box.metadata, targetStateIndex: next }
     dirty.add(box.id)
   }
@@ -217,7 +230,7 @@ function remapIndexRefs(
   if (curDefault === null || curDefault < 0) return
   const nextDefault = mapIndexAfterMove(curDefault, fromIndex, toIndex)
   if (nextDefault === curDefault) return
-  writeNumericHandleField(smHandle, 'defaultStateIndex', nextDefault)
+  writeNumericHandleField(ctx, smHandleId, smHandle, 'defaultStateIndex', nextDefault)
 }
 
 function syncSmStateIds(
@@ -276,11 +289,15 @@ export async function applyMoveSmState(
   const list = smHandle.Data?.states
   if (!Array.isArray(list)) return { ok: false, reason: 'not-in-array' }
 
+  const ctx = mutationCtxFromRenderData(renderData)
+
   const animgraphBefore = snapshotSmStateMoveAnimgraph(renderData, target)
   const dirty = new Set<string>()
 
   moveArrayItem(list, fromIndex, toIndex)
-  smHandle.Data.states = list
+  mutateHandleData(ctx, target.smHandleRegistryId, ['states'], (data) => {
+    data.states = list
+  })
   remapIndexRefs(renderData, sm, fromIndex, toIndex, dirty)
   syncSmStateIds(sm, group, smHandle, dirty)
 

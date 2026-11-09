@@ -1117,6 +1117,11 @@ const RTTI_TYPE_DEFINITIONS: Record<string, AnimTypeDef> = {
     parent: 'animAnimNode_OnePoseInput',
     fields: [],
   },
+  'nrAnimNode_HybridFPPLook': {
+    kind: 'class',
+    parent: 'animAnimNode_OnePoseInput',
+    fields: [],
+  },
   'animAnimNode_FPPCameraSharedVar': {
     kind: 'class',
     parent: 'animAnimNode_FloatValue',

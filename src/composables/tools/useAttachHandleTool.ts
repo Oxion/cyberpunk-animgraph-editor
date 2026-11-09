@@ -9,6 +9,13 @@ import { refreshPinFootprints } from '../../stores/graphPaint'
 import { getRenderData, requireActiveDiagramId } from '../../stores/graphProject'
 import { attachHandleToolCache, attachHandleToolState } from '../../stores/tools'
 import { NodeDefinitionRegistry } from '../../utils/NodeDefinition'
+import { findDiagramBoxForHandle } from '../../utils/graph/animgraphContainOwner'
+import {
+  addHandleRefs,
+  createHandle,
+  deleteHandles,
+} from '../../utils/graph/animgraphMutation'
+import { mutationCtxFromRenderData } from '../../utils/graph/diagramMutationCtx'
 import type { AnimgraphObject } from '../../utils/graph/animgraphTypes'
 import type { RenderNode } from '../../utils/graph/diagramTypes'
 
@@ -120,76 +127,42 @@ export const createAttachHandleAction = (diagramId: string): AttachHandleAction 
       }
 
       const beforeOriginalNodeId = confirmedNode.data.originalNodeId
-      const beforeParentChildren =
-        this.parentHandleId && this.parentHandleChildrenPropertyName
-          ? JSON.parse(
-              JSON.stringify(
-                gd.handlesRegistry.get(this.parentHandleId)?.Data[this.parentHandleChildrenPropertyName] ??
-                  null
-              )
-            )
-          : null
-      const beforeNodesToInit = JSON.parse(JSON.stringify(gd.originalAnimgraph?.nodesToInit ?? []))
+      const handleDataClone = JSON.parse(JSON.stringify(handleData)) as AnimgraphObject
 
       confirmedNode.data.originalNodeId = handleId
 
-      gd.handlesRegistry.set(handleId, {
-        HandleId: handleId,
-        Data: handleData as AnimgraphObject,
-      })
+      const mutCtx = mutationCtxFromRenderData(gd)
+      createHandle(mutCtx, handleId, handleDataClone)
 
-      if (this.parentHandleId && this.parentHandleChildrenPropertyName && this.handleIsNode) {
-        const parentHandle = gd.handlesRegistry.get(this.parentHandleId)
-        if (parentHandle) {
-          const childrenPropValue = parentHandle.Data[this.parentHandleChildrenPropertyName]
-          if (Array.isArray(childrenPropValue)) {
-            childrenPropValue.push({ HandleRefId: handleId })
-
-            const parentHandleChildrenHandler = NodeDefinitionRegistry.getHandleTypeChildrenHandler(
-              parentHandle.Data.$type,
-              this.parentHandleChildrenPropertyName
-            )
-            if (parentHandleChildrenHandler) {
-              parentHandleChildrenHandler.ensureOrder(
-                gd.handlesRegistry,
-                parentHandle,
-                this.parentHandleChildrenPropertyName
-              )
-            }
-          } else if (!childrenPropValue) {
-            parentHandle.Data[this.parentHandleChildrenPropertyName] = { HandleRefId: handleId }
-          } else {
-            console.warn(`Children property supports only one child and its set`, parentHandle, childrenPropValue)
-          }
-        } else {
-          console.warn(`Parent handle not found: ${this.parentHandleId}`)
+      if (
+        this.parentHandleId &&
+        this.parentHandleChildrenPropertyName &&
+        this.handleIsNode
+      ) {
+        const attachResult = addHandleRefs(
+          mutCtx,
+          this.parentHandleId,
+          this.parentHandleChildrenPropertyName,
+          [handleId]
+        )
+        if (!attachResult.ok) {
+          console.warn(attachResult.message)
         }
       }
 
-      if (this.handleIsNode) {
-        gd.originalAnimgraph.nodesToInit.push({
-          HandleRefId: handleId,
-        })
-      }
-
       handleDataRevision.value++
-      refreshPinFootprints(this.diagramId, [confirmedNode.id])
+      const refreshIds = [confirmedNode.id]
+      if (this.parentHandleId) {
+        const ownerBox = findDiagramBoxForHandle(gd, this.parentHandleId)
+        if (ownerBox && !refreshIds.includes(ownerBox.id)) refreshIds.push(ownerBox.id)
+      }
+      refreshPinFootprints(this.diagramId, refreshIds)
 
       if (!graphHistoryState.isApplying) {
-        const afterHandle = JSON.parse(JSON.stringify(gd.handlesRegistry.get(handleId)))
-        const afterParentChildren =
-          this.parentHandleId && this.parentHandleChildrenPropertyName
-            ? JSON.parse(
-                JSON.stringify(
-                  gd.handlesRegistry.get(this.parentHandleId)?.Data[this.parentHandleChildrenPropertyName] ??
-                    null
-                )
-              )
-            : null
-        const afterNodesToInit = JSON.parse(JSON.stringify(gd.originalAnimgraph?.nodesToInit ?? []))
         const nodeId = confirmedNode.id
         const parentHandleId = this.parentHandleId
         const parentProp = this.parentHandleChildrenPropertyName
+        const handleIsNode = this.handleIsNode
         const actionDiagramId = this.diagramId
 
         getHistoryForDiagram(actionDiagramId).push({
@@ -201,17 +174,7 @@ export const createAttachHandleAction = (diagramId: string): AttachHandleAction 
             try {
               const n = data.allNodes.get(nodeId)
               if (n) n.data.originalNodeId = beforeOriginalNodeId
-              data.handlesRegistry.delete(handleId)
-              if (parentHandleId && parentProp) {
-                const parent = data.handlesRegistry.get(parentHandleId)
-                if (parent) {
-                  if (beforeParentChildren === null) delete parent.Data[parentProp]
-                  else parent.Data[parentProp] = JSON.parse(JSON.stringify(beforeParentChildren))
-                }
-              }
-              if (data.originalAnimgraph) {
-                data.originalAnimgraph.nodesToInit = JSON.parse(JSON.stringify(beforeNodesToInit))
-              }
+              deleteHandles(mutationCtxFromRenderData(data), [handleId])
               handleDataRevision.value++
               refreshPinFootprints(actionDiagramId, [nodeId])
             } finally {
@@ -226,16 +189,10 @@ export const createAttachHandleAction = (diagramId: string): AttachHandleAction 
               const n = data.allNodes.get(nodeId)
               if (!n) return
               n.data.originalNodeId = handleId
-              data.handlesRegistry.set(handleId, JSON.parse(JSON.stringify(afterHandle)))
-              if (parentHandleId && parentProp) {
-                const parent = data.handlesRegistry.get(parentHandleId)
-                if (parent) {
-                  if (afterParentChildren === null) delete parent.Data[parentProp]
-                  else parent.Data[parentProp] = JSON.parse(JSON.stringify(afterParentChildren))
-                }
-              }
-              if (data.originalAnimgraph) {
-                data.originalAnimgraph.nodesToInit = JSON.parse(JSON.stringify(afterNodesToInit))
+              const ctx = mutationCtxFromRenderData(data)
+              createHandle(ctx, handleId, JSON.parse(JSON.stringify(handleDataClone)))
+              if (parentHandleId && parentProp && handleIsNode) {
+                addHandleRefs(ctx, parentHandleId, parentProp, [handleId])
               }
               handleDataRevision.value++
               refreshPinFootprints(actionDiagramId, [nodeId])

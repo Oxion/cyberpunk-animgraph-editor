@@ -22,6 +22,7 @@ const {
   notifySelectedHandleDataChanged,
   snapshotHandleField,
   recordHandleFieldEdit,
+  mutateSelectedHandleData,
 } = inject<NodeDetailsContext>(nodeDetailsContextKey)!
 
 const data = computed(() => {
@@ -40,18 +41,22 @@ function obj(): Record<string, unknown> | null {
 }
 
 function onChange(patch: StructValuePatch) {
-  const d = data.value
-  if (!d) return
   const before = snapshotHandleField(props.dataKey)
-  if (patch.path.length === 0) {
-    d[props.dataKey] = patch.value
-  } else {
-    let root = asRecord(d[props.dataKey])
-    if (!root) {
-      root = generateDataTemplate(props.structType) ?? { $type: props.structType }
-      d[props.dataKey] = root
-    }
-    applyStructPath(root, patch.path, patch.value, props.structType)
+  if (
+    !mutateSelectedHandleData([props.dataKey], (d) => {
+      if (patch.path.length === 0) {
+        d[props.dataKey] = patch.value
+        return
+      }
+      let root = asRecord(d[props.dataKey])
+      if (!root) {
+        root = generateDataTemplate(props.structType) ?? { $type: props.structType }
+        d[props.dataKey] = root
+      }
+      applyStructPath(root, patch.path, patch.value, props.structType)
+    })
+  ) {
+    return
   }
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(props.dataKey, before, { immediate: patch.immediate })

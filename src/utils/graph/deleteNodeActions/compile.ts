@@ -4,7 +4,6 @@
 
 import type { AnimgraphNode } from '../animgraphTypes'
 import type { DiagramConnection, RenderData, RenderNode } from '../diagramTypes'
-import { NodeDefinitionRegistry } from '../../NodeDefinition'
 import {
   isDiagramPortalNode,
 } from '../DiagramConversion'
@@ -23,7 +22,6 @@ import type {
   DeleteNodeAction,
   DeleteNodeDenialReason,
   DeleteNodePlan,
-  DetachHandleRefAction,
 } from './types'
 
 function connectionKey(c: DiagramConnection): string {
@@ -98,76 +96,6 @@ export function collectDisconnectWires(
     return bIdx - aIdx
   })
   return out
-}
-
-function isHandleRef(value: unknown): value is { HandleRefId: string } {
-  return (
-    typeof value === 'object' &&
-    value != null &&
-    'HandleRefId' in value &&
-    typeof (value as { HandleRefId: unknown }).HandleRefId === 'string'
-  )
-}
-
-/**
- * Find contain-slot refs on surviving parents that point at handles being deleted.
- */
-export function collectDetachHandleRefs(
-  renderData: RenderData,
-  deletedHandleIds: Set<string>
-): DetachHandleRefAction[] {
-  const actions: DetachHandleRefAction[] = []
-  const seen = new Set<string>()
-
-  for (const [parentId, parent] of renderData.handlesRegistry) {
-    if (deletedHandleIds.has(parentId)) continue
-    const parentType = String(parent.Data?.$type ?? '')
-    if (!parentType) continue
-    for (const slotName of NodeDefinitionRegistry.getChildFields(parentType)) {
-      const val = parent.Data?.[slotName]
-      if (Array.isArray(val)) {
-        for (let i = 0; i < val.length; i++) {
-          const item = val[i]
-          if (!isHandleRef(item)) continue
-          const hid = String(item.HandleRefId)
-          if (!deletedHandleIds.has(hid)) continue
-          const key = `${parentId}|${slotName}|${i}|${hid}`
-          if (seen.has(key)) continue
-          seen.add(key)
-          actions.push({
-            kind: 'detach-handle-ref',
-            parentHandleId: parentId,
-            slotName,
-            index: i,
-            handleId: hid,
-          })
-        }
-      } else if (isHandleRef(val)) {
-        const hid = String(val.HandleRefId)
-        if (!deletedHandleIds.has(hid)) continue
-        const key = `${parentId}|${slotName}|-1|${hid}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        actions.push({
-          kind: 'detach-handle-ref',
-          parentHandleId: parentId,
-          slotName,
-          index: -1,
-          handleId: hid,
-        })
-      }
-    }
-  }
-
-  // Detach highest index first per (parent, slot) so splices don't shift earlier indices.
-  actions.sort((a, b) => {
-    if (a.parentHandleId !== b.parentHandleId) {
-      return a.parentHandleId.localeCompare(b.parentHandleId)
-    }
-    if (a.slotName !== b.slotName) return a.slotName.localeCompare(b.slotName)
-    return b.index - a.index
-  })
-  return actions
 }
 
 export function canDeleteNode(
@@ -257,12 +185,8 @@ export function compileDeleteNodeActions(
     actions.push({ kind: 'disconnect-wire', connection: conn })
   }
 
-  for (const detach of collectDetachHandleRefs(renderData, handleIdSet)) {
-    actions.push(detach)
-  }
-
-  for (const hid of handleIds) {
-    actions.push({ kind: 'unregister-handle', handleId: hid })
+  if (handleIds.length > 0) {
+    actions.push({ kind: 'delete-animgraph-handles', handleIds: [...handleIds] })
   }
 
   // Leaf-first: reverse depth-first walk order.

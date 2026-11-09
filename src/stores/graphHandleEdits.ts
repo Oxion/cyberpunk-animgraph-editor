@@ -3,7 +3,15 @@
  * UI wiring stays in useNodeDetailsContext.
  */
 import { getProjectionDef } from '../utils/projection/resolve'
-import { NodeDefinitionRegistry } from '../utils/NodeDefinition'
+import type { AnimgraphMutationCtx } from '../utils/graph/animgraphMutation'
+import {
+  clearHandleRef,
+  createHandle,
+  mutateHandleData,
+  renameHandle,
+  replaceHandleData,
+} from '../utils/graph/animgraphMutation'
+import { mutationCtxFromRenderData } from '../utils/graph/diagramMutationCtx'
 import type { AnimgraphNode, AnimgraphObject } from '../utils/graph/animgraphTypes'
 import { resolveHandleId } from '../utils/graph/diagramMaterialize'
 import {
@@ -79,12 +87,8 @@ export function removePinArraySlot(diagramId: string, inputName: string, index: 
   const nested = getProjectionDef(ownerType)?.extraPins?.find((p: { name: string }) => p.name === inputName)
   const undoKey = nested?.path[0] ?? inputName
   const before = cloneHandleFieldValue(handle.Data[undoKey])
-  const handler = NodeDefinitionRegistry.getNodeInputHandler(ownerType, inputName)
-  handler.delete(handle, index)
-  const remaining = handle.Data[inputName]
-  if (Array.isArray(remaining) && 'numInputs' in handle.Data) {
-    handle.Data.numInputs = remaining.length
-  }
+  if (!handleId) return
+  clearHandleRef(mutationCtxFromRenderData(gd), handleId, inputName, index)
   recordHandleFieldEdit(diagramId, undoKey, before, { immediate: true })
   notifySelectedHandleDataChanged()
   refreshPinFootprints(diagramId, [owner.id])
@@ -164,9 +168,14 @@ export function reorderPinArraySlot(
   const undoKey = nested?.path[0] ?? inputName
   const before = cloneHandleFieldValue(handle.Data[undoKey])
 
-  const tmp = arr[index]
-  arr[index] = arr[other]
-  arr[other] = tmp
+  if (!handleId) return
+  mutateHandleData(mutationCtxFromRenderData(gd), handleId, [undoKey], () => {
+    const live = getPinInputArray(handle, ownerType, inputName)
+    if (!live || other >= live.length) return
+    const tmp = live[index]
+    live[index] = live[other]
+    live[other] = tmp
+  })
 
   const pinA = `${inputName}[${index}]`
   const pinB = `${inputName}[${other}]`
@@ -209,27 +218,12 @@ export function renamePinHandleId(
   const handle = gd.handlesRegistry.get(oldId)
   if (!handle) return { ok: false, reason: `Handle '${oldId}' not found` }
 
-  gd.handlesRegistry.delete(oldId)
-  handle.HandleId = next
-  gd.handlesRegistry.set(next, handle)
+  const renamed = renameHandle(mutationCtxFromRenderData(gd), oldId, next)
+  if (!renamed.ok) return { ok: false, reason: renamed.message }
 
   for (const node of gd.allNodes.values()) {
     if (node.data?.originalNodeId === oldId) {
       node.data.originalNodeId = next
-    }
-  }
-
-  const nodesToInit = gd.originalAnimgraph?.nodesToInit
-  if (Array.isArray(nodesToInit)) {
-    for (const ref of nodesToInit) {
-      if (
-        ref &&
-        typeof ref === 'object' &&
-        'HandleRefId' in ref &&
-        String((ref as { HandleRefId: string }).HandleRefId) === oldId
-      ) {
-        ;(ref as { HandleRefId: string }).HandleRefId = next
-      }
     }
   }
 
@@ -293,6 +287,45 @@ export function scheduleHandleChromeRefresh(diagramId: string, handleId: string)
     pendingChromeHandleId = null
     if (id && handle) refreshNodesBoundToHandle(id, handle)
   })
+}
+
+/**
+ * In-place edit of the selected node's linked handle.Data through the mutation facade.
+ * Runs HandleRef consistency + field effects for `rootKeys`.
+ */
+export function mutateSelectedHandleData(
+  rootKeys: readonly string[],
+  mutator: (data: AnimgraphObject) => void
+): boolean {
+  const diagramId = activeDiagramId.value
+  const node = selectedNodeRef.value
+  if (!diagramId || !node) return false
+  const gd = getRenderData(diagramId)
+  if (!gd) return false
+  const handleId = resolveLinkedHandleId(node, gd.handlesRegistry)
+  if (!handleId) return false
+  return mutateHandleData(
+    mutationCtxFromRenderData(gd),
+    handleId,
+    rootKeys,
+    mutator
+  )
+}
+
+/** Mutation ctx + linked handle id for the current selection (Details panel). */
+export function selectedHandleMutationTarget(): {
+  ctx: AnimgraphMutationCtx
+  handleId: string
+  diagramId: string
+} | null {
+  const diagramId = activeDiagramId.value
+  const node = selectedNodeRef.value
+  if (!diagramId || !node) return null
+  const gd = getRenderData(diagramId)
+  if (!gd) return null
+  const handleId = resolveLinkedHandleId(node, gd.handlesRegistry)
+  if (!handleId) return null
+  return { ctx: mutationCtxFromRenderData(gd), handleId, diagramId }
 }
 
 export function cloneHandleFieldValue(value: unknown): unknown {
@@ -366,29 +399,36 @@ export function applyHandleFieldPatch(
   if (!renderData) return
   const { handlesRegistry, allNodes } = renderData
   const node = allNodes.get(boxId)
-  const data = node
-    ? resolveLinkedAnimgraphData(node, handlesRegistry, allNodes)
-    : (handlesRegistry.get(boxId)?.Data as Record<string, unknown> | undefined)
-  if (!data) return
+  const handleId =
+    (node && resolveLinkedHandleId(node, handlesRegistry)) || boxId
+  if (!handlesRegistry.has(handleId)) return
+  const ctx = mutationCtxFromRenderData(renderData)
+
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) {
-      delete data[key]
+      mutateHandleData(ctx, handleId, [key], (data) => {
+        delete data[key]
+      })
       continue
     }
     const wrapped = asEmbeddedHandleSnapshot(value)
     if (wrapped) {
       const dataClone = cloneHandleFieldValue(wrapped.Data) as AnimgraphObject
-      const existing = handlesRegistry.get(wrapped.HandleId)
-      if (existing) existing.Data = dataClone
-      else handlesRegistry.set(wrapped.HandleId, { HandleId: wrapped.HandleId, Data: dataClone })
-      data[key] = { HandleRefId: wrapped.HandleId }
+      if (ctx.handlesRegistry.has(wrapped.HandleId)) {
+        replaceHandleData(ctx, wrapped.HandleId, dataClone)
+      } else {
+        createHandle(ctx, wrapped.HandleId, dataClone)
+      }
+      mutateHandleData(ctx, handleId, [key], (data) => {
+        data[key] = { HandleRefId: wrapped.HandleId }
+      })
       continue
     }
-    data[key] = cloneHandleFieldValue(value) as unknown
+    mutateHandleData(ctx, handleId, [key], (data) => {
+      data[key] = cloneHandleFieldValue(value)
+    })
   }
   handleDataRevision.value++
-  const handleId =
-    (node && resolveLinkedHandleId(node, handlesRegistry)) || boxId
   refreshNodesBoundToHandle(diagramId, handleId)
 }
 

@@ -1,64 +1,20 @@
 /**
- * Apply type-specific delete side effects.
+ * Apply diagram-side delete side effects (layout / metadata).
+ * Animgraph index remaps live in animgraphMutation field effects.
  */
 
-import type { AnimgraphNode } from '../../animgraphTypes'
 import type { RenderData, RenderNode } from '../../diagramTypes'
 import { isDiagramPortalNode } from '../../DiagramConversion'
 import { ANIM_NODE_STATE_TYPE_SET } from '../../animNodeStateTypes'
-import {
-  ANIM_NODE_TYPE_CONDITIONAL_ENTRY,
-  ANIM_NODE_TYPE_TRANSITION_DESCRIPTION,
-} from '../../animNodeTypes'
-import {
-  DIAGRAM_CONDITIONAL_ENTRY_WRAPPER_TYPE,
-  DIAGRAM_TRANSITION_WRAPPER_TYPE,
-} from '../../diagramNodeTypes'
 import { fitPropertyGroupToChildren, propertyGroupContentOrigin } from '../../nodeAddBootstrap'
 import { DEFAULT_CHILD_SLOT, getChildSlot } from '../../nodeChildSlots'
 import { getSmPropertyGroup } from '../../StateMachineDetailLayout'
 import { orderStateBoxesByHandleArray } from '../../smStateSlot'
 import type {
-  RemapOutTransitionIndicesAction,
-  RemapTargetStateIndicesAction,
   ReindexSmStatesAction,
   RestackPropertyGroupAction,
   SyncSmSectionMetadataAction,
 } from '../types'
-
-function readTargetStateIndex(data: Record<string, unknown> | undefined): number | null {
-  if (!data) return null
-  const raw = data.targetStateIndex
-  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
-  if (raw && typeof raw === 'object' && '$value' in raw) {
-    const n = Number((raw as { $value: unknown }).$value)
-    return Number.isFinite(n) ? n : null
-  }
-  return null
-}
-
-function writeTargetStateIndex(handle: AnimgraphNode, next: number): void {
-  if (!handle.Data) return
-  const raw = handle.Data.targetStateIndex
-  if (raw && typeof raw === 'object' && '$value' in (raw as object)) {
-    handle.Data.targetStateIndex = { ...(raw as object), $value: next }
-  } else {
-    handle.Data.targetStateIndex = next
-  }
-}
-
-function isTransitionLikeBox(node: RenderNode): boolean {
-  return (
-    node.type === DIAGRAM_TRANSITION_WRAPPER_TYPE ||
-    node.type === DIAGRAM_CONDITIONAL_ENTRY_WRAPPER_TYPE ||
-    node.type === ANIM_NODE_TYPE_TRANSITION_DESCRIPTION ||
-    node.type === ANIM_NODE_TYPE_CONDITIONAL_ENTRY
-  )
-}
-
-function resolveHandleId(node: RenderNode): string {
-  return String(node.data?.originalNodeId ?? node.id)
-}
 
 function groupSpacing(pg: RenderNode): number {
   return (pg as { spacing?: number }).spacing ?? 16
@@ -123,79 +79,6 @@ export function applyReindexSmStates(
   }
   markDirty(sm.id)
   markDirty(group.id)
-}
-
-export function applyRemapTargetStateIndices(
-  renderData: RenderData,
-  action: RemapTargetStateIndicesAction,
-  markDirty: (id: string) => void
-): void {
-  const sm = renderData.allNodes.get(action.smId)
-  if (!sm) return
-  const deleted = action.deletedStateIndex
-
-  const touchBox = (box: RenderNode) => {
-    const hid = resolveHandleId(box)
-    const handle = renderData.handlesRegistry.get(hid)
-    if (!handle?.Data) return
-    const cur = readTargetStateIndex(handle.Data as Record<string, unknown>)
-    if (cur === null) return
-    let next = cur
-    if (cur === deleted) next = -1
-    else if (cur > deleted) next = cur - 1
-    if (next === cur) return
-    writeTargetStateIndex(handle, next)
-    box.metadata = { ...box.metadata, targetStateIndex: next }
-    markDirty(box.id)
-  }
-
-  for (const slot of ['transitions', 'globalTransitions', 'conditionalEntries'] as const) {
-    const group = getSmPropertyGroup(sm, slot, renderData.allNodes)
-    if (!group) continue
-    for (const child of getChildSlot(group, DEFAULT_CHILD_SLOT)) {
-      if (isTransitionLikeBox(child)) touchBox(child)
-    }
-  }
-  markDirty(sm.id)
-}
-
-export function applyRemapOutTransitionIndices(
-  renderData: RenderData,
-  action: RemapOutTransitionIndicesAction,
-  markDirty: (id: string) => void
-): void {
-  const sm = renderData.allNodes.get(action.smId)
-  if (!sm) return
-  const deleted = action.deletedIndex
-  const statesGroup = getSmPropertyGroup(sm, 'states', renderData.allNodes)
-  if (!statesGroup) return
-
-  for (const stateBox of getChildSlot(statesGroup, DEFAULT_CHILD_SLOT)) {
-    if (!ANIM_NODE_STATE_TYPE_SET.has(stateBox.type)) continue
-    const hid = resolveHandleId(stateBox)
-    const handle = renderData.handlesRegistry.get(hid)
-    const indices = handle?.Data?.outTransitionIndices
-    if (!handle?.Data || !Array.isArray(indices)) continue
-
-    const next: number[] = []
-    let changed = false
-    for (const idx of indices) {
-      if (typeof idx !== 'number') continue
-      if (idx === deleted) {
-        changed = true
-        continue
-      }
-      if (idx > deleted) {
-        next.push(idx - 1)
-        changed = true
-      } else {
-        next.push(idx)
-      }
-    }
-    if (!changed) continue
-    handle.Data.outTransitionIndices = next
-    markDirty(stateBox.id)
-  }
 }
 
 export function applyRestackPropertyGroup(

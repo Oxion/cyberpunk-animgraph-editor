@@ -66,13 +66,11 @@ export interface PlacePortalAction {
 export interface PromoteFloatingAction {
   kind: 'promote-floating'
   handleId: string
-  appendNodesToInit?: boolean
 }
 
 export interface UnpromoteFloatingAction {
   kind: 'unpromote-floating'
   handleId: string
-  removeFromNodesToInit?: boolean
 }
 
 export interface MarkBoxInlineAction {
@@ -149,6 +147,6 @@ export type PinWireApplyResult = {
   wasAppend: boolean
   /** Diagram boxes whose pin rows / size must be rebuilt (array pin length changed). */
   footprintDirtyBoxIds: string[]
-  /** Handles removed from nodesToInit and marked floating after disconnect. */
+  /** Handles marked floating after disconnect (unattached). */
   demotedHandleIds: string[]
 }

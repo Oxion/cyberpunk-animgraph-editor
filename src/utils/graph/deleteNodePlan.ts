@@ -3,7 +3,7 @@
  * No UI strings; callers map reason codes.
  */
 
-import type { AnimgraphNode, AnimgraphNodeLike, AnimgraphObject } from './animgraphTypes'
+import type { AnimgraphNode, AnimgraphObject } from './animgraphTypes'
 import type { DiagramConnection, RenderData, RenderNode } from './diagramTypes'
 import {
   cloneAnimgraphData,
@@ -20,7 +20,6 @@ import {
 } from './GraphHistory'
 import { isDiagramPortalNode } from './DiagramConversion'
 import { getChildSlot, DEFAULT_CHILD_SLOT } from './nodeChildSlots'
-import { getSmPropertyGroup } from './StateMachineDetailLayout'
 import {
   applyDeleteNodePlan as applyCompiledDeletePlan,
   canDeleteNode,
@@ -31,6 +30,8 @@ import {
   type DeleteNodePlan,
 } from './deleteNodeActions'
 import { resolveBoxHandleId } from './deleteNodeActions/compile'
+import { createHandle, replaceHandleData } from './animgraphMutation'
+import { mutationCtxFromRenderData } from './diagramMutationCtx'
 
 export type {
   CanDeleteNodeResult,
@@ -63,11 +64,6 @@ export function applyDeleteNodePlan(
   return applyCompiledDeletePlan(renderData, plan)
 }
 
-function cloneNodesToInit(refs: AnimgraphNodeLike[] | undefined): AnimgraphNodeLike[] {
-  if (!refs?.length) return []
-  return JSON.parse(JSON.stringify(refs)) as AnimgraphNodeLike[]
-}
-
 function cloneFloatingHandleIds(ids: Set<string> | undefined): string[] {
   return ids?.size ? [...ids] : []
 }
@@ -93,8 +89,43 @@ function collectTouchedSurvivingHandleIds(
   }
 
   for (const action of plan.actions) {
-    if (action.kind === 'detach-handle-ref') {
-      addHandle(action.parentHandleId)
+    if (action.kind === 'delete-animgraph-handles') {
+      // Parents that held contain/pin refs to deleted handles will be rewritten by deleteHandles.
+      const deletedSet = new Set(action.handleIds)
+      for (const [parentId, parent] of renderData.handlesRegistry) {
+        if (deletedSet.has(parentId)) continue
+        const data = parent.Data as Record<string, unknown> | undefined
+        if (!data) continue
+        const json = JSON.stringify(data)
+        for (const hid of deletedSet) {
+          if (json.includes(`"HandleRefId":"${hid}"`) || json.includes(`"HandleId":"${hid}"`)) {
+            addHandle(parentId)
+            break
+          }
+        }
+        // SM index remaps also touch transition/state Data without HandleRef to deleted id.
+        if (String(data.$type ?? '') === 'animAnimNode_StateMachine') {
+          for (const slot of [
+            'states',
+            'transitions',
+            'globalTransitions',
+            'conditionalEntries',
+          ] as const) {
+            const arr = data[slot]
+            if (!Array.isArray(arr)) continue
+            for (const item of arr) {
+              if (
+                item &&
+                typeof item === 'object' &&
+                'HandleRefId' in item &&
+                typeof (item as { HandleRefId: string }).HandleRefId === 'string'
+              ) {
+                addHandle(String((item as { HandleRefId: string }).HandleRefId))
+              }
+            }
+          }
+        }
+      }
     }
     if (action.kind === 'disconnect-wire') {
       const conn = action.connection
@@ -115,30 +146,6 @@ function collectTouchedSurvivingHandleIds(
           ? resolveBoxHandleId(fromNode, renderData.handlesRegistry)
           : null
       )
-    }
-    if (action.kind === 'remap-target-state-indices') {
-      const sm = renderData.allNodes.get(action.smId)
-      if (!sm) continue
-      for (const slot of [
-        'transitions',
-        'globalTransitions',
-        'conditionalEntries',
-      ] as const) {
-        const group = getSmPropertyGroup(sm, slot, renderData.allNodes)
-        if (!group) continue
-        for (const child of getChildSlot(group, DEFAULT_CHILD_SLOT)) {
-          addHandle(resolveBoxHandleId(child, renderData.handlesRegistry))
-        }
-      }
-    }
-    if (action.kind === 'remap-out-transition-indices') {
-      const sm = renderData.allNodes.get(action.smId)
-      if (!sm) continue
-      const statesGroup = getSmPropertyGroup(sm, 'states', renderData.allNodes)
-      if (!statesGroup) continue
-      for (const child of getChildSlot(statesGroup, DEFAULT_CHILD_SLOT)) {
-        addHandle(resolveBoxHandleId(child, renderData.handlesRegistry))
-      }
     }
   }
 
@@ -177,12 +184,6 @@ function collectSideEffectBoxIds(
       }
     }
     if (action.kind === 'sync-sm-section-metadata') add(action.smId)
-    if (
-      action.kind === 'remap-target-state-indices' ||
-      action.kind === 'remap-out-transition-indices'
-    ) {
-      add(action.smId)
-    }
   }
 
   return [...ids]
@@ -203,7 +204,6 @@ export interface DeleteNodesSnapshot {
   /** Surviving box metadata before side effects. */
   survivingNodeMetadata: Record<string, Record<string, unknown>>
   connections: DiagramConnection[]
-  nodesToInit: AnimgraphNodeLike[]
   floatingHandleIds: string[]
   parentRefreshIds: string[]
   label: string
@@ -280,7 +280,6 @@ export function captureDeleteNodesSnapshot(
     survivingLayouts,
     survivingNodeMetadata,
     connections: cloneConnections(renderData.connections),
-    nodesToInit: cloneNodesToInit(renderData.originalAnimgraph?.nodesToInit),
     floatingHandleIds: cloneFloatingHandleIds(renderData.floatingHandleIds),
     parentRefreshIds: [...plan.parentRefreshIds],
     label:
@@ -294,21 +293,19 @@ export function restoreDeleteNodesSnapshot(
   renderData: RenderData,
   snapshot: DeleteNodesSnapshot
 ): void {
+  const ctx = mutationCtxFromRenderData(renderData)
   // Restore handles first so attach/refs make sense when boxes remount.
   for (const handle of snapshot.deletedHandles) {
-    renderData.handlesRegistry.set(String(handle.HandleId), cloneHandle(handle))
+    const cloned = cloneHandle(handle)
+    const id = String(cloned.HandleId)
+    if (ctx.handlesRegistry.has(id)) replaceHandleData(ctx, id, cloned.Data)
+    else createHandle(ctx, id, cloned.Data)
   }
 
   for (const [hid, data] of Object.entries(snapshot.survivingHandleData)) {
-    const handle = renderData.handlesRegistry.get(hid)
-    if (handle) {
-      handle.Data = cloneAnimgraphData(data)
-    }
+    replaceHandleData(ctx, hid, cloneAnimgraphData(data))
   }
 
-  if (renderData.originalAnimgraph) {
-    renderData.originalAnimgraph.nodesToInit = cloneNodesToInit(snapshot.nodesToInit)
-  }
   renderData.floatingHandleIds = new Set(snapshot.floatingHandleIds)
 
   // Parent-first: reverse of leaf-first capture order.

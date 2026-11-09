@@ -28,6 +28,7 @@ const {
   notifySelectedHandleDataChanged,
   snapshotHandleField,
   recordHandleFieldEdit,
+  mutateSelectedHandleData,
 } = inject<NodeDetailsContext>(nodeDetailsContextKey)!
 
 const data = computed(() => {
@@ -48,15 +49,19 @@ function tracks(): Record<string, unknown>[] {
 }
 
 function mutateTracks(immediate: boolean, fn: (arr: unknown[]) => void) {
-  const d = data.value
-  if (!d) return
   const before = snapshotHandleField(props.dataKey)
-  let arr = d[props.dataKey]
-  if (!Array.isArray(arr)) {
-    arr = []
-    d[props.dataKey] = arr
+  if (
+    !mutateSelectedHandleData([props.dataKey], (d) => {
+      let arr = d[props.dataKey]
+      if (!Array.isArray(arr)) {
+        arr = []
+        d[props.dataKey] = arr
+      }
+      fn(arr)
+    })
+  ) {
+    return
   }
-  fn(arr)
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(props.dataKey, before, { immediate })
 }

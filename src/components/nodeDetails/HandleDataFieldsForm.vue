@@ -46,6 +46,7 @@ const {
   notifySelectedHandleDataChanged,
   snapshotHandleField,
   recordHandleFieldEdit,
+  mutateSelectedHandleData,
 } = inject<NodeDetailsContext>(nodeDetailsContextKey)!
 
 /** Track revision so in-place Data writes re-render controls (same object identity). */
@@ -66,11 +67,9 @@ function numberValue(field: PropertyFieldDef): number {
 }
 
 function setNumber(field: PropertyFieldDef, value: number) {
-  const d = data.value
-  if (!d) return
   const key = dataKey(field)
   const before = snapshotHandleField(key)
-  writeNumber(d, key, value)
+  if (!mutateSelectedHandleData([key], (d) => writeNumber(d, key, value))) return
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(key, before)
 }
@@ -83,11 +82,9 @@ function boolValue(field: PropertyFieldDef): boolean {
 }
 
 function setBool(field: PropertyFieldDef, value: boolean) {
-  const d = data.value
-  if (!d) return
   const key = dataKey(field)
   const before = snapshotHandleField(key)
-  writeBool01(d, key, value)
+  if (!mutateSelectedHandleData([key], (d) => writeBool01(d, key, value))) return
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(key, before, { immediate: true })
 }
@@ -100,11 +97,9 @@ function stringValue(field: PropertyFieldDef): string {
 }
 
 function setString(field: PropertyFieldDef, value: string) {
-  const d = data.value
-  if (!d) return
   const key = dataKey(field)
   const before = snapshotHandleField(key)
-  writeStringOrCName(d, key, value)
+  if (!mutateSelectedHandleData([key], (d) => writeStringOrCName(d, key, value))) return
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(key, before, { immediate: true })
 }
@@ -117,11 +112,9 @@ function resourcePathValue(field: PropertyFieldDef): string {
 }
 
 function setResourcePath(field: PropertyFieldDef, value: string) {
-  const d = data.value
-  if (!d) return
   const key = dataKey(field)
   const before = snapshotHandleField(key)
-  writeResourcePath(d, key, value)
+  if (!mutateSelectedHandleData([key], (d) => writeResourcePath(d, key, value))) return
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(key, before, { immediate: true })
 }
@@ -139,21 +132,25 @@ function cnameNameValue(field: PropertyFieldDef): string {
 }
 
 function setCNameName(field: PropertyFieldDef, value: string) {
-  const d = data.value
-  if (!d) return
   const key = dataKey(field)
   const before = snapshotHandleField(key)
-  let obj = asRecord(d[key])
-  if (!obj) {
-    obj =
-      (field.structType ? generateDataTemplate(field.structType) : undefined) ??
-      {
-        $type: field.structType ?? 'animTransformIndex',
-        name: { $type: 'CName', $storage: 'string', $value: 'None' },
+  if (
+    !mutateSelectedHandleData([key], (d) => {
+      let obj = asRecord(d[key])
+      if (!obj) {
+        obj =
+          (field.structType ? generateDataTemplate(field.structType) : undefined) ??
+          {
+            $type: field.structType ?? 'animTransformIndex',
+            name: { $type: 'CName', $storage: 'string', $value: 'None' },
+          }
+        d[key] = obj
       }
-    d[key] = obj
+      writeStringOrCName(obj, 'name', value)
+    })
+  ) {
+    return
   }
-  writeStringOrCName(obj, 'name', value)
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(key, before, { immediate: true })
 }
@@ -168,11 +165,9 @@ function enumValue(field: PropertyFieldDef): string {
 }
 
 function setEnum(field: PropertyFieldDef, value: string) {
-  const d = data.value
-  if (!d) return
   const key = dataKey(field)
   const before = snapshotHandleField(key)
-  writePlainString(d, key, value)
+  if (!mutateSelectedHandleData([key], (d) => writePlainString(d, key, value))) return
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(key, before, { immediate: true })
 }

@@ -44,27 +44,6 @@ function resolveBoxHandleId(
   return null
 }
 
-function isHandleRef(value: unknown): value is { HandleRefId: string } {
-  return (
-    typeof value === 'object' &&
-    value != null &&
-    'HandleRefId' in value &&
-    typeof (value as { HandleRefId: string }).HandleRefId === 'string'
-  )
-}
-
-function findHandleIndexInSlot(
-  parent: AnimgraphNode,
-  slotName: string,
-  handleId: string
-): number {
-  const val = parent.Data?.[slotName]
-  if (!Array.isArray(val)) return -1
-  return val.findIndex(
-    (item) => isHandleRef(item) && String(item.HandleRefId) === handleId
-  )
-}
-
 function resolveOwnerSmFromSeed(
   seed: RenderNode,
   renderData: RenderData
@@ -153,10 +132,6 @@ function sideEffectActionKey(action: DeleteNodeAction): string {
   switch (action.kind) {
     case 'reindex-sm-states':
       return `reindex-sm-states|${action.smId}|${action.statesGroupId}`
-    case 'remap-target-state-indices':
-      return `remap-target-state-indices|${action.smId}|${action.deletedStateIndex}`
-    case 'remap-out-transition-indices':
-      return `remap-out-transition-indices|${action.smId}|${action.slotName}|${action.deletedIndex}`
     case 'restack-property-group':
       return `restack-property-group|${action.groupId}|${action.sortBy}`
     case 'sync-sm-section-metadata':
@@ -169,26 +144,7 @@ function sideEffectActionKey(action: DeleteNodeAction): string {
 }
 
 function sortSideEffectActions(actions: DeleteNodeAction[]): DeleteNodeAction[] {
-  const remapTarget = actions
-    .filter((a): a is Extract<DeleteNodeAction, { kind: 'remap-target-state-indices' }> =>
-      a.kind === 'remap-target-state-indices'
-    )
-    .sort((a, b) => b.deletedStateIndex - a.deletedStateIndex)
-  const remapOut = actions
-    .filter((a): a is Extract<DeleteNodeAction, { kind: 'remap-out-transition-indices' }> =>
-      a.kind === 'remap-out-transition-indices'
-    )
-    .sort((a, b) => {
-      if (a.smId !== b.smId) return a.smId.localeCompare(b.smId)
-      if (a.slotName !== b.slotName) return a.slotName.localeCompare(b.slotName)
-      return b.deletedIndex - a.deletedIndex
-    })
-  const rest = actions.filter(
-    (a) =>
-      a.kind !== 'remap-target-state-indices' &&
-      a.kind !== 'remap-out-transition-indices'
-  )
-  return [...remapTarget, ...remapOut, ...rest]
+  return actions
 }
 
 function mergeSideEffectPlans(...plans: SideEffectPlan[]): SideEffectPlan {
@@ -288,26 +244,6 @@ function compileSmSlotPropertyGroupDeleteSideEffects(
   return merged
 }
 
-function pushTransitionRemapOutActions(
-  actions: DeleteNodeAction[],
-  smId: string,
-  removals: StateDeleteSmSlotRemoval[]
-): void {
-  const transitionIndices = [
-    ...new Set(
-      removals.filter((r) => r.slotName === 'transitions').map((r) => r.index)
-    ),
-  ].sort((a, b) => b - a)
-  for (const deletedIndex of transitionIndices) {
-    actions.push({
-      kind: 'remap-out-transition-indices',
-      smId,
-      slotName: 'transitions',
-      deletedIndex,
-    })
-  }
-}
-
 function pushSlotRestackAfterRemovals(
   actions: DeleteNodeAction[],
   refreshIds: string[],
@@ -363,13 +299,8 @@ function compileStateSideEffects(input: DeleteSideEffectInput): {
     smId: sm.id,
     statesGroupId: statesGroup.id,
   })
-  if (deletedStateIndex >= 0) {
-    actions.push({
-      kind: 'remap-target-state-indices',
-      smId: sm.id,
-      deletedStateIndex,
-    })
-  }
+  // targetStateIndex / outTransitionIndices remaps: animgraphMutation field effects
+  // (deleteHandles strip → OwnerFieldChange on SM.states / transitions).
 
   if (smHandle && seedStateHandle && deletedStateIndex >= 0) {
     const removals = collectStateDeleteSmSlotRemovals(
@@ -378,8 +309,6 @@ function compileStateSideEffects(input: DeleteSideEffectInput): {
       deletedStateIndex,
       seedStateHandle
     )
-
-    pushTransitionRemapOutActions(actions, sm.id, removals)
     pushSlotRestackAfterRemovals(actions, refreshIds, renderData, sm, removals)
   }
 
@@ -429,29 +358,15 @@ function compileTransitionLikeSideEffects(
   if (!pg) return { actions, refreshIds }
 
   if (sm && slotName === 'transitions') {
-    const smHandleId = String(sm.data?.originalNodeId ?? sm.id)
-    const smHandle = renderData.handlesRegistry.get(smHandleId)
-    const seedHandleId = resolveSeedAnimHandleId(seed, renderData, handleIds)
-    const deletedIndex =
-      smHandle && seedHandleId
-        ? findHandleIndexInSlot(smHandle, slotName, seedHandleId)
-        : -1
-    if (deletedIndex >= 0) {
-      actions.push({
-        kind: 'remap-out-transition-indices',
-        smId: sm.id,
-        slotName,
-        deletedIndex,
-      })
-      const statesGroup = getSmPropertyGroup(sm, 'states', renderData.allNodes)
-      if (statesGroup) {
-        for (const child of getChildSlot(statesGroup, DEFAULT_CHILD_SLOT)) {
-          if (
-            ANIM_NODE_STATE_TYPE_SET.has(child.type) &&
-            !input.affectedIds.has(child.id)
-          ) {
-            refreshIds.push(child.id)
-          }
+    // outTransitionIndices remap runs in animgraphMutation on SM.transitions strip.
+    const statesGroup = getSmPropertyGroup(sm, 'states', renderData.allNodes)
+    if (statesGroup) {
+      for (const child of getChildSlot(statesGroup, DEFAULT_CHILD_SLOT)) {
+        if (
+          ANIM_NODE_STATE_TYPE_SET.has(child.type) &&
+          !input.affectedIds.has(child.id)
+        ) {
+          refreshIds.push(child.id)
         }
       }
     }
@@ -496,22 +411,7 @@ function compileStatesPropertyGroupDeleteSideEffects(
   const smHandleId = String(sm.data?.originalNodeId ?? sm.id)
   const smHandle = renderData.handlesRegistry.get(smHandleId)
 
-  const stateIndices: number[] = []
-  for (const child of getChildSlot(seed, DEFAULT_CHILD_SLOT)) {
-    if (!ANIM_NODE_STATE_TYPE_SET.has(child.type)) continue
-    const hid = resolveBoxHandleId(child, renderData.handlesRegistry)
-    const idx =
-      smHandle && hid ? findHandleIndexInSlot(smHandle, 'states', hid) : -1
-    if (idx >= 0) stateIndices.push(idx)
-  }
-
-  for (const deletedStateIndex of [...new Set(stateIndices)].sort((a, b) => b - a)) {
-    actions.push({
-      kind: 'remap-target-state-indices',
-      smId: sm.id,
-      deletedStateIndex,
-    })
-  }
+  // State index remaps: animgraphMutation on SM.states strip (deleteHandles).
 
   if (smHandle) {
     for (const child of getChildSlot(seed, DEFAULT_CHILD_SLOT)) {
@@ -534,7 +434,6 @@ function compileStatesPropertyGroupDeleteSideEffects(
         deletedStateIndex,
         seedStateHandle
       )
-      pushTransitionRemapOutActions(actions, sm.id, removals)
       pushSlotRestackAfterRemovals(actions, refreshIds, renderData, sm, removals)
     }
   }

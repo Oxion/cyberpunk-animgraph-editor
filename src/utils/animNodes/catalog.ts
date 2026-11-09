@@ -324,6 +324,7 @@ export const NODE_DEFINITION_ENTRIES: ReadonlyArray<readonly [string, NodeDefini
     // State machine nodes
     ['animAnimNode_StateMachine', {
       description: 'State machine with multiple input categories',
+      fieldChangeEffects: ['sm-index-remap'],
       dataTemplate: {
         "$type": "animAnimNode_StateMachine",
         "anyStateInterpolator": null,
@@ -2118,6 +2119,18 @@ export const NODE_DEFINITION_ENTRIES: ReadonlyArray<readonly [string, NodeDefini
       description: 'First-person camera pose',
       dataTemplate: {
         "$type": "animAnimNode_FPPCamera",
+        "id": 4294967295,
+        "inputLink": {
+          "$type": "animPoseLink",
+          "node": null
+        }
+      }
+    }],
+    ['nrAnimNode_HybridFPPLook', {
+      description:
+        'Editor hybrid FPP look (replace FPPCamera): root chest/spine distribute + snappy Control residual',
+      dataTemplate: {
+        "$type": "nrAnimNode_HybridFPPLook",
         "id": 4294967295,
         "inputLink": {
           "$type": "animPoseLink",

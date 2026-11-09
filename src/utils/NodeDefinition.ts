@@ -59,6 +59,10 @@ export interface NodeDefinition {
    * Omit = allowed in any parent slot that accepts it (via slot.allowedTypes or open slot).
    */
   allowedParentSlots?: AllowedParentSlot[]
+  /**
+   * Field-change effect handler ids (see animgraphMutation/effects/registry).
+   */
+  fieldChangeEffects?: readonly string[]
   description?: string
   dataTemplate?: AnimgraphObject
 }

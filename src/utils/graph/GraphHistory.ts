@@ -1,18 +1,14 @@
-import type { AnimgraphNode, AnimgraphNodeLike, AnimgraphObject } from './animgraphTypes'
-import type { DiagramConnection, RenderData, RenderNode } from './diagramTypes'
+import { replaceHandleData } from './animgraphMutation'
+import type { AnimgraphObject } from './animgraphTypes'
 import type { CommandContext } from './commands/execute'
 import { executeCommand, undoCommand } from './commands/execute'
 import type { GraphCommand } from './commands/types'
 import { commandLabel } from './commands/types'
 import {
-  findStateMachineDiagramRootAncestor,
-  isDiagramPortalNode,
+  isDiagramPortalNode
 } from './DiagramConversion'
-import {
-  bridgePortalHostId,
-  collectHostBoxIdsForPortalChain,
-  collectPortalChainForCrossView,
-} from './portalTopology'
+import { mutationCtxFromRenderData } from './diagramMutationCtx'
+import type { DiagramConnection, RenderData, RenderNode } from './diagramTypes'
 import {
   appendChild,
   DEFAULT_CHILD_SLOT,
@@ -20,6 +16,10 @@ import {
   getChildSlot,
   removeChild,
 } from './nodeChildSlots'
+import {
+  collectHostBoxIdsForPortalChain,
+  collectPortalChainForCrossView
+} from './portalTopology'
 
 /** Position-only patch for move operations. */
 export interface NodePositionState {
@@ -279,11 +279,6 @@ export function cloneAnimgraphData(data: AnimgraphObject): AnimgraphObject {
   return JSON.parse(JSON.stringify(data)) as AnimgraphObject
 }
 
-function cloneNodesToInit(refs: AnimgraphNodeLike[] | undefined): AnimgraphNodeLike[] {
-  if (!refs?.length) return []
-  return JSON.parse(JSON.stringify(refs)) as AnimgraphNodeLike[]
-}
-
 function cloneFloatingHandleIds(ids: Set<string> | undefined): string[] {
   return ids?.size ? [...ids] : []
 }
@@ -370,7 +365,6 @@ export interface ConnectionDeleteSnapshot {
   connections: DiagramConnection[]
   targetHandleId: string
   targetHandleData: AnimgraphObject
-  nodesToInit: AnimgraphNodeLike[]
   floatingHandleIds: string[]
   /** Portal boxes removed by disconnect GC — restored on undo. */
   portalPlacements: AddedNodePlacement[]
@@ -435,7 +429,6 @@ export function captureConnectionDeleteSnapshot(
     connections: cloneConnections(graphData.connections),
     targetHandleId: originalNodeId,
     targetHandleData: cloneAnimgraphData(targetHandle.Data),
-    nodesToInit: cloneNodesToInit(graphData.originalAnimgraph?.nodesToInit),
     floatingHandleIds: cloneFloatingHandleIds(graphData.floatingHandleIds),
     portalPlacements,
     hostBoxIds: collectHostBoxIdsForPortals(graphData, portalIds),
@@ -447,12 +440,12 @@ export function restoreConnectionDeleteSnapshot(
   snapshot: ConnectionDeleteSnapshot
 ): void {
   graphData.connections = cloneConnections(snapshot.connections)
-  const targetHandle = graphData.handlesRegistry.get(snapshot.targetHandleId) as AnimgraphNode | undefined
-  if (targetHandle) {
-    targetHandle.Data = cloneAnimgraphData(snapshot.targetHandleData)
-  }
-  if (graphData.originalAnimgraph) {
-    graphData.originalAnimgraph.nodesToInit = cloneNodesToInit(snapshot.nodesToInit)
+  if (graphData.handlesRegistry.has(snapshot.targetHandleId)) {
+    replaceHandleData(
+      mutationCtxFromRenderData(graphData),
+      snapshot.targetHandleId,
+      cloneAnimgraphData(snapshot.targetHandleData)
+    )
   }
   graphData.floatingHandleIds = new Set(snapshot.floatingHandleIds)
 

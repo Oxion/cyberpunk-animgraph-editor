@@ -26,6 +26,7 @@ const {
   notifySelectedHandleDataChanged,
   snapshotHandleField,
   recordHandleFieldEdit,
+  mutateSelectedHandleData,
 } = inject<NodeDetailsContext>(nodeDetailsContextKey)!
 
 const typeName = computed(() => props.structType || 'Vector4')
@@ -56,15 +57,19 @@ function blank(): Record<string, unknown> {
 }
 
 function setAxis(payload: { axis: string; value: number }) {
-  const d = data.value
-  if (!d) return
   const before = snapshotHandleField(props.dataKey)
-  let obj = asRecord(d[props.dataKey])
-  if (!obj) {
-    obj = blank()
-    d[props.dataKey] = obj
+  if (
+    !mutateSelectedHandleData([props.dataKey], (d) => {
+      let obj = asRecord(d[props.dataKey])
+      if (!obj) {
+        obj = blank()
+        d[props.dataKey] = obj
+      }
+      writeNumber(obj, payload.axis, payload.value)
+    })
+  ) {
+    return
   }
-  writeNumber(obj, payload.axis, payload.value)
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(props.dataKey, before)
 }

@@ -20,6 +20,7 @@ const {
   notifySelectedHandleDataChanged,
   snapshotHandleField,
   recordHandleFieldEdit,
+  mutateSelectedHandleData,
 } = inject<NodeDetailsContext>(nodeDetailsContextKey)!
 
 const data = computed(() => {
@@ -55,10 +56,8 @@ function ensureArray(d: Record<string, unknown>): unknown[] {
 }
 
 function mutate(immediate: boolean, fn: (arr: unknown[]) => void) {
-  const d = data.value
-  if (!d) return
   const before = snapshotHandleField(props.dataKey)
-  fn(ensureArray(d))
+  if (!mutateSelectedHandleData([props.dataKey], (d) => fn(ensureArray(d)))) return
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(props.dataKey, before, { immediate })
 }

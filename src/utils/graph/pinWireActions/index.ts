@@ -31,8 +31,10 @@ export { classifyConnectWire } from './classify'
 export { areSameDiagramBranch } from './branchGate'
 export { resolveConnectEndpoints } from './portalResolve'
 export {
+  collectHandlesReachableFromRoot,
   collectReachableHandleIds,
   isConsumerReachable,
+  isHandleReachableFromRoot,
   isHandleReachableFromNodesToInit,
 } from './reachability'
 export {

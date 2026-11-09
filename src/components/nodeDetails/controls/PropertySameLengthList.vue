@@ -32,6 +32,7 @@ const {
   snapshotHandleFields,
   recordHandleFieldEdit,
   recordHandleFieldsEdit,
+  mutateSelectedHandleData,
 } = inject<NodeDetailsContext>(nodeDetailsContextKey)!
 
 const data = computed(() => {
@@ -95,10 +96,8 @@ function mutateField(
   immediate: boolean,
   fn: (arr: unknown[]) => void
 ) {
-  const d = data.value
-  if (!d) return
   const before = snapshotHandleField(fieldKey)
-  fn(ensureArray(d, fieldKey))
+  if (!mutateSelectedHandleData([fieldKey], (d) => fn(ensureArray(d, fieldKey)))) return
   notifySelectedHandleDataChanged()
   recordHandleFieldEdit(fieldKey, before, { immediate })
 }
@@ -148,23 +147,31 @@ function onPatch(fieldKey: string, index: number, patch: StructValuePatch) {
 }
 
 function addRow() {
-  const d = data.value
-  if (!d) return
   const before = snapshotHandleFields(props.groupFields)
-  for (const key of props.groupFields) {
-    ensureArray(d, key).push(blankElement(key))
+  if (
+    !mutateSelectedHandleData(props.groupFields, (d) => {
+      for (const key of props.groupFields) {
+        ensureArray(d, key).push(blankElement(key))
+      }
+    })
+  ) {
+    return
   }
   notifySelectedHandleDataChanged()
   recordHandleFieldsEdit(props.groupFields, before)
 }
 
 function removeRow(index: number) {
-  const d = data.value
-  if (!d) return
   const before = snapshotHandleFields(props.groupFields)
-  for (const key of props.groupFields) {
-    const arr = ensureArray(d, key)
-    if (index >= 0 && index < arr.length) arr.splice(index, 1)
+  if (
+    !mutateSelectedHandleData(props.groupFields, (d) => {
+      for (const key of props.groupFields) {
+        const arr = ensureArray(d, key)
+        if (index >= 0 && index < arr.length) arr.splice(index, 1)
+      }
+    })
+  ) {
+    return
   }
   notifySelectedHandleDataChanged()
   recordHandleFieldsEdit(props.groupFields, before)

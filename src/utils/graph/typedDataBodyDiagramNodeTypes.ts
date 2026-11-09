@@ -127,6 +127,7 @@ export const TYPED_DATA_BODY_DIAGRAM_NODE_TYPES_SET = new Set([
   'animAnimNode_Inertialization',
   'animAnimNode_MixerSlot',
   'animAnimNode_FPPCamera',
+  'nrAnimNode_HybridFPPLook',
   'animAnimNode_GenerateIkAnimFeatureData',
   'animAnimNode_LookAtController',
   'animAnimNode_LookAtApplyVehicleRestrictions',

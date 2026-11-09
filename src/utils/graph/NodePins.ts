@@ -1,13 +1,9 @@
 import type { AnimgraphNode } from './animgraphTypes'
 import type { RenderData, RenderNode } from './diagramTypes'
+import { mutateHandleData } from './animgraphMutation'
+import { mutationCtxFromRenderData } from './diagramMutationCtx'
 import { NodeDefinitionRegistry } from '../NodeDefinition'
-import {
-  generateArrayElementTemplate,
-  getAnimTypeFields,
-  isArrayFieldType,
-  isRefFieldType,
-  isWrefFieldType,
-} from '../animFieldSchema'
+import { createBlankInputArraySlot } from './pinArrayTemplates'
 import {
   isDiagramOverviewLeaf,
   isDiagramPortalNode,
@@ -264,69 +260,30 @@ export function getInputSlotMeta(
   return { handle, inputName: parsed.inputName, index: parsed.index }
 }
 
-/** Deep-clone a blank array slot for `inputName` (from types, dataTemplate, or existing slots). */
-export function createBlankInputArraySlot(
-  handle: AnimgraphNode,
-  inputName: string,
-  nodeType: string
-): unknown {
-  const fromType = generateArrayElementTemplate(nodeType, inputName)
-  const template = NodeDefinitionRegistry.getHandleTypeDataTemplate(nodeType)?.[inputName]
-  let prototype: unknown = fromType
-  if (!prototype) {
-    if (Array.isArray(template) && template.length > 0) {
-      prototype = template[0]
-    } else if (template && typeof template === 'object' && !Array.isArray(template)) {
-      prototype = template
-    } else {
-      const existing = handle.Data?.[inputName]
-      if (Array.isArray(existing) && existing.length > 0) {
-        prototype = existing[0]
-      }
-    }
-  }
-
-  if (prototype && typeof prototype === 'object') {
-    const clone = structuredClone(prototype) as Record<string, unknown>
-    if ('node' in clone) clone.node = null
-    if ('HandleRefId' in clone) delete clone.HandleRefId
-    if ('HandleId' in clone) delete clone.HandleId
-    return clone
-  }
-
-  const fieldDef = getAnimTypeFields(nodeType).find((f) => f.key === inputName)
-  if (fieldDef && isArrayFieldType(fieldDef.type)) {
-    const inner = fieldDef.type.array
-    if (isRefFieldType(inner) || isWrefFieldType(inner)) {
-      return null
-    }
-  }
-
-  return { $type: 'animPoseLink', node: null }
-}
+export { createBlankInputArraySlot } from './pinArrayTemplates'
 
 /**
- * Append a blank slot to an array input. Returns the new index, or null on failure.
- * Also syncs `numInputs` when that field exists on the handle Data.
+ * Append a blank slot to an array input. Prefer passing RenderData so mutation facade runs.
  */
 export function appendInputArraySlot(
   handle: AnimgraphNode,
   inputName: string,
-  nodeType: string
+  nodeType: string,
+  renderData?: RenderData
 ): number | null {
-  const current = handle.Data?.[inputName]
-  if (!Array.isArray(current)) {
-    handle.Data[inputName] = []
-  }
-  const arr = handle.Data[inputName] as unknown[]
-  if (!Array.isArray(arr)) return null
-  arr.push(createBlankInputArraySlot(handle, inputName, nodeType))
-  if ('numInputs' in handle.Data) {
-    handle.Data.numInputs = arr.length
-  }
-  return arr.length - 1
+  if (!renderData) return null
+  let newIndex: number | null = null
+  mutateHandleData(
+    mutationCtxFromRenderData(renderData),
+    handle.HandleId,
+    [inputName],
+    (data) => {
+    if (!Array.isArray(data[inputName])) data[inputName] = []
+    const arr = data[inputName] as unknown[]
+      arr.push(createBlankInputArraySlot(handle, inputName, nodeType))
+      newIndex = arr.length - 1
+    }
+  )
+  return newIndex
 }
 
-export function getNodeInputHandler(inputName: string, nodeType: string) {
-  return NodeDefinitionRegistry.getNodeInputHandler(nodeType, inputName)
-}

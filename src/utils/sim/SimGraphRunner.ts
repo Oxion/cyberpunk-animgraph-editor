@@ -3001,7 +3001,8 @@ function updateFromNode(node: AnimgraphNode | null, ctx: SimGraphRunnerWalkCtx):
   }
 
   // FPPCamera — UpdateInputs → shared pitch; Sample rewrites camera bones.
-  if (t === 'animAnimNode_FPPCamera') {
+  // nrAnimNode_HybridFPPLook — same Update; hybrid Sample (see sampleWalk).
+  if (t === 'animAnimNode_FPPCamera' || t === 'nrAnimNode_HybridFPPLook') {
     followUpdate(node, resolvePoseInputLink(handles, d), ctx)
     if (!wasBoneOpActive(ctx, node.HandleId)) {
       let data = ctx.fppCameraDyn.get(node.HandleId)

@@ -5,6 +5,8 @@
 
 import type { AnimgraphNode } from './animgraphTypes'
 import type { RenderData, RenderNode } from './diagramTypes'
+import type { AnimgraphMutationCtx } from './animgraphMutation'
+import { mutateHandleData } from './animgraphMutation'
 import { ANIM_NODE_STATE_TYPE_SET } from './animNodeStateTypes'
 import { isStateMachineNodeType } from './animNodeTypeUtils'
 import { DEFAULT_CHILD_SLOT, getChildSlot } from './nodeChildSlots'
@@ -175,17 +177,21 @@ export function readNumericHandleField(
 }
 
 export function writeNumericHandleField(
+  ctx: AnimgraphMutationCtx,
+  handleId: string,
   handle: AnimgraphNode,
   key: string,
   next: number
 ): void {
   if (!handle.Data) return
   const raw = handle.Data[key]
-  if (raw && typeof raw === 'object' && '$value' in (raw as object)) {
-    handle.Data[key] = { ...(raw as object), $value: next }
-  } else {
-    handle.Data[key] = next
-  }
+  const value =
+    raw && typeof raw === 'object' && '$value' in (raw as object)
+      ? { ...(raw as object), $value: next }
+      : next
+  mutateHandleData(ctx, handleId, [key], (data) => {
+    data[key] = value
+  })
 }
 
 export function getStatesGroupForSm(

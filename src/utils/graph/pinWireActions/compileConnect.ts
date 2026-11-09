@@ -5,12 +5,9 @@ import { NodeDefinitionRegistry } from '../../NodeDefinition'
 import { DIAGRAM_CONNECTION_TYPE_INPUT } from '../diagramConnectionTypes'
 import { findOutboundPortalHop, isPortalHopConnection } from '../portalTopology'
 import { isDiagramPortalNode } from '../DiagramConversion'
-import {
-  appendInputArraySlot,
-  getInputSlotMeta,
-  getNodeInputHandler,
-  parsePinName,
-} from '../NodePins'
+import { appendInputArraySlot, getInputSlotMeta, parsePinName } from '../NodePins'
+import { countPinSlots } from '../animgraphMutation'
+import { mutationCtxFromRenderData } from '../diagramMutationCtx'
 import { areSameDiagramBranch } from './branchGate'
 import { classifyConnectWire } from './classify'
 import { resolveConnectEndpoints } from './portalResolve'
@@ -169,14 +166,12 @@ export function compileConnectActions(
     },
   })
 
-  if (graduate) {
-    if (wireKind === 'sharedRef' || wireKind === 'exclusiveRef') {
-      actions.push({
-        kind: 'promote-floating',
-        handleId: fromHandleId,
-        appendNodesToInit: NodeDefinitionRegistry.isNodesToInitType(fromType),
-      })
-    }
+  // Attach clears floating regardless of root reachability.
+  if (wireKind === 'sharedRef' || wireKind === 'exclusiveRef') {
+    actions.push({
+      kind: 'promote-floating',
+      handleId: fromHandleId,
+    })
   }
 
   return {
@@ -217,10 +212,18 @@ export function resolveAppendPinName(
 
   let newIndex: number | null = null
   if (isArrayInputField(nodeType, parsed.inputName)) {
-    newIndex = appendInputArraySlot(handle, parsed.inputName, nodeType)
+    newIndex = appendInputArraySlot(
+      handle,
+      parsed.inputName,
+      nodeType,
+      renderData
+    )
   } else {
-    const handler = getNodeInputHandler(parsed.inputName, nodeType)
-    newIndex = handler.count(handle)
+    newIndex = countPinSlots(
+      mutationCtxFromRenderData(renderData),
+      String(handle.HandleId),
+      parsed.inputName
+    )
   }
   if (newIndex == null || newIndex < 0) return null
   return `${parsed.inputName}[${newIndex}]`

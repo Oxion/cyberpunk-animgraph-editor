@@ -339,6 +339,8 @@ export class PixiGraphRenderer {
   private _interactiveDirtyNodeIds = new Set<string>()
 
   // View state
+  private _minZoom = 0.001
+  private _maxZoom = 5.0
   private _zoomRef: WritableSignal<number>
   private _panXRef: WritableSignal<number>
   private _panYRef: WritableSignal<number>

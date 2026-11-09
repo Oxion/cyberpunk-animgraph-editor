@@ -10,22 +10,18 @@ export type {
   DeleteNodeApplyResult,
   DeleteNodeDenialReason,
   DeleteNodePlan,
-  DetachHandleRefAction,
+  DeleteAnimgraphHandlesAction,
   DisconnectWireAction,
   FitParentGroupAction,
   ReindexSmStatesAction,
-  RemapOutTransitionIndicesAction,
-  RemapTargetStateIndicesAction,
   RemoveDiagramNodeAction,
   RestackPropertyGroupAction,
   SyncSmSectionMetadataAction,
-  UnregisterHandleAction,
 } from './types'
 
 export {
   canDeleteNode,
   collectAffectedSubtree,
-  collectDetachHandleRefs,
   collectDisconnectWires,
   compileDeleteNodeActions,
   resolveBoxHandleId,

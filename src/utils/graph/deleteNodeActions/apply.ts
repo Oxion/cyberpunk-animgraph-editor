@@ -3,7 +3,8 @@
  */
 
 import type { DiagramConnection, RenderData } from '../diagramTypes'
-import { NodeDefinitionRegistry } from '../../NodeDefinition'
+import { deleteHandles } from '../animgraphMutation'
+import { mutationCtxFromRenderData } from '../diagramMutationCtx'
 import { isPropertyGroupNode } from '../diagramAddPolicy'
 import { isPortalHopConnection } from '../portalTopology'
 import { removeFloatingHandle } from '../floatingHandles'
@@ -13,8 +14,6 @@ import { applyDisconnectPlan } from '../pinWireActions'
 import { collectDisconnectWires } from './compile'
 import {
   applyReindexSmStates,
-  applyRemapOutTransitionIndices,
-  applyRemapTargetStateIndices,
   applyRestackPropertyGroup,
   applySyncSmSectionMetadata,
 } from './sideEffects'
@@ -22,61 +21,7 @@ import type {
   DeleteNodeAction,
   DeleteNodeApplyResult,
   DeleteNodePlan,
-  DetachHandleRefAction,
 } from './types'
-
-function removeFromNodesToInit(renderData: RenderData, handleId: string): void {
-  const nodesToInit = renderData.originalAnimgraph?.nodesToInit
-  if (!nodesToInit) return
-  for (let i = nodesToInit.length - 1; i >= 0; i--) {
-    const ref = nodesToInit[i]
-    if (
-      typeof ref === 'object' &&
-      ref &&
-      'HandleRefId' in ref &&
-      String((ref as { HandleRefId: string }).HandleRefId) === handleId
-    ) {
-      nodesToInit.splice(i, 1)
-    }
-  }
-}
-
-function applyDetachHandleRef(
-  renderData: RenderData,
-  action: DetachHandleRefAction
-): void {
-  const parent = renderData.handlesRegistry.get(action.parentHandleId)
-  if (!parent?.Data) return
-  const slot = parent.Data[action.slotName]
-  if (action.index < 0) {
-    if (
-      slot &&
-      typeof slot === 'object' &&
-      'HandleRefId' in slot &&
-      String((slot as { HandleRefId: string }).HandleRefId) === action.handleId
-    ) {
-      delete parent.Data[action.slotName]
-    }
-    return
-  }
-  if (!Array.isArray(slot)) return
-  const idx = slot.findIndex(
-    (item) =>
-      item &&
-      typeof item === 'object' &&
-      'HandleRefId' in item &&
-      String((item as { HandleRefId: string }).HandleRefId) === action.handleId
-  )
-  if (idx < 0) return
-  slot.splice(idx, 1)
-  parent.Data[action.slotName] = slot
-  const parentType = String(parent.Data.$type ?? '')
-  const handler = NodeDefinitionRegistry.getHandleTypeChildrenHandler(
-    parentType,
-    action.slotName
-  )
-  handler?.ensureOrder(renderData.handlesRegistry, parent, action.slotName)
-}
 
 /** Find live wire after array-pin reindex (same from/to, possibly new pinName). */
 function findLiveDisconnectTarget(
@@ -169,27 +114,21 @@ export function applyDeleteNodeActions(
     }
   }
 
-  // Phase 2: detach contain refs on surviving parents.
+  // Phase 2: animgraph deleteHandles (strip inbound + registry).
   for (const action of actions) {
-    if (action.kind === 'detach-handle-ref') applyDetachHandleRef(renderData, action)
-  }
-
-  // Phase 3: unregister handles.
-  for (const action of actions) {
-    if (action.kind !== 'unregister-handle') continue
-    if (!renderData.handlesRegistry.has(action.handleId)) continue
-    removeFromNodesToInit(renderData, action.handleId)
-    if (renderData.floatingHandleIds?.has(action.handleId)) {
-      removeFloatingHandle(renderData, action.handleId, {
-        deleteFromRegistry: true,
-      })
-    } else {
-      renderData.handlesRegistry.delete(action.handleId)
+    if (action.kind !== 'delete-animgraph-handles') continue
+    const ctx = mutationCtxFromRenderData(renderData)
+    for (const handleId of action.handleIds) {
+      if (renderData.floatingHandleIds?.has(handleId)) {
+        // Clear floating mark; registry delete is done by deleteHandles.
+        removeFloatingHandle(renderData, handleId, { deleteFromRegistry: false })
+      }
     }
-    removedHandleIds.push(action.handleId)
+    const { deleted } = deleteHandles(ctx, action.handleIds)
+    removedHandleIds.push(...deleted)
   }
 
-  // Phase 4: remove diagram boxes (leaf-first order preserved in actions list).
+  // Phase 3: remove diagram boxes (leaf-first order preserved in actions list).
   for (const action of actions) {
     if (action.kind !== 'remove-diagram-node') continue
     const id = action.placement.node.id
@@ -199,7 +138,7 @@ export function applyDeleteNodeActions(
     deadIds.add(id)
   }
 
-  // Phase 5: fit surviving property groups (generic).
+  // Phase 4: fit surviving property groups (generic).
   for (const action of actions) {
     if (action.kind !== 'fit-parent-group') continue
     const parent = renderData.allNodes.get(action.parentId)
@@ -209,17 +148,11 @@ export function applyDeleteNodeActions(
     }
   }
 
-  // Phase 6: type-specific side effects (reindex / remap / restack).
+  // Phase 5: type-specific side effects (reindex / remap / restack).
   for (const action of actions) {
     switch (action.kind) {
       case 'reindex-sm-states':
         applyReindexSmStates(renderData, action, markDirty)
-        break
-      case 'remap-target-state-indices':
-        applyRemapTargetStateIndices(renderData, action, markDirty)
-        break
-      case 'remap-out-transition-indices':
-        applyRemapOutTransitionIndices(renderData, action, markDirty)
         break
       case 'restack-property-group':
         applyRestackPropertyGroup(renderData, action, markDirty)

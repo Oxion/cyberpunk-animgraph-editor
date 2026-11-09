@@ -20,4 +20,7 @@ export {
   findPreferredSinkUnderHost,
   isHandleInStructuralCore,
 } from './collectStructuralCore'
-export { demoteOrphanNodesToInitAfterDisconnect } from './demoteOnDisconnect'
+export {
+  demoteOrphanNodesToInitAfterDisconnect,
+  type DemoteOrphanResult,
+} from './demoteOnDisconnect'
