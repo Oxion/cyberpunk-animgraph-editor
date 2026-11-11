@@ -1,6 +1,7 @@
 import type { AppToolId } from '../appTools/catalog'
 import { appToolItems } from '../appTools/catalog'
-import { getAppCommand, type AppCommandId } from '../commands'
+import { getAppCommand } from '../commands/catalog'
+import type { AppCommandId } from '../commands/types'
 import type { AppContext, AppFocus } from '../when'
 import { whenTrue } from '../when'
 import {

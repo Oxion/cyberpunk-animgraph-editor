@@ -25,14 +25,7 @@
             @open="openWelcomePanel"
             @add-animgraph="openAddAnimgraphDialog"
             @edit-project="openProjectDialog"
-            @save="saveCurrentGraph"
-            @save-as="showSaveAsDialog = true"
             @export="showExportDialog = true"
-            @undo="undoGraphAction"
-            @redo="redoGraphAction"
-            @delete="deleteSelection"
-            @deselect-all="deselectAll"
-            @select-children="selectChildren"
             @move-sm-state-up="moveActiveSelectedSmStateByDelta(-1)"
             @move-sm-state-down="moveActiveSelectedSmStateByDelta(1)"
             @layout-sm-states-group="layoutActiveSelectedSmStatesGroup"
@@ -229,29 +222,6 @@
               :min-height="SIDEBAR_PANEL_MIN.tools"
               :max-height="sidebarPanelMaxHeights.tools"
               :resolve-select-inputs-new-count="resolveSelectInputsNewCount"
-              @move-start="beginGrabMove"
-              @move-confirm="confirmGrabMove"
-              @move-cancel="cancelGrabMove"
-              @move-clear-axis-lock="clearGrabAxisLock"
-              @move-set-axis-lock="setGrabAxisLock"
-              @resize-start="beginResize"
-              @resize-confirm="confirmResize"
-              @resize-cancel="cancelResize"
-              @resize-clear-side-lock="clearResizeSideLock"
-              @resize-set-side-lock="setResizeSideLock"
-              @add-node="onToolsAddNode"
-              @paste-nodes="pasteNodes"
-              @add-connection="onToolsCreateConnection"
-              @arrange-inputs-select-all="selectAllIncomingConnections"
-              @arrange-inputs-deselect-all="deselectAllIncomingConnections"
-              @arrange-inputs-toggle="onToolsArrangeInputsToggle"
-              @arrange-inputs="onToolsArrangeInputs"
-              @select-inputs-add="onToolsSelectInputsAdd"
-              @arrange-selection="onToolsArrangeSelection"
-              @attach-create="createAttachHandleActionForUI"
-              @attach-clear="clearAttachHandleAction"
-              @attach-data-from-selected="onToolsAttachDataFromSelected"
-              @attach-run="onToolsAttachRun"
             />
 
             <NodeDetailsPanel
@@ -600,7 +570,6 @@ import {
   openAddAnimgraphDialog,
   openProjectDialog,
   bindDiagramCanvasEl,
-  saveCurrentGraph,
   showSaveAsDialog,
   showAddAnimgraphDialog,
   showExportDialog,
@@ -653,7 +622,6 @@ import {
   parallelBodyViews,
   pinBodyView,
   popEntry,
-  setViewSelection,
   toggleBodyView,
   bodyViewRoot,
   activeBodyView,
@@ -679,7 +647,6 @@ import {
   nodeDescriptionRef,
   nodePositionRef,
   nodeSizeRef,
-  selectedIncomingConnectionsRef,
   selectedNodeRef,
   selectedNodeConnectionsComputed,
   selectedNodeIdsRef,
@@ -707,54 +674,35 @@ import {
   historyRevisionRef,
   installGraphHistoryRuntime,
   pushDescriptionHistory,
-  redoGraphAction,
   redoTitle,
   runWithLayoutHistory,
   trackLayoutBeforeChange,
-  undoGraphAction,
   undoTitle,
 } from './stores/graphHistory'
 import {
   updateActiveNodes,
 } from './stores/graphPaint'
 import {
-  arrangeSelectedNodesWithElk,
-  beginGrabMove,
-  beginResize,
   bindMoveResizeSession,
   cancelGrabMove,
   cancelResize,
-  clearGrabAxisLock,
-  clearResizeSideLock,
-  confirmGrabMove,
-  confirmResize,
   detachModalPointerListeners,
-  moveInputNodesOnly,
   moveSelectedNodeByDelta,
-  setGrabAxisLock,
-  setResizeSideLock,
   trackLastPointerClient,
 } from './composables/tools/moveResizeSession'
 import {
-  createConnection,
   deleteConnection,
   handlePinConnect,
   handlePinRewire,
 } from './stores/graphWireRecord'
 import {
   attachHandleAction,
-  clearAttachHandleAction,
   createAttachHandleAction,
-  createAttachHandleActionForUI,
 } from './composables/tools/useAttachHandleTool'
-import {
-  addNewNode,
-} from './stores/graphNodeCrud'
 import {
   autoResizeParents,
   pressedArrowKeys,
 } from './stores/modalGestureUi'
-import { formatAddNodeDenial } from './components/tools/addNodeCopy'
 import {
   bindGraphMutations,
   canLayoutSmStatesGroup,
@@ -787,7 +735,6 @@ import type { AppWindowState, RenderStatsWindowPayload } from './types/AppWindow
 import type { AnimgraphNode } from './utils/graph/animgraphTypes'
 import type { DiagramConnection, RenderData } from './utils/graph/diagramTypes'
 import type { DirectChildrenLayoutMode } from './utils/graph/DirectChildrenLayout'
-import { getConnectionKey } from './utils/graph/diagramModel'
 import { applyOwnerFieldEffects } from './utils/graph/animgraphMutation'
 import { mutationCtxFromRenderData } from './utils/graph/diagramMutationCtx'
 import { PixiGraphRenderer } from './utils/PixiGraphRenderer'
@@ -799,7 +746,6 @@ import {
   isStateOverviewLeaf,
   resolveStateMachineInfoNode
 } from './utils/graph/DiagramConversion'
-import { type ArrangeSelectionAlgorithm, type ElkLayeredVariant } from './utils/graph/ElkGraphLayout'
 import {
   canDeleteNode,
 } from './utils/graph/deleteNodePlan'
@@ -827,13 +773,8 @@ import {
   resolveLiveStateIndex,
 } from './utils/graph/smStateSlot'
 import { buildAppContext } from './when'
-import {
-  deleteSelection,
-  deselectAll,
-  pasteNodes,
-  registerAppCommands,
-  selectChildren,
-} from './appCommands'
+import { registerAppCommands } from './appCommands'
+import { collectInputNodeIds } from './appCommands/selectInputsAdd'
 import { toggleAppTool } from './stores/appToolSelect'
 import { whenEnabled, liveInProgressTool } from './stores/appContext'
 import { hotkeyRegistry } from './stores/hotkeyBindings'
@@ -1409,68 +1350,6 @@ const resolveSelectInputsNewCount = (recursive: boolean) => {
   return inputIds.filter((id) => !selectedSet.has(id)).length
 }
 
-const onToolsAddNode = (payload: { id: string; type: string; slotName?: string }) => {
-  if (!whenEnabled('graphEditable')) return
-  {
-    const result = addNewNode(requireActiveDiagramId(), payload.id, payload.type, payload.slotName)
-    if (!result.ok) {
-      if (result.message) alert(result.message)
-      else alert(formatAddNodeDenial(result.reasons, { diagramNodeType: result.diagramNodeType }))
-    }
-  }
-}
-
-const onToolsCreateConnection = (payload: {
-  fromId: string
-  toId: string
-  pinName: string
-}) => {
-  if (!whenEnabled('graphEditable')) return
-  const result = createConnection(
-    requireActiveDiagramId(),
-    payload.fromId,
-    payload.toId,
-    payload.pinName
-  )
-  if (!result.ok && result.message) alert(result.message)
-}
-
-const onToolsArrangeInputsToggle = (key: string, checked: boolean) => {
-  if (checked) selectedIncomingConnectionsRef.value.add(key)
-  else selectedIncomingConnectionsRef.value.delete(key)
-}
-
-const onToolsArrangeInputs = (payload: { margin: number; spacing: number }) => {
-  if (!whenEnabled('graphEditable')) return
-  moveInputNodesOnly(requireActiveDiagramId(), payload.margin, payload.spacing)
-}
-
-const onToolsSelectInputsAdd = (recursive: boolean) => {
-  if (!whenEnabled('graphEditable')) return
-  addInputNodesToSelection(recursive)
-}
-
-const onToolsArrangeSelection = async (payload: {
-  algorithm: ArrangeSelectionAlgorithm
-  layeredVariant: ElkLayeredVariant
-  nodeNodeSpacing: number
-  layerSpacing: number
-  forceIterations: number
-}) => {
-  if (!whenEnabled('graphEditable')) return
-  await arrangeSelectedNodesWithElk(requireActiveDiagramId(), payload)
-}
-
-const onToolsAttachDataFromSelected = () => {
-  if (!whenEnabled('graphEditable')) return
-  attachHandleAction.value?.dataFromSelected()
-}
-
-const onToolsAttachRun = () => {
-  if (!whenEnabled('graphEditable')) return
-  attachHandleAction.value?.run()
-}
-
 const updateGraphInteractionGate = () => {
   const gate = () => {
     if (!diagramHotkeyFocus.value) return false
@@ -1637,59 +1516,6 @@ const toggleSimCard = () => {
   showSimCard.value = !showSimCard.value
 }
 
-// Node selection methods
-const collectInputNodeIds = (
-  seedIds: Iterable<string>,
-  connections: DiagramConnection[],
-  recursive: boolean
-): string[] => {
-  const collected = new Set<string>()
-  let frontier = new Set(seedIds)
-  const expanded = new Set<string>()
-
-  while (frontier.size > 0) {
-    const nextFrontier = new Set<string>()
-    for (const nodeId of frontier) {
-      if (expanded.has(nodeId)) continue
-      expanded.add(nodeId)
-
-      for (const conn of connections) {
-        if (conn.to !== nodeId) continue
-        collected.add(conn.from)
-        if (recursive && !expanded.has(conn.from)) {
-          nextFrontier.add(conn.from)
-        }
-      }
-    }
-    frontier = nextFrontier
-  }
-
-  return [...collected]
-}
-
-const addInputNodesToSelection = (recursive = false) => {
-  const active = getActiveDiagramRenderer()
-  const data = getActiveRenderData()
-  if (!data || !active || selectedNodeIdsRef.value.length === 0) return
-
-  const merged = new Set(selectedNodeIdsRef.value)
-  for (const id of collectInputNodeIds(
-    selectedNodeIdsRef.value,
-    data.connections,
-    recursive
-  )) {
-    merged.add(id)
-  }
-
-  const mergedIds = [...merged]
-  const primaryId = selectedNodeRef.value?.id && merged.has(selectedNodeRef.value.id)
-    ? selectedNodeRef.value.id
-    : mergedIds[0] ?? null
-
-  active.setSelectedNodes(mergedIds, primaryId)
-  setViewSelection(currentView.value.id, { nodeIds: mergedIds, primaryNodeId: primaryId })
-}
-
 const panToSelectedNode = () => {
   if (selectedNodeRef.value) {
     void navigateToNode(requireActiveDiagramId(), selectedNodeRef.value.id)
@@ -1707,19 +1533,6 @@ const logSelectedNodeData = () => {
 const panToConnectedNode = (connection: DiagramConnection, isIncoming: boolean) => {
   const targetNodeId = isIncoming ? connection.from : connection.to
   void navigateToNode(requireActiveDiagramId(), targetNodeId)
-}
-
-// Connection selection methods
-const selectAllIncomingConnections = () => {
-  if (selectedNodeConnectionsComputed.value) {
-    selectedNodeConnectionsComputed.value.incoming.forEach(conn => {
-      selectedIncomingConnectionsRef.value.add(getConnectionKey(conn))
-    })
-  }
-}
-
-const deselectAllIncomingConnections = () => {
-  selectedIncomingConnectionsRef.value.clear()
 }
 
 // Node description methods

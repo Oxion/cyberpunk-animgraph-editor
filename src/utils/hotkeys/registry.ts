@@ -1,7 +1,12 @@
-import { getAppCommand, getAppCommandHandler } from '../../commands'
+import { executeCommand, getAppCommand, type AppCommandArgs, type AppCommandId } from '../../commands'
 import { defaultWhenPredicates, whenTrue, type AppContext, type WhenPredicateMap } from '../../when'
 import type { HotkeyBindingConfig, ResolvedHotkeyBinding } from './types'
 import { chordMatchesEvent } from './match'
+
+/** Command ids with no typed args — all current hotkey bindings. */
+type ZeroArgCommandId = {
+  [K in AppCommandId]: AppCommandArgs<K> extends undefined ? K : never
+}[AppCommandId]
 
 export function resolveHotkeyBindings(
   configs: HotkeyBindingConfig[],
@@ -36,12 +41,7 @@ export class HotkeyRegistry {
         event.preventDefault()
       }
 
-      const handler = getAppCommandHandler(binding.id)
-      if (handler) {
-        handler(event)
-      } else if (!command.hidden) {
-        console.warn(`[hotkeys] No handler registered for "${binding.id}"`)
-      }
+      executeCommand(binding.id as ZeroArgCommandId, event)
 
       return true
     }

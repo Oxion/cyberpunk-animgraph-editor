@@ -1,6 +1,9 @@
+import './types'
 import { registerAppCommandDefs } from './catalog'
 import { registerAllAppCommandHandlers } from './registerHandlers'
 
+export type * from './types'
+export { Commands } from './ids'
 export { copySelection } from './copySelection'
 export { pasteNodes } from './pasteNodes'
 export { deleteSelection } from './deleteSelection'

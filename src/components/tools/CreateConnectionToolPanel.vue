@@ -3,7 +3,7 @@
     <Field class="gap-1.5">
       <FieldLabel for="connection-from-id" class="flex items-center gap-1.5 text-xs">
         From Node ID
-        <HotkeyKbd command="addConnection.pickFrom" size="sm" />
+        <HotkeyKbd :command="Commands.addConnection.pickFrom" size="sm" />
       </FieldLabel>
       <InputGroup class="h-8 rounded-sm">
         <InputGroupInput
@@ -30,7 +30,7 @@
     <Field class="gap-1.5">
       <FieldLabel for="connection-to-id" class="flex items-center gap-1.5 text-xs">
         To Node ID
-        <HotkeyKbd command="addConnection.pickTo" size="sm" />
+        <HotkeyKbd :command="Commands.addConnection.pickTo" size="sm" />
       </FieldLabel>
       <InputGroup class="h-8 rounded-sm">
         <InputGroupInput
@@ -98,6 +98,7 @@ import {
   InputGroupInput,
 } from '@/components/ui/input-group'
 import HotkeyKbd from '../HotkeyKbd.vue'
+import { Commands } from '../../appCommands/ids'
 import { commandShortcut } from '../../stores/hotkeyBindings'
 import { getActiveRenderData } from '@/stores/graphProject'
 import { selectedNodeRef } from '@/stores/graphSession'
@@ -162,12 +163,12 @@ watch(
 )
 
 const pickFromTitle = computed(() => {
-  const shortcut = commandShortcut('addConnection.pickFrom')
+  const shortcut = commandShortcut(Commands.addConnection.pickFrom)
   return shortcut ? `Pick from selected node (${shortcut})` : 'Pick from selected node'
 })
 
 const pickToTitle = computed(() => {
-  const shortcut = commandShortcut('addConnection.pickTo')
+  const shortcut = commandShortcut(Commands.addConnection.pickTo)
   return shortcut ? `Pick to selected node (${shortcut})` : 'Pick to selected node'
 })
 

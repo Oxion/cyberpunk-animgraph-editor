@@ -1,4 +1,3 @@
-import { commandEnabled } from '../stores/appContext'
 import { currentView, setViewSelection } from '../stores/bodyViews'
 import { getActiveDiagramRenderer } from '../stores/diagramRenderers'
 import { getActiveRenderData } from '../stores/graphProject'
@@ -6,8 +5,6 @@ import { selectedNodeIdsRef, selectedNodeRef } from '../stores/graphSession'
 import { getChildSlot } from '../utils/graph/nodeChildSlots'
 
 export function selectChildren() {
-  if (!commandEnabled('selection.selectChildren')) return
-
   const active = getActiveDiagramRenderer()
   const data = getActiveRenderData()
   if (!data || !active || selectedNodeIdsRef.value.length === 0) return

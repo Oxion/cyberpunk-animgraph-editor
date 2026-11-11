@@ -10,7 +10,8 @@ import {
   Scaling,
   Wrench,
 } from 'lucide-vue-next'
-import type { AppCommandId } from '../commands'
+import { Commands } from '../appCommands/ids'
+import type { AppCommandId } from '../commands/types'
 
 export type AppToolId =
   | 'move'
@@ -34,11 +35,11 @@ export type AppToolItem = {
 }
 
 export const appToolItems: AppToolItem[] = [
-  { id: 'move', label: 'Move', icon: Move, commandId: 'grabMove.begin', when: 'graphEditable' },
-  { id: 'resize', label: 'Resize', icon: Scaling, commandId: 'resize.begin', when: 'graphEditable' },
-  { id: 'addNode', label: 'Add Node', icon: PlusIcon, commandId: 'addNode.focus', when: 'graphEditable' },
+  { id: 'move', label: 'Move', icon: Move, commandId: Commands.grabMove.begin, when: 'graphEditable' },
+  { id: 'resize', label: 'Resize', icon: Scaling, commandId: Commands.resize.begin, when: 'graphEditable' },
+  { id: 'addNode', label: 'Add Node', icon: PlusIcon, commandId: Commands.addNode.focus, when: 'graphEditable' },
   { id: 'pasteNode', label: 'Paste Node', icon: ClipboardPaste, when: 'graphEditable' },
-  { id: 'addConnection', label: 'Add Connection', icon: Link2, commandId: 'addConnection.focus', when: 'graphEditable' },
+  { id: 'addConnection', label: 'Add Connection', icon: Link2, commandId: Commands.addConnection.focus, when: 'graphEditable' },
   { id: 'arrangeInputs', label: 'Arrange Inputs', icon: AlignStartVertical, when: 'graphEditable' },
   { id: 'selectInputs', label: 'Select Inputs', icon: ListTree, when: 'graphEditable' },
   { id: 'arrangeSelection', label: 'Arrange Selection', icon: LayoutGrid, when: 'graphEditable' },

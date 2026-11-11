@@ -79,6 +79,7 @@ import {
   restoreToolAfterModalGesture,
 } from './moveResizeShared'
 import { cancelResize } from './resizeSession'
+import { Commands } from '../../appCommands/ids'
 import { commandEnabled } from '../../stores/appContext'
 
 /** Non-modal arrow-key gesture: absolute restore + parent grow across key repeats. */
@@ -811,7 +812,7 @@ export const nudgeSelection = (
 }
 
 export const beginGrabMove = () => {
-  if (!commandEnabled('grabMove.begin')) return
+  if (!commandEnabled(Commands.grabMove.begin)) return
   const activeDiagramRenderer = getActiveDiagramRenderer()
   let diagramId: string
   try {

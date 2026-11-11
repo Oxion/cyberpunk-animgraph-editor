@@ -14,3 +14,4 @@ export {
   type AppCommandHandler,
   type AppCommandHandlers,
 } from './handlers'
+export { executeCommand } from './execute'

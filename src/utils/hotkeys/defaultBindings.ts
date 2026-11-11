@@ -1,3 +1,4 @@
+import { Commands } from '../../appCommands/ids'
 import type { HotkeyBindingConfig } from './types'
 
 /**
@@ -7,147 +8,147 @@ import type { HotkeyBindingConfig } from './types'
  */
 export const defaultHotkeyBindings: HotkeyBindingConfig[] = [
   {
-    id: 'history.undo',
+    id: Commands.history.undo,
     chords: [{ key: 'z', mod: true }],
   },
   {
-    id: 'history.redo',
+    id: Commands.history.redo,
     chords: [
       { key: 'y', mod: true },
       { key: 'z', mod: true, shift: true },
     ],
   },
   {
-    id: 'document.save',
+    id: Commands.document.save,
     chords: [{ key: 's', mod: true }],
     allowInTextInput: true,
   },
   {
-    id: 'document.saveAs',
+    id: Commands.document.saveAs,
     chords: [{ key: 's', mod: true, shift: true }],
     allowInTextInput: true,
   },
 
   {
-    id: 'connectionDrag.cancel',
+    id: Commands.connectionDrag.cancel,
     chords: [{ key: 'Escape' }],
   },
 
   {
-    id: 'grabMove.cancel',
+    id: Commands.grabMove.cancel,
     chords: [{ key: 'Escape' }],
   },
   {
-    id: 'grabMove.confirm',
+    id: Commands.grabMove.confirm,
     chords: [{ key: 'Enter' }],
   },
   {
-    id: 'grabMove.lockX',
+    id: Commands.grabMove.lockX,
     chords: [{ key: 'x' }],
   },
   {
-    id: 'grabMove.lockY',
+    id: Commands.grabMove.lockY,
     chords: [{ key: 'y' }],
   },
   {
-    id: 'grabMove.swallow',
+    id: Commands.grabMove.swallow,
     chords: [{ key: 'g' }],
     exclusive: true,
   },
 
   {
-    id: 'resize.cancel',
+    id: Commands.resize.cancel,
     chords: [{ key: 'Escape' }],
   },
   {
-    id: 'resize.confirm',
+    id: Commands.resize.confirm,
     chords: [{ key: 'Enter' }],
   },
   {
-    id: 'resize.lockTop',
+    id: Commands.resize.lockTop,
     chords: [{ key: 'w' }],
   },
   {
-    id: 'resize.lockLeft',
+    id: Commands.resize.lockLeft,
     chords: [{ key: 'a' }],
   },
   {
-    id: 'resize.lockBottom',
+    id: Commands.resize.lockBottom,
     chords: [{ key: 's' }],
   },
   {
-    id: 'resize.lockRight',
+    id: Commands.resize.lockRight,
     chords: [{ key: 'd' }],
   },
   {
-    id: 'resize.swallow',
+    id: Commands.resize.swallow,
     chords: [{ key: 'g' }],
     exclusive: true,
   },
 
   {
-    id: 'grabMove.begin',
+    id: Commands.grabMove.begin,
     chords: [{ key: 'g' }],
     when: 'graphFocused',
   },
   {
-    id: 'resize.begin',
+    id: Commands.resize.begin,
     chords: [{ key: 's' }],
     when: 'graphFocused',
   },
 
   {
-    id: 'addNode.focus',
+    id: Commands.addNode.focus,
     chords: [{ key: 'a' }],
   },
   {
-    id: 'addConnection.focus',
+    id: Commands.addConnection.focus,
     chords: [{ key: 'c' }],
   },
 
   {
-    id: 'selection.nudgeUp',
+    id: Commands.selection.nudgeUp,
     chords: [{ key: 'ArrowUp' }],
     when: 'graphFocused',
   },
   {
-    id: 'selection.nudgeDown',
+    id: Commands.selection.nudgeDown,
     chords: [{ key: 'ArrowDown' }],
     when: 'graphFocused',
   },
   {
-    id: 'selection.nudgeLeft',
+    id: Commands.selection.nudgeLeft,
     chords: [{ key: 'ArrowLeft' }],
     when: 'graphFocused',
   },
   {
-    id: 'selection.nudgeRight',
+    id: Commands.selection.nudgeRight,
     chords: [{ key: 'ArrowRight' }],
     when: 'graphFocused',
   },
 
   {
-    id: 'selection.delete',
+    id: Commands.selection.delete,
     chords: [{ key: 'Delete' }, { key: 'X' }],
     when: 'graphFocused',
   },
 
   {
-    id: 'addConnection.pickFrom',
+    id: Commands.addConnection.pickFrom,
     chords: [{ key: 'q' }],
   },
   {
-    id: 'addConnection.pickTo',
+    id: Commands.addConnection.pickTo,
     chords: [{ key: 'e' }],
   },
 
   {
-    id: 'selection.copy',
+    id: Commands.selection.copy,
     chords: [{ key: 'c', mod: true }],
     when: 'graphFocused',
   },
   {
-    id: 'nodes.paste',
+    id: Commands.nodes.paste,
     chords: [{ key: 'v', mod: true }],
     when: 'graphFocused',
   },

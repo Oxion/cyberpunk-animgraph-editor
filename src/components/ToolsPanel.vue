@@ -45,7 +45,9 @@
 import { computed, ref } from 'vue'
 import type { AppToolId } from '../appTools/catalog'
 import { getAppToolLabel } from '../appTools/catalog'
-import type { ArrangeSelectionAlgorithm, ElkLayeredVariant } from '../utils/graph/ElkGraphLayout'
+import { Commands } from '../appCommands/ids'
+import type { AppCommandArgs } from '../commands'
+import { executeCommand } from '../commands'
 import SidebarPanel from './SidebarPanel.vue'
 import { toolUiRegistry } from './tools/toolUiRegistry'
 import { selectedNodeRef, selectedNodeIdsRef, nodePositionRef, nodeSizeRef } from '../stores/graphSession'
@@ -68,38 +70,6 @@ const props = defineProps<{
 
 const collapsed = defineModel<boolean>('collapsed', { default: false })
 const height = defineModel<number>('height', { required: true })
-
-const emit = defineEmits<{
-  moveStart: []
-  moveConfirm: []
-  moveCancel: []
-  moveClearAxisLock: []
-  moveSetAxisLock: ['x' | 'y']
-  resizeStart: []
-  resizeConfirm: []
-  resizeCancel: []
-  resizeClearSideLock: []
-  resizeSetSideLock: ['left' | 'right' | 'top' | 'bottom']
-  addNode: [payload: { id: string; type: string; slotName?: string }]
-  pasteNodes: []
-  addConnection: [payload: { fromId: string; toId: string; pinName: string }]
-  arrangeInputsSelectAll: []
-  arrangeInputsDeselectAll: []
-  arrangeInputsToggle: [key: string, checked: boolean]
-  arrangeInputs: [payload: { margin: number; spacing: number }]
-  selectInputsAdd: [recursive: boolean]
-  arrangeSelection: [payload: {
-    algorithm: ArrangeSelectionAlgorithm
-    layeredVariant: ElkLayeredVariant
-    nodeNodeSpacing: number
-    layerSpacing: number
-    forceIterations: number
-  }]
-  attachCreate: []
-  attachClear: []
-  attachDataFromSelected: []
-  attachRun: []
-}>()
 
 const bodyRef = ref<unknown>(null)
 
@@ -208,60 +178,64 @@ const bodyListeners = computed(() => {
   switch (tool.value) {
     case 'move':
       return {
-        start: () => emit('moveStart'),
-        confirm: () => emit('moveConfirm'),
-        cancel: () => emit('moveCancel'),
-        clearAxisLock: () => emit('moveClearAxisLock'),
-        setAxisLock: (v: 'x' | 'y') => emit('moveSetAxisLock', v),
+        start: () => executeCommand(Commands.grabMove.begin),
+        confirm: () => executeCommand(Commands.grabMove.confirm),
+        cancel: () => executeCommand(Commands.grabMove.cancel),
+        clearAxisLock: () => executeCommand(Commands.grabMove.clearAxisLock),
+        setAxisLock: (v: 'x' | 'y') =>
+          executeCommand(v === 'x' ? Commands.grabMove.lockX : Commands.grabMove.lockY),
       }
     case 'resize':
       return {
-        start: () => emit('resizeStart'),
-        confirm: () => emit('resizeConfirm'),
-        cancel: () => emit('resizeCancel'),
-        clearSideLock: () => emit('resizeClearSideLock'),
-        setSideLock: (v: 'left' | 'right' | 'top' | 'bottom') => emit('resizeSetSideLock', v),
+        start: () => executeCommand(Commands.resize.begin),
+        confirm: () => executeCommand(Commands.resize.confirm),
+        cancel: () => executeCommand(Commands.resize.cancel),
+        clearSideLock: () => executeCommand(Commands.resize.clearSideLock),
+        setSideLock: (v: 'left' | 'right' | 'top' | 'bottom') => {
+          if (v === 'top') executeCommand(Commands.resize.lockTop)
+          else if (v === 'left') executeCommand(Commands.resize.lockLeft)
+          else if (v === 'bottom') executeCommand(Commands.resize.lockBottom)
+          else executeCommand(Commands.resize.lockRight)
+        },
       }
     case 'addNode':
       return {
-        add: (p: { id: string; type: string; slotName?: string }) => emit('addNode', p),
+        add: (p: { id: string; type: string; slotName?: string }) =>
+          executeCommand(Commands.nodes.add, p),
       }
     case 'pasteNode':
       return {
-        paste: () => emit('pasteNodes'),
+        paste: () => executeCommand(Commands.nodes.paste),
       }
     case 'addConnection':
       return {
         create: (p: { fromId: string; toId: string; pinName: string }) =>
-          emit('addConnection', p),
+          executeCommand(Commands.addConnection.create, p),
       }
     case 'arrangeInputs':
       return {
-        selectAll: () => emit('arrangeInputsSelectAll'),
-        deselectAll: () => emit('arrangeInputsDeselectAll'),
-        toggle: (key: string, checked: boolean) => emit('arrangeInputsToggle', key, checked),
-        arrange: (p: { margin: number; spacing: number }) => emit('arrangeInputs', p),
+        selectAll: () => executeCommand(Commands.arrangeInputs.selectAll),
+        deselectAll: () => executeCommand(Commands.arrangeInputs.deselectAll),
+        toggle: (key: string, checked: boolean) =>
+          executeCommand(Commands.arrangeInputs.toggle, { key, checked }),
+        arrange: (p: { margin: number; spacing: number }) =>
+          executeCommand(Commands.arrangeInputs.run, p),
       }
     case 'selectInputs':
       return {
-        add: (recursive: boolean) => emit('selectInputsAdd', recursive),
+        add: (recursive: boolean) => executeCommand(Commands.selectInputs.add, { recursive }),
       }
     case 'arrangeSelection':
       return {
-        arrange: (p: {
-          algorithm: ArrangeSelectionAlgorithm
-          layeredVariant: ElkLayeredVariant
-          nodeNodeSpacing: number
-          layerSpacing: number
-          forceIterations: number
-        }) => emit('arrangeSelection', p),
+        arrange: (p: AppCommandArgs<typeof Commands.arrangeSelection.run>) =>
+          executeCommand(Commands.arrangeSelection.run, p),
       }
     case 'attachHandle':
       return {
-        create: () => emit('attachCreate'),
-        clear: () => emit('attachClear'),
-        dataFromSelected: () => emit('attachDataFromSelected'),
-        run: () => emit('attachRun'),
+        create: () => executeCommand(Commands.attachHandle.create),
+        clear: () => executeCommand(Commands.attachHandle.clear),
+        dataFromSelected: () => executeCommand(Commands.attachHandle.dataFromSelected),
+        run: () => executeCommand(Commands.attachHandle.run),
       }
     default:
       return {}

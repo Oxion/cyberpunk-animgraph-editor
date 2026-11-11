@@ -34,6 +34,8 @@ import { isSettingsWindowOpen, toggleSettingsWindow } from '../stores/appWindows
 import { hasProject } from '../stores/graphProject'
 import { selectedNodeRef } from '../stores/graphSession'
 import { commandShortcut } from '../stores/hotkeyBindings'
+import { Commands } from '../appCommands/ids'
+import { executeCommand } from '../commands'
 import { canToggleAppTool, commandEnabled, whenEnabled } from '../stores/appContext'
 import { activeToolsRegistry } from '../stores/toolManager'
 import { ANIM_NODE_STATE_TYPE_SET } from '../utils/graph/animNodeStateTypes'
@@ -68,14 +70,7 @@ const emit = defineEmits<{
   open: []
   'add-animgraph': []
   'edit-project': []
-  save: []
-  'save-as': []
   export: []
-  undo: []
-  redo: []
-  delete: []
-  'deselect-all': []
-  'select-children': []
   'move-sm-state-up': []
   'move-sm-state-down': []
   'layout-sm-states-group': []
@@ -149,23 +144,23 @@ async function onQuit() {
         <MenubarItem
           class="header-menu-item"
           :disabled="!hasProject"
-          @select="emit('save')"
+          @select="executeCommand(Commands.document.save)"
         >
           <SaveIcon class="size-3.5" />
           Save
-          <MenubarShortcut v-if="commandShortcut('document.save')">
-            <HotkeyKbd command="document.save" size="sm" />
+          <MenubarShortcut v-if="commandShortcut(Commands.document.save)">
+            <HotkeyKbd :command="Commands.document.save" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
         <MenubarItem
           class="header-menu-item"
           :disabled="!hasProject"
-          @select="emit('save-as')"
+          @select="executeCommand(Commands.document.saveAs)"
         >
           <SaveIcon class="size-3.5" />
           Save As...
-          <MenubarShortcut v-if="commandShortcut('document.saveAs')">
-            <HotkeyKbd command="document.saveAs" size="sm" />
+          <MenubarShortcut v-if="commandShortcut(Commands.document.saveAs)">
+            <HotkeyKbd :command="Commands.document.saveAs" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
         <MenubarSeparator />
@@ -193,37 +188,37 @@ async function onQuit() {
           class="header-menu-item"
           :disabled="!canUndo"
           :title="undoTitle"
-          @select="emit('undo')"
+          @select="executeCommand(Commands.history.undo)"
         >
           <Undo2 class="size-3.5" />
           Undo
-          <MenubarShortcut v-if="commandShortcut('history.undo')">
-            <HotkeyKbd command="history.undo" size="sm" />
+          <MenubarShortcut v-if="commandShortcut(Commands.history.undo)">
+            <HotkeyKbd :command="Commands.history.undo" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
         <MenubarItem
           class="header-menu-item"
           :disabled="!canRedo"
           :title="redoTitle"
-          @select="emit('redo')"
+          @select="executeCommand(Commands.history.redo)"
         >
           <Redo2 class="size-3.5" />
           Redo
-          <MenubarShortcut v-if="commandShortcut('history.redo')">
-            <HotkeyKbd command="history.redo" size="sm" />
+          <MenubarShortcut v-if="commandShortcut(Commands.history.redo)">
+            <HotkeyKbd :command="Commands.history.redo" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
         <MenubarSeparator />
         <MenubarItem
           class="header-menu-item"
           :disabled="!canDeleteSelection"
-          :title="commandShortcut('selection.delete') ? `Delete selected node (${commandShortcut('selection.delete')})` : 'Delete selected node'"
-          @select="emit('delete')"
+          :title="commandShortcut(Commands.selection.delete) ? `Delete selected node (${commandShortcut(Commands.selection.delete)})` : 'Delete selected node'"
+          @select="executeCommand(Commands.selection.delete)"
         >
           <Trash2 class="size-3.5" />
           Delete
-          <MenubarShortcut v-if="commandShortcut('selection.delete')">
-            <HotkeyKbd command="selection.delete" size="sm" />
+          <MenubarShortcut v-if="commandShortcut(Commands.selection.delete)">
+            <HotkeyKbd :command="Commands.selection.delete" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
         <MenubarSeparator />
@@ -250,9 +245,9 @@ async function onQuit() {
       <MenubarContent class="header-menu-content min-w-52" :side-offset="4" :align-offset="0">
         <MenubarItem
           class="header-menu-item"
-          :disabled="!commandEnabled('selection.deselectAll')"
+          :disabled="!commandEnabled(Commands.selection.deselectAll)"
           title="Clear node selection"
-          @select="emit('deselect-all')"
+          @select="executeCommand(Commands.selection.deselectAll)"
         >
           <CircleOff class="size-3.5" />
           Deselect All
@@ -260,9 +255,9 @@ async function onQuit() {
         <MenubarSeparator />
         <MenubarItem
           class="header-menu-item"
-          :disabled="!commandEnabled('selection.selectChildren')"
+          :disabled="!commandEnabled(Commands.selection.selectChildren)"
           title="Add direct children of selected nodes to selection"
-          @select="emit('select-children')"
+          @select="executeCommand(Commands.selection.selectChildren)"
         >
           <Network class="size-3.5" />
           Select Children

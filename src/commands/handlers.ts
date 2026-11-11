@@ -1,18 +1,22 @@
-import type { AppCommandId } from './types'
+import type { AppCommandArgs, AppCommandId } from './types'
 
-/** Invoked by hotkeys and UI. Event is the triggering keyboard event when from a hotkey. */
-export type AppCommandHandler = (event: KeyboardEvent) => void
+export type AppCommandHandler<K extends AppCommandId = AppCommandId> = AppCommandArgs<K> extends undefined
+  ? (event?: KeyboardEvent) => void | Promise<void>
+  : (args: AppCommandArgs<K>) => void | Promise<void>
 
-export type AppCommandHandlers = { [K in AppCommandId]?: AppCommandHandler }
+export type AppCommandHandlers = { [K in AppCommandId]?: AppCommandHandler<K> }
 
 const handlers: AppCommandHandlers = {}
 
-export function registerAppCommandHandler(id: AppCommandId, handler: AppCommandHandler): void {
-  handlers[id] = handler
+export function registerAppCommandHandler<K extends AppCommandId>(
+  id: K,
+  handler: AppCommandHandler<K>
+): void {
+  handlers[id] = handler as AppCommandHandlers[K]
 }
 
-export function getAppCommandHandler(id: AppCommandId): AppCommandHandler | undefined {
-  return handlers[id]
+export function getAppCommandHandler<K extends AppCommandId>(id: K): AppCommandHandler<K> | undefined {
+  return handlers[id] as AppCommandHandler<K> | undefined
 }
 
 export function getAppCommandHandlers(): AppCommandHandlers {

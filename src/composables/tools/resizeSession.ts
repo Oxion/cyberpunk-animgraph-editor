@@ -60,6 +60,7 @@ import {
   restoreToolAfterModalGesture,
 } from './moveResizeShared'
 import { cancelGrabMove } from './grabMove'
+import { Commands } from '../../appCommands/ids'
 import { commandEnabled } from '../../stores/appContext'
 
 export const computeResizedLayout = (
@@ -209,7 +210,7 @@ export const flushScheduledResize = () => {
 }
 
 export const beginResize = () => {
-  if (!commandEnabled('resize.begin')) return
+  if (!commandEnabled(Commands.resize.begin)) return
   const active = getActiveDiagramRenderer()
   let diagramId: string
   try {
