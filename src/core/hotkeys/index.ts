@@ -10,6 +10,8 @@ export {
   sameKeyChords,
   applyHotkeyOverrides,
   cloneHotkeyBindings,
+  shortKeyToCode,
+  codeToShortKey,
 } from './data'
 export { chordFromKeyboardEvent, chordMatchesEvent } from './event'
 export { findHotkeyBindingConflicts } from './conflicts'

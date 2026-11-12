@@ -1,9 +1,71 @@
 import type { HotkeyBindingConfig, HotkeyChordOverrides, KeyChord } from './types'
 
+/** Short storage/UI keys that already equal KeyboardEvent.code. */
+const PASSTHROUGH_CODES = new Set([
+  'Escape',
+  'Enter',
+  'Tab',
+  'Backspace',
+  'Delete',
+  'Insert',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+])
+
+const CODE_TO_SHORT: Record<string, string> = {
+  Space: 'space',
+  Minus: '-',
+  Equal: '=',
+  BracketLeft: '[',
+  BracketRight: ']',
+  Backslash: '\\',
+  Semicolon: ';',
+  Quote: "'",
+  Backquote: '`',
+  Comma: ',',
+  Period: '.',
+  Slash: '/',
+}
+
+for (let i = 0; i < 26; i++) {
+  const letter = String.fromCharCode(97 + i)
+  CODE_TO_SHORT[`Key${letter.toUpperCase()}`] = letter
+}
+for (let i = 0; i < 10; i++) {
+  CODE_TO_SHORT[`Digit${i}`] = String(i)
+}
+
+const SHORT_TO_CODE: Record<string, string> = Object.fromEntries(
+  Object.entries(CODE_TO_SHORT).map(([code, short]) => [short, code]),
+)
+
 export function normalizeHotkeyKey(key: string): string {
   if (key === ' ') return 'space'
   if (key.length === 1) return key.toLowerCase()
   return key
+}
+
+/** Storage/UI short key → KeyboardEvent.code for registry matching. */
+export function shortKeyToCode(key: string): string {
+  const short = normalizeHotkeyKey(key)
+  if (SHORT_TO_CODE[short]) return SHORT_TO_CODE[short]
+  if (PASSTHROUGH_CODES.has(short) || PASSTHROUGH_CODES.has(key)) return key
+  if (key.startsWith('Key') || key.startsWith('Digit') || key === 'Space') return key
+  return key
+}
+
+/** KeyboardEvent.code → storage/UI short key for capture. */
+export function codeToShortKey(code: string): string | undefined {
+  if (CODE_TO_SHORT[code]) return CODE_TO_SHORT[code]
+  if (PASSTHROUGH_CODES.has(code)) return code
+  return undefined
 }
 
 export function cloneChords(chords: Readonly<KeyChord[]>): KeyChord[] {

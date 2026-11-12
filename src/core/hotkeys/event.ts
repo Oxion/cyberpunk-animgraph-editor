@@ -1,11 +1,7 @@
-import { normalizeHotkeyKey } from "./data"
+import { codeToShortKey } from "./data"
 import { KeyChord } from "./types"
 
-const MODIFIER_KEYS = new Set(['control', 'shift', 'alt', 'meta', 'ctrl', 'os', 'hyper', 'altgraph'])
-
 function isModifierKeyEvent(event: KeyboardEvent): boolean {
-  const key = event.key.toLowerCase()
-  if (MODIFIER_KEYS.has(key)) return true
   const code = event.code
   return (
     code.startsWith('Control') ||
@@ -20,8 +16,11 @@ function isModifierKeyEvent(event: KeyboardEvent): boolean {
 export function chordFromKeyboardEvent(event: KeyboardEvent): KeyChord | undefined {
   if (isModifierKeyEvent(event)) return
 
-  const chord: KeyChord = { 
-    key: normalizeHotkeyKey(event.key),
+  const key = codeToShortKey(event.code)
+  if (!key) return
+
+  const chord: KeyChord = {
+    key,
     mod: event.ctrlKey || event.metaKey,
     shift: event.shiftKey,
     alt: event.altKey,
@@ -30,9 +29,9 @@ export function chordFromKeyboardEvent(event: KeyboardEvent): KeyChord | undefin
   return chord
 }
 
+/** Registry chords use KeyboardEvent.code; compare against event.code. */
 export function chordMatchesEvent(chord: KeyChord, event: KeyboardEvent): boolean {
-  const eventKey = normalizeHotkeyKey(event.key)
-  if (eventKey !== normalizeHotkeyKey(chord.key)) return false
+  if (event.code !== chord.key) return false
 
   const wantMod = Boolean(chord.mod)
   const wantCtrl = Boolean(chord.ctrl) || wantMod

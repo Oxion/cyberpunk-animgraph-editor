@@ -1,5 +1,6 @@
 import { getPredicate, PredicateContext } from '@/core/when'
 import { executeCommand, type AppCommandArgs, type AppCommandId } from '@/core/commands'
+import { shortKeyToCode } from './data'
 import { chordMatchesEvent } from './event'
 import type { HotkeyBindingConfig, ResolvedHotkeyBinding } from './types'
 
@@ -45,7 +46,14 @@ export class HotkeyRegistry {
       if (config.when && !whenFn) {
         console.warn(`[hotkeys] Unknown predicate "${config.when}" for binding "${config.id}"`)
       }
-      return { ...config, whenFn }
+      return {
+        ...config,
+        chords: config.chords.map((chord) => ({
+          ...chord,
+          key: shortKeyToCode(chord.key),
+        })),
+        whenFn,
+      }
     })
   }
 }

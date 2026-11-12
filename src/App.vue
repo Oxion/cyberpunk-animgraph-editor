@@ -1819,12 +1819,12 @@ const handleKeydown = (event: KeyboardEvent) => {
 }
 
 const handleKeyup = (event: KeyboardEvent) => {
-  if (!ARROW_MOVE_KEYS.has(event.key)) return
+  if (!ARROW_MOVE_KEYS.has(event.code)) return
   if (moveToolState.session) {
-    pressedArrowKeys.delete(event.key)
+    pressedArrowKeys.delete(event.code)
     return
   }
-  pressedArrowKeys.delete(event.key)
+  pressedArrowKeys.delete(event.code)
   if (pressedArrowKeys.size === 0) {
     try {
       const diagramId = requireActiveDiagramId()

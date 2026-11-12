@@ -3,7 +3,7 @@ import type { AppCommandId } from '@/core/commands'
 
 /** Serializable key chord for configs / future remapping UI. */
 export interface KeyChord {
-  /** Normalized key: lowercase letter, or platform key like ArrowUp / Escape / Enter */
+  /** Storage/UI: short key (`g`, `space`, `Escape`). Registry resolves to KeyboardEvent.code. */
   readonly key: string
   readonly ctrl?: boolean
   readonly shift?: boolean
