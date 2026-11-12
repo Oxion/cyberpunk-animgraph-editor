@@ -8,13 +8,6 @@ const activeScopes = new Map<AppToolId, EffectScope>()
 const runners = new Map<AppToolId, ToolRunner>()
 const deactivateHooks = new Map<AppToolId, Set<() => void>>()
 
-/** Optional future: tool declares cache slots it may read (unused in v1). */
-export type ToolMeta = {
-  readsCache?: readonly AppToolId[]
-}
-
-export const toolMeta: Partial<Record<AppToolId, ToolMeta>> = {}
-
 /** Tools whose runners / calcs are running. Several may be active at once. */
 export const activeToolsRegistry = reactive(
   Object.fromEntries(appToolItems.map((t) => [t.id, false])) as Record<AppToolId, boolean>

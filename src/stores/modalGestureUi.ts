@@ -27,25 +27,6 @@ export const modalGestureReplacedFocus = ref(false)
  */
 export const toolBeforeModalGesture = ref<string | null>(null)
 
-let graphCanvasRef: Ref<HTMLDivElement | null> | null = null
-let updateGraphInteractionGateFn: (() => void) | null = null
-
-export function bindModalGestureUi(opts: {
-  graphCanvas: Ref<HTMLDivElement | null>
-  updateGraphInteractionGate: () => void
-}) {
-  graphCanvasRef = opts.graphCanvas
-  updateGraphInteractionGateFn = opts.updateGraphInteractionGate
-}
-
-export function getModalGraphCanvas(): HTMLDivElement | null {
-  return graphCanvasRef?.value ?? null
-}
-
-export function updateModalGraphInteractionGate() {
-  updateGraphInteractionGateFn?.()
-}
-
 export function clearModalGestureRestoreState() {
   toolBeforeModalGesture.value = null
   modalGestureReplacedFocus.value = false
@@ -69,17 +50,4 @@ export function beginModalGestureTool(gestureTool: 'move' | 'resize') {
   }
   toolManager.activateTool(gestureTool)
   toolManager.focusTool(gestureTool)
-}
-
-export function restoreToolAfterModalGesture() {
-  if (suppressModalGestureRestore.value || !modalGestureReplacedFocus.value) return
-  const prior = toolBeforeModalGesture.value as AppToolId | null
-  clearModalGestureRestoreState()
-  if (prior) {
-    toolManager.activateTool(prior)
-    toolManager.focusTool(prior)
-  } else {
-    toolManager.focusTool(null as unknown as AppToolId)
-  }
-  updateModalGraphInteractionGate()
 }
