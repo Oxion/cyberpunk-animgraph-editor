@@ -79,7 +79,7 @@ import {
   restoreToolAfterModalGesture,
 } from './moveResizeShared'
 import { cancelResize } from './resizeSession'
-import { Commands } from '../../appCommands/ids'
+import { Commands } from '@/app/commands/ids'
 import { appCommandWithIdEnabled } from '@/app/commands/predicate'
 
 /** Non-modal arrow-key gesture: absolute restore + parent grow across key repeats. */

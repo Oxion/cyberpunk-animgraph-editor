@@ -771,8 +771,6 @@ import {
   canMoveSmStateByDelta,
   resolveLiveStateIndex,
 } from './utils/graph/smStateSlot'
-import { registerAppCommands } from './appCommands'
-import { collectInputNodeIds } from './appCommands/selectInputsAdd'
 import { toggleAppTool } from './stores/appToolSelect'
 import { initializeHotkeyBindings, handleHotkeyKeyDown } from './stores/hotkeyBindings'
 import {
@@ -784,6 +782,8 @@ import { SimSnapshot } from './utils/sim/simTypes.ts'
 import { resolveAppPredicateContext } from './app/when/context.ts'
 import { registerAppPredicates } from './app/when/predicates.ts'
 import { whenTrue } from '@/core/when'
+import { collectInputNodeIds } from './utils/graph/diagramUtils.ts'
+import { registerAppCommands } from './app/commands/index.ts'
 
 useWorkspace()
 

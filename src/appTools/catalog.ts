@@ -10,7 +10,7 @@ import {
   Scaling,
   Wrench,
 } from 'lucide-vue-next'
-import { Commands } from '../appCommands/ids'
+import { Commands } from '@/app/commands/ids'
 import type { AppCommandId } from '../core/commands/types'
 
 export type AppToolId =

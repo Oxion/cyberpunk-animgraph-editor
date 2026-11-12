@@ -1,4 +1,4 @@
-import { Commands } from '../../appCommands/ids'
+import { Commands } from '../commands/ids'
 import type { HotkeyBindingConfig } from '../../core/hotkeys/types'
 
 /**

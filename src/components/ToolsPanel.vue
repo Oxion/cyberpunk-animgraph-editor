@@ -45,7 +45,7 @@
 import { computed, ref } from 'vue'
 import type { AppToolId } from '../appTools/catalog'
 import { getAppToolLabel } from '../appTools/catalog'
-import { Commands } from '../appCommands/ids'
+import { Commands } from '@/app/commands'
 import type { AppCommandArgs } from '../core/commands/index.ts'
 import SidebarPanel from './SidebarPanel.vue'
 import { toolUiRegistry } from './tools/toolUiRegistry'

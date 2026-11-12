@@ -89,7 +89,7 @@
 <script setup lang="ts">
 import { Button } from '@/components/ui/button'
 import { FieldDescription, FieldGroup } from '@/components/ui/field'
-import { Commands } from '../../appCommands/ids'
+import { Commands } from '@/app/commands'
 import { getFirstHotkeyChord, hasHotkeyBinding } from '../../stores/hotkeyBindings'
 import HotkeyKbd from '../HotkeyKbd.vue'
 import { appCommandWithIdEnabled } from '@/app/commands/predicate.ts'

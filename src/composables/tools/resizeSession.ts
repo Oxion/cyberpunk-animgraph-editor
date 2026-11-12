@@ -60,7 +60,7 @@ import {
   restoreToolAfterModalGesture,
 } from './moveResizeShared'
 import { cancelGrabMove } from './grabMove'
-import { Commands } from '../../appCommands/ids'
+import { Commands } from '@/app/commands/ids'
 import { appCommandWithIdEnabled } from '@/app/commands/predicate'
 
 export const computeResizedLayout = (

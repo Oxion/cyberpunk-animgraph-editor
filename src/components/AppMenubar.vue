@@ -33,7 +33,7 @@ import {
   Workflow,
 } from 'lucide-vue-next'
 import { computed } from 'vue'
-import { Commands } from '../appCommands/ids'
+import { Commands } from '@/app/commands'
 import {
   addMenuTools,
   arrangeMenuTools,
