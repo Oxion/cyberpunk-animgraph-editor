@@ -3,9 +3,9 @@
     <template v-if="!active">
       <p v-if="selectedCount === 0" class="tool-hint">
         Select one or more nodes, then
-        <template v-if="commandShortcut(Commands.resize.begin)">
+        <template v-if="hasHotkeyBinding(Commands.resize.begin)">
           press
-          <HotkeyKbd :command="Commands.resize.begin" size="sm" />
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.begin)" size="sm" />
           or
         </template>
         Start Resize.
@@ -18,11 +18,11 @@
       <Button
         type="button"
         class="inline-flex w-full items-center justify-center gap-1.5"
-        :disabled="!commandEnabled(Commands.resize.begin)"
+        :disabled="!appCommandWithIdEnabled(Commands.resize.begin)"
         @click="emit('start')"
       >
         <span>Start Resize</span>
-        <HotkeyKbd :command="Commands.resize.begin" />
+        <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.begin)" />
       </Button>
     </template>
 
@@ -46,7 +46,7 @@
           @click="emit('setSideLock', 'left')"
         >
           <span>x−</span>
-          <HotkeyKbd :command="Commands.resize.lockLeft" size="sm" />
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.lockLeft)" size="sm" />
         </Button>
         <Button
           type="button"
@@ -56,7 +56,7 @@
           @click="emit('setSideLock', 'right')"
         >
           <span>x+</span>
-          <HotkeyKbd :command="Commands.resize.lockRight" size="sm" />
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.lockRight)" size="sm" />
         </Button>
         <Button
           type="button"
@@ -66,7 +66,7 @@
           @click="emit('setSideLock', 'top')"
         >
           <span>y−</span>
-          <HotkeyKbd :command="Commands.resize.lockTop" size="sm" />
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.lockTop)" size="sm" />
         </Button>
         <Button
           type="button"
@@ -76,7 +76,7 @@
           @click="emit('setSideLock', 'bottom')"
         >
           <span>y+</span>
-          <HotkeyKbd :command="Commands.resize.lockBottom" size="sm" />
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.lockBottom)" size="sm" />
         </Button>
       </div>
 
@@ -87,7 +87,7 @@
           @click="emit('confirm')"
         >
           <span>OK</span>
-          <HotkeyKbd :command="Commands.resize.confirm" size="sm" />
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.confirm)" size="sm" />
         </Button>
         <Button
           type="button"
@@ -96,7 +96,7 @@
           @click="emit('cancel')"
         >
           <span>Cancel</span>
-          <HotkeyKbd :command="Commands.resize.cancel" size="sm" />
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.cancel)" size="sm" />
         </Button>
       </div>
     </template>
@@ -107,9 +107,9 @@
 import { Button } from '@/components/ui/button'
 import { FieldDescription, FieldGroup } from '@/components/ui/field'
 import { Commands } from '../../appCommands/ids'
-import { commandShortcut } from '../../stores/hotkeyBindings'
-import { commandEnabled } from '../../stores/appContext'
+import { getFirstHotkeyChord, hasHotkeyBinding } from '../../stores/hotkeyBindings'
 import HotkeyKbd from '../HotkeyKbd.vue'
+import { appCommandWithIdEnabled } from '@/app/commands/predicate.ts'
 
 defineProps<{
   selectedCount: number

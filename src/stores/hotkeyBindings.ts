@@ -1,35 +1,55 @@
-import { ref } from 'vue'
-import type { AppCommandId } from '../commands'
+import { computed, ref } from 'vue'
+import type { AppCommandId } from '@/core/commands'
 import {
   cloneHotkeyBindings,
-  defaultHotkeyBindings,
-  formatCommandShortcut,
   HotkeyRegistry,
-  loadMergedHotkeyBindings,
-  resolveHotkeyBindings,
-  saveHotkeyBindingsDiff,
-  saveHotkeyChordOverrides,
   type HotkeyBindingConfig,
   type KeyChord,
-} from '../utils/hotkeys'
+} from '@/core/hotkeys'
+import { loadMergedHotkeyBindings, saveHotkeyBindingsDiff, saveHotkeyChordOverrides } from '@/app/hotkeys/storage'
+import { defaultHotkeyBindings } from '@/app/hotkeys/defaultBindings'
+import { resolveAppPredicateContext } from '@/app/when/context'
 
-export const hotkeyBindings = ref<HotkeyBindingConfig[]>(loadMergedHotkeyBindings())
+const hotkeyRegistry = new HotkeyRegistry()
 
-export const hotkeyRegistry = new HotkeyRegistry()
-hotkeyRegistry.setBindings(resolveHotkeyBindings(hotkeyBindings.value))
+export const hotkeyBindingsRef = ref<Readonly<HotkeyBindingConfig[]>>([])
 
-export function commandShortcut(id: AppCommandId): string {
-  return formatCommandShortcut(hotkeyBindings.value, id)
+export const hotkeyBindingByIdComputed = computed<Readonly<Partial<Record<AppCommandId, HotkeyBindingConfig>>>>(() => {
+  return hotkeyBindingsRef.value.reduce((acc, binding) => {
+    acc[binding.id] = binding
+    return acc
+  }, {} as Partial<Record<AppCommandId, HotkeyBindingConfig>>)
+})
+
+export function initializeHotkeyBindings(): void {
+  hotkeyBindingsRef.value = loadMergedHotkeyBindings()
+  hotkeyRegistry.setBindings(hotkeyBindingsRef.value)
+}
+
+export function hasHotkeyBinding(id: AppCommandId): boolean {
+  return !!hotkeyBindingByIdComputed.value[id]
+}
+
+export function getHotkeyBinding(id: AppCommandId): HotkeyBindingConfig | undefined {
+  return hotkeyBindingByIdComputed.value[id]
+}
+
+export function getHotkeyChords(id: AppCommandId): KeyChord[] {
+  return getHotkeyBinding(id)?.chords ?? []
+}
+
+export function getFirstHotkeyChord(id: AppCommandId): KeyChord | undefined {
+  return getHotkeyChords(id)[0]
 }
 
 export function applyHotkeyBindings(bindings: HotkeyBindingConfig[]): void {
-  hotkeyBindings.value = bindings
-  hotkeyRegistry.setBindings(resolveHotkeyBindings(bindings))
+  hotkeyBindingsRef.value = bindings
+  hotkeyRegistry.setBindings(bindings)
   saveHotkeyBindingsDiff(bindings)
 }
 
 export function setHotkeyChords(payload: { id: string; chords: KeyChord[] }): void {
-  const next = cloneHotkeyBindings(hotkeyBindings.value).map((binding) =>
+  const next = cloneHotkeyBindings(hotkeyBindingsRef.value).map((binding) =>
     binding.id === payload.id
       ? { ...binding, chords: payload.chords.map((chord) => ({ ...chord })) }
       : binding
@@ -46,4 +66,8 @@ export function resetHotkeyBinding(id: string): void {
 export function resetAllHotkeyBindings(): void {
   applyHotkeyBindings(cloneHotkeyBindings(defaultHotkeyBindings))
   saveHotkeyChordOverrides({})
+}
+
+export function handleHotkeyKeyDown(event: KeyboardEvent): void {
+  hotkeyRegistry.handleKeydown(event, resolveAppPredicateContext())
 }

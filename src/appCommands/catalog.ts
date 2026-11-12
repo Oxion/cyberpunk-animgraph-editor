@@ -1,5 +1,5 @@
-import { registerAppCommandCatalog } from '../commands/catalog'
-import type { AppCommand, AppCommandId } from '../commands/types'
+import { registerAppCommandCatalog } from '../core/commands/catalog'
+import type { AppCommand, AppCommandId } from '../core/commands/types'
 import { Commands } from './ids'
 
 const appCommandDefs: Record<AppCommandId, AppCommand> = {
@@ -53,13 +53,6 @@ const appCommandDefs: Record<AppCommandId, AppCommand> = {
     group: 'Move',
     when: 'moveInProgress',
   },
-  [Commands.grabMove.swallow]: {
-    id: Commands.grabMove.swallow,
-    label: 'Swallow G during Move',
-    group: 'Move',
-    hidden: true,
-    when: 'moveInProgress',
-  },
   [Commands.resize.cancel]: {
     id: Commands.resize.cancel,
     label: 'Cancel Resize',
@@ -100,13 +93,6 @@ const appCommandDefs: Record<AppCommandId, AppCommand> = {
     id: Commands.resize.clearSideLock,
     label: 'Clear Resize Side Lock',
     group: 'Resize',
-    when: 'resizeInProgress',
-  },
-  [Commands.resize.swallow]: {
-    id: Commands.resize.swallow,
-    label: 'Swallow G during Resize',
-    group: 'Resize',
-    hidden: true,
     when: 'resizeInProgress',
   },
   [Commands.grabMove.begin]: {

@@ -1,5 +1,5 @@
 /** UI copy for named when-predicates. Predicate code stays the source of truth. */
-export const WHEN_LABELS: Record<string, string> = {
+export const APP_PREDICATE_LABELS: Record<string, string> = {
   always: 'Always',
   moveInProgress: 'While Move is in progress',
   moveNotInProgress: 'While Move is not in progress',

@@ -80,7 +80,7 @@ import {
 } from './moveResizeShared'
 import { cancelResize } from './resizeSession'
 import { Commands } from '../../appCommands/ids'
-import { commandEnabled } from '../../stores/appContext'
+import { appCommandWithIdEnabled } from '@/app/commands/predicate'
 
 /** Non-modal arrow-key gesture: absolute restore + parent grow across key repeats. */
 type ArrowMoveCascade = {
@@ -812,7 +812,7 @@ export const nudgeSelection = (
 }
 
 export const beginGrabMove = () => {
-  if (!commandEnabled(Commands.grabMove.begin)) return
+  if (!appCommandWithIdEnabled(Commands.grabMove.begin)) return
   const activeDiagramRenderer = getActiveDiagramRenderer()
   let diagramId: string
   try {

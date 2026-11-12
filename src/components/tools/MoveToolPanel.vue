@@ -3,9 +3,9 @@
     <template v-if="!active">
       <p v-if="selectedCount === 0" class="tool-hint">
         Select one or more nodes, then
-        <template v-if="commandShortcut(Commands.grabMove.begin)">
+        <template v-if="hasHotkeyBinding(Commands.grabMove.begin)">
           press
-          <HotkeyKbd :command="Commands.grabMove.begin" size="sm" />
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.begin)" size="sm" />
           or
         </template>
         Start Move.
@@ -13,21 +13,21 @@
       <FieldDescription v-else class="text-[11px] leading-snug">
         Blender-style grab: move follows the cursor.
         Parents grow recursively on overflow to fit the selection bbox.
-        <template v-if="commandShortcut(Commands.grabMove.lockX) || commandShortcut(Commands.grabMove.lockY)">
+        <template v-if="hasHotkeyBinding(Commands.grabMove.lockX) || hasHotkeyBinding(Commands.grabMove.lockY)">
           Lock axis with
-          <HotkeyKbd :command="Commands.grabMove.lockX" size="sm" />
-          <template v-if="commandShortcut(Commands.grabMove.lockX) && commandShortcut(Commands.grabMove.lockY)"> / </template>
-          <HotkeyKbd :command="Commands.grabMove.lockY" size="sm" />.
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.lockX)" size="sm" />
+          <template v-if="hasHotkeyBinding(Commands.grabMove.lockX) && hasHotkeyBinding(Commands.grabMove.lockY)"> / </template>
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.lockY)" size="sm" />.
         </template>
       </FieldDescription>
       <Button
         type="button"
         class="inline-flex w-full items-center justify-center gap-1.5"
-        :disabled="!commandEnabled(Commands.grabMove.begin)"
+        :disabled="!appCommandWithIdEnabled(Commands.grabMove.begin)"
         @click="emit('start')"
       >
         <span>Start Move</span>
-        <HotkeyKbd :command="Commands.grabMove.begin" />
+        <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.begin)" />
       </Button>
     </template>
 
@@ -49,7 +49,7 @@
           @click="emit('setAxisLock', 'x')"
         >
           <span>X</span>
-          <HotkeyKbd :command="Commands.grabMove.lockX" size="sm" />
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.lockX)" size="sm" />
         </Button>
         <Button
           type="button"
@@ -59,7 +59,7 @@
           @click="emit('setAxisLock', 'y')"
         >
           <span>Y</span>
-          <HotkeyKbd :command="Commands.grabMove.lockY" size="sm" />
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.lockY)" size="sm" />
         </Button>
       </div>
 
@@ -70,7 +70,7 @@
           @click="emit('confirm')"
         >
           <span>OK</span>
-          <HotkeyKbd :command="Commands.grabMove.confirm" size="sm" />
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.confirm)" size="sm" />
         </Button>
         <Button
           type="button"
@@ -79,7 +79,7 @@
           @click="emit('cancel')"
         >
           <span>Cancel</span>
-          <HotkeyKbd :command="Commands.grabMove.cancel" size="sm" />
+          <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.cancel)" size="sm" />
         </Button>
       </div>
     </template>
@@ -90,9 +90,9 @@
 import { Button } from '@/components/ui/button'
 import { FieldDescription, FieldGroup } from '@/components/ui/field'
 import { Commands } from '../../appCommands/ids'
-import { commandShortcut } from '../../stores/hotkeyBindings'
-import { commandEnabled } from '../../stores/appContext'
+import { getFirstHotkeyChord, hasHotkeyBinding } from '../../stores/hotkeyBindings'
 import HotkeyKbd from '../HotkeyKbd.vue'
+import { appCommandWithIdEnabled } from '@/app/commands/predicate.ts'
 
 defineProps<{
   selectedCount: number

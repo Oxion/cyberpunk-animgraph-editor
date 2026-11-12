@@ -635,7 +635,6 @@ import {
   getDiagramViewApi,
   getDiagramViewRenderer,
   focusedDiagramSurface,
-  isStateLinksRootContext,
   isStateLinksRootViewFocused,
   MAIN_RENDERER_ID,
   mainDiagramRenderer as graphRenderer,
@@ -772,18 +771,19 @@ import {
   canMoveSmStateByDelta,
   resolveLiveStateIndex,
 } from './utils/graph/smStateSlot'
-import { buildAppContext } from './when'
 import { registerAppCommands } from './appCommands'
 import { collectInputNodeIds } from './appCommands/selectInputsAdd'
 import { toggleAppTool } from './stores/appToolSelect'
-import { whenEnabled, liveInProgressTool } from './stores/appContext'
-import { hotkeyRegistry } from './stores/hotkeyBindings'
+import { initializeHotkeyBindings, handleHotkeyKeyDown } from './stores/hotkeyBindings'
 import {
   createGraphScopeView
 } from './utils/views/viewRegistry'
 import { getGraphViewPresentOps } from './utils/windows/presentOps'
 import { isFocusLeavingHost } from './utils/dom/focusDiagramHost'
 import { SimSnapshot } from './utils/sim/simTypes.ts'
+import { resolveAppPredicateContext } from './app/when/context.ts'
+import { registerAppPredicates } from './app/when/predicates.ts'
+import { whenTrue } from '@/core/when'
 
 useWorkspace()
 
@@ -948,7 +948,8 @@ const directChildrenLayoutMode = ref<DirectChildrenLayoutMode>('tidy-tree')
 
 
 const canDeleteSelection = computed(() => {
-  if (!whenEnabled('canDeleteSelection')) return false
+  // TODO check for command enabled
+  if (!whenTrue('canDeleteSelection', resolveAppPredicateContext())) return false
   const node = selectedNodeRef.value
   const data = getActiveRenderData()
   if (!node || !data) return false
@@ -966,7 +967,8 @@ const saveAsInitialPath = computed(() => {
 })
 
 const canMoveSmStateUp = computed(() => {
-  if (!whenEnabled('graphEditable')) return false
+  // TODO check for command enabled
+  if (!whenTrue('graphEditable', resolveAppPredicateContext())) return false
   historyRevisionRef.value
   const id = selectedNodeRef.value?.id
   const data = getActiveRenderData()
@@ -976,7 +978,8 @@ const canMoveSmStateUp = computed(() => {
 })
 
 const canMoveSmStateDown = computed(() => {
-  if (!whenEnabled('graphEditable')) return false
+  // TODO check for command enabled
+  if (!whenTrue('graphEditable', resolveAppPredicateContext())) return false
   historyRevisionRef.value
   const id = selectedNodeRef.value?.id
   const data = getActiveRenderData()
@@ -985,7 +988,8 @@ const canMoveSmStateDown = computed(() => {
 })
 
 const canLayoutSmStatesGroupSelected = computed(() => {
-  if (!whenEnabled('graphEditable')) return false
+  // TODO check for command enabled
+  if (!whenTrue('graphEditable', resolveAppPredicateContext())) return false
   historyRevisionRef.value
   const id = selectedNodeRef.value?.id
   const diagramId = activeDiagramIdRef.value
@@ -1251,8 +1255,10 @@ watch(
 )
 
 const toolsPanelRef = ref<InstanceType<typeof ToolsPanel> | null>(null)
-registerAllToolRunners()
+registerAppPredicates()
 registerAppCommands()
+registerAllToolRunners()
+initializeHotkeyBindings()
 
 const {
   sidebarWidth,
@@ -1809,17 +1815,7 @@ bindMoveResizeSession({
 const ARROW_MOVE_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'])
 
 const handleKeydown = (event: KeyboardEvent) => {
-  const ctx = buildAppContext({
-    event,
-    diagramHostFocused: diagramHotkeyFocus.value,
-    diagramEditable: hasProject.value && !isStateLinksRootContext(),
-    focusedTool: focusedTool.value ?? '',
-    activeToolCount: toolManager.getActiveToolIds().length,
-    inProgressTool: liveInProgressTool(),
-    hasSelection: selectedNodeIdsRef.value.length > 0,
-    hasGraph: hasProject.value,
-  })
-  hotkeyRegistry.handleKeydown(event, ctx)
+  handleHotkeyKeyDown(event)
 }
 
 const handleKeyup = (event: KeyboardEvent) => {

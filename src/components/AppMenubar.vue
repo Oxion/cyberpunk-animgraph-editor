@@ -1,4 +1,18 @@
 <script setup lang="ts">
+import { executeAppCommand } from '@/app/commands/execute.ts'
+import { appCommandWithIdEnabled } from '@/app/commands/predicate.ts'
+import { resolveAppPredicateContext } from '@/app/when/context.ts'
+import {
+  Menubar,
+  MenubarContent,
+  MenubarItem,
+  MenubarLabel,
+  MenubarMenu,
+  MenubarSeparator,
+  MenubarShortcut,
+  MenubarTrigger,
+} from '@/components/ui/menubar'
+import { whenTrue } from '@/core/when'
 import {
   Check,
   ChevronDown,
@@ -18,29 +32,8 @@ import {
   Waypoints,
   Workflow,
 } from 'lucide-vue-next'
-import {
-  Menubar,
-  MenubarContent,
-  MenubarItem,
-  MenubarLabel,
-  MenubarMenu,
-  MenubarSeparator,
-  MenubarShortcut,
-  MenubarTrigger,
-} from '@/components/ui/menubar'
 import { computed } from 'vue'
-import { isElectron } from '../utils/platform'
-import { isSettingsWindowOpen, toggleSettingsWindow } from '../stores/appWindows'
-import { hasProject } from '../stores/graphProject'
-import { selectedNodeRef } from '../stores/graphSession'
-import { commandShortcut } from '../stores/hotkeyBindings'
 import { Commands } from '../appCommands/ids'
-import { executeCommand } from '../commands'
-import { canToggleAppTool, commandEnabled, whenEnabled } from '../stores/appContext'
-import { activeToolsRegistry } from '../stores/toolManager'
-import { ANIM_NODE_STATE_TYPE_SET } from '../utils/graph/animNodeStateTypes'
-import { isSmStatesPropertyGroup } from '../utils/graph/DiagramConversion'
-import HotkeyKbd from './HotkeyKbd.vue'
 import {
   addMenuTools,
   arrangeMenuTools,
@@ -48,6 +41,16 @@ import {
   selectMenuTools,
   type AppToolId,
 } from '../appTools/catalog'
+import { canToggleAppTool } from '../stores/appContext'
+import { isSettingsWindowOpen, toggleSettingsWindow } from '../stores/appWindows'
+import { hasProject } from '../stores/graphProject'
+import { selectedNodeRef } from '../stores/graphSession'
+import { getFirstHotkeyChord, hasHotkeyBinding } from '../stores/hotkeyBindings'
+import { activeToolsRegistry } from '../stores/toolManager'
+import { ANIM_NODE_STATE_TYPE_SET } from '../utils/graph/animNodeStateTypes'
+import { isSmStatesPropertyGroup } from '../utils/graph/DiagramConversion'
+import { isElectron } from '../utils/platform'
+import HotkeyKbd from './HotkeyKbd.vue'
 
 defineProps<{
   filename: string | null
@@ -91,7 +94,7 @@ const hasNodeMenuItems = computed(
   () => isStateSelected.value || isSmStatesGroupSelected.value
 )
 
-const graphEditable = computed(() => whenEnabled('graphEditable'))
+const graphEditable = computed(() => whenTrue('graphEditable', resolveAppPredicateContext()))
 const electronApp = isElectron()
 
 async function onQuit() {
@@ -144,23 +147,23 @@ async function onQuit() {
         <MenubarItem
           class="header-menu-item"
           :disabled="!hasProject"
-          @select="executeCommand(Commands.document.save)"
+          @select="executeAppCommand(Commands.document.save)"
         >
           <SaveIcon class="size-3.5" />
           Save
-          <MenubarShortcut v-if="commandShortcut(Commands.document.save)">
-            <HotkeyKbd :command="Commands.document.save" size="sm" />
+          <MenubarShortcut v-if="hasHotkeyBinding(Commands.document.save)">
+            <HotkeyKbd :chord="getFirstHotkeyChord(Commands.document.save)" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
         <MenubarItem
           class="header-menu-item"
           :disabled="!hasProject"
-          @select="executeCommand(Commands.document.saveAs)"
+          @select="executeAppCommand(Commands.document.saveAs)"
         >
           <SaveIcon class="size-3.5" />
           Save As...
-          <MenubarShortcut v-if="commandShortcut(Commands.document.saveAs)">
-            <HotkeyKbd :command="Commands.document.saveAs" size="sm" />
+          <MenubarShortcut v-if="hasHotkeyBinding(Commands.document.saveAs)">
+            <HotkeyKbd :chord="getFirstHotkeyChord(Commands.document.saveAs)" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
         <MenubarSeparator />
@@ -188,37 +191,37 @@ async function onQuit() {
           class="header-menu-item"
           :disabled="!canUndo"
           :title="undoTitle"
-          @select="executeCommand(Commands.history.undo)"
+          @select="executeAppCommand(Commands.history.undo)"
         >
           <Undo2 class="size-3.5" />
           Undo
-          <MenubarShortcut v-if="commandShortcut(Commands.history.undo)">
-            <HotkeyKbd :command="Commands.history.undo" size="sm" />
+          <MenubarShortcut v-if="hasHotkeyBinding(Commands.history.undo)">
+            <HotkeyKbd :chord="getFirstHotkeyChord(Commands.history.undo)" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
         <MenubarItem
           class="header-menu-item"
           :disabled="!canRedo"
           :title="redoTitle"
-          @select="executeCommand(Commands.history.redo)"
+          @select="executeAppCommand(Commands.history.redo)"
         >
           <Redo2 class="size-3.5" />
           Redo
-          <MenubarShortcut v-if="commandShortcut(Commands.history.redo)">
-            <HotkeyKbd :command="Commands.history.redo" size="sm" />
+          <MenubarShortcut v-if="hasHotkeyBinding(Commands.history.redo)">
+            <HotkeyKbd :chord="getFirstHotkeyChord(Commands.history.redo)" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
         <MenubarSeparator />
         <MenubarItem
           class="header-menu-item"
           :disabled="!canDeleteSelection"
-          :title="commandShortcut(Commands.selection.delete) ? `Delete selected node (${commandShortcut(Commands.selection.delete)})` : 'Delete selected node'"
-          @select="executeCommand(Commands.selection.delete)"
+          :title="'Delete selected node'"
+          @select="executeAppCommand(Commands.selection.delete)"
         >
           <Trash2 class="size-3.5" />
           Delete
-          <MenubarShortcut v-if="commandShortcut(Commands.selection.delete)">
-            <HotkeyKbd :command="Commands.selection.delete" size="sm" />
+          <MenubarShortcut v-if="hasHotkeyBinding(Commands.selection.delete)">
+            <HotkeyKbd :chord="getFirstHotkeyChord(Commands.selection.delete)" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
         <MenubarSeparator />
@@ -233,8 +236,8 @@ async function onQuit() {
           <component :is="tool.icon" class="size-3.5" />
           {{ tool.label }}
           <Check v-if="activeToolsRegistry[tool.id]" class="ml-auto size-3.5 opacity-80" />
-          <MenubarShortcut v-else-if="tool.commandId && commandShortcut(tool.commandId)">
-            <HotkeyKbd :command="tool.commandId" size="sm" />
+          <MenubarShortcut v-else-if="tool.commandId && hasHotkeyBinding(tool.commandId)">
+            <HotkeyKbd :chord="getFirstHotkeyChord(tool.commandId)" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
       </MenubarContent>
@@ -245,9 +248,9 @@ async function onQuit() {
       <MenubarContent class="header-menu-content min-w-52" :side-offset="4" :align-offset="0">
         <MenubarItem
           class="header-menu-item"
-          :disabled="!commandEnabled(Commands.selection.deselectAll)"
+          :disabled="!appCommandWithIdEnabled(Commands.selection.deselectAll)"
           title="Clear node selection"
-          @select="executeCommand(Commands.selection.deselectAll)"
+          @select="executeAppCommand(Commands.selection.deselectAll)"
         >
           <CircleOff class="size-3.5" />
           Deselect All
@@ -255,9 +258,9 @@ async function onQuit() {
         <MenubarSeparator />
         <MenubarItem
           class="header-menu-item"
-          :disabled="!commandEnabled(Commands.selection.selectChildren)"
+          :disabled="!appCommandWithIdEnabled(Commands.selection.selectChildren)"
           title="Add direct children of selected nodes to selection"
-          @select="executeCommand(Commands.selection.selectChildren)"
+          @select="executeAppCommand(Commands.selection.selectChildren)"
         >
           <Network class="size-3.5" />
           Select Children
@@ -306,8 +309,8 @@ async function onQuit() {
           <component :is="tool.icon" class="size-3.5" />
           {{ tool.label }}
           <Check v-if="activeToolsRegistry[tool.id]" class="ml-auto size-3.5 opacity-80" />
-          <MenubarShortcut v-else-if="tool.commandId && commandShortcut(tool.commandId)">
-            <HotkeyKbd :command="tool.commandId" size="sm" />
+          <MenubarShortcut v-else-if="tool.commandId && hasHotkeyBinding(tool.commandId)">
+            <HotkeyKbd :chord="getFirstHotkeyChord(tool.commandId)" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
       </MenubarContent>

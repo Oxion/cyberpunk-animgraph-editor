@@ -46,8 +46,7 @@ import { computed, ref } from 'vue'
 import type { AppToolId } from '../appTools/catalog'
 import { getAppToolLabel } from '../appTools/catalog'
 import { Commands } from '../appCommands/ids'
-import type { AppCommandArgs } from '../commands'
-import { executeCommand } from '../commands'
+import type { AppCommandArgs } from '../core/commands/index.ts'
 import SidebarPanel from './SidebarPanel.vue'
 import { toolUiRegistry } from './tools/toolUiRegistry'
 import { selectedNodeRef, selectedNodeIdsRef, nodePositionRef, nodeSizeRef } from '../stores/graphSession'
@@ -60,6 +59,7 @@ import {
   resizeToolState,
 } from '../stores/tools'
 import { focusedTool, toolManager } from '../stores/toolManager'
+import { executeAppCommand } from '@/app/commands/execute.ts'
 
 const props = defineProps<{
   fill: boolean
@@ -178,64 +178,64 @@ const bodyListeners = computed(() => {
   switch (tool.value) {
     case 'move':
       return {
-        start: () => executeCommand(Commands.grabMove.begin),
-        confirm: () => executeCommand(Commands.grabMove.confirm),
-        cancel: () => executeCommand(Commands.grabMove.cancel),
-        clearAxisLock: () => executeCommand(Commands.grabMove.clearAxisLock),
+        start: () => executeAppCommand(Commands.grabMove.begin),
+        confirm: () => executeAppCommand(Commands.grabMove.confirm),
+        cancel: () => executeAppCommand(Commands.grabMove.cancel),
+        clearAxisLock: () => executeAppCommand(Commands.grabMove.clearAxisLock),
         setAxisLock: (v: 'x' | 'y') =>
-          executeCommand(v === 'x' ? Commands.grabMove.lockX : Commands.grabMove.lockY),
+          executeAppCommand(v === 'x' ? Commands.grabMove.lockX : Commands.grabMove.lockY),
       }
     case 'resize':
       return {
-        start: () => executeCommand(Commands.resize.begin),
-        confirm: () => executeCommand(Commands.resize.confirm),
-        cancel: () => executeCommand(Commands.resize.cancel),
-        clearSideLock: () => executeCommand(Commands.resize.clearSideLock),
+        start: () => executeAppCommand(Commands.resize.begin),
+        confirm: () => executeAppCommand(Commands.resize.confirm),
+        cancel: () => executeAppCommand(Commands.resize.cancel),
+        clearSideLock: () => executeAppCommand(Commands.resize.clearSideLock),
         setSideLock: (v: 'left' | 'right' | 'top' | 'bottom') => {
-          if (v === 'top') executeCommand(Commands.resize.lockTop)
-          else if (v === 'left') executeCommand(Commands.resize.lockLeft)
-          else if (v === 'bottom') executeCommand(Commands.resize.lockBottom)
-          else executeCommand(Commands.resize.lockRight)
+          if (v === 'top') executeAppCommand(Commands.resize.lockTop)
+          else if (v === 'left') executeAppCommand(Commands.resize.lockLeft)
+          else if (v === 'bottom') executeAppCommand(Commands.resize.lockBottom)
+          else executeAppCommand(Commands.resize.lockRight)
         },
       }
     case 'addNode':
       return {
         add: (p: { id: string; type: string; slotName?: string }) =>
-          executeCommand(Commands.nodes.add, p),
+          executeAppCommand(Commands.nodes.add, p),
       }
     case 'pasteNode':
       return {
-        paste: () => executeCommand(Commands.nodes.paste),
+        paste: () => executeAppCommand(Commands.nodes.paste),
       }
     case 'addConnection':
       return {
         create: (p: { fromId: string; toId: string; pinName: string }) =>
-          executeCommand(Commands.addConnection.create, p),
+          executeAppCommand(Commands.addConnection.create, p),
       }
     case 'arrangeInputs':
       return {
-        selectAll: () => executeCommand(Commands.arrangeInputs.selectAll),
-        deselectAll: () => executeCommand(Commands.arrangeInputs.deselectAll),
+        selectAll: () => executeAppCommand(Commands.arrangeInputs.selectAll),
+        deselectAll: () => executeAppCommand(Commands.arrangeInputs.deselectAll),
         toggle: (key: string, checked: boolean) =>
-          executeCommand(Commands.arrangeInputs.toggle, { key, checked }),
+          executeAppCommand(Commands.arrangeInputs.toggle, { key, checked }),
         arrange: (p: { margin: number; spacing: number }) =>
-          executeCommand(Commands.arrangeInputs.run, p),
+          executeAppCommand(Commands.arrangeInputs.run, p),
       }
     case 'selectInputs':
       return {
-        add: (recursive: boolean) => executeCommand(Commands.selectInputs.add, { recursive }),
+        add: (recursive: boolean) => executeAppCommand(Commands.selectInputs.add, { recursive }),
       }
     case 'arrangeSelection':
       return {
         arrange: (p: AppCommandArgs<typeof Commands.arrangeSelection.run>) =>
-          executeCommand(Commands.arrangeSelection.run, p),
+          executeAppCommand(Commands.arrangeSelection.run, p),
       }
     case 'attachHandle':
       return {
-        create: () => executeCommand(Commands.attachHandle.create),
-        clear: () => executeCommand(Commands.attachHandle.clear),
-        dataFromSelected: () => executeCommand(Commands.attachHandle.dataFromSelected),
-        run: () => executeCommand(Commands.attachHandle.run),
+        create: () => executeAppCommand(Commands.attachHandle.create),
+        clear: () => executeAppCommand(Commands.attachHandle.clear),
+        dataFromSelected: () => executeAppCommand(Commands.attachHandle.dataFromSelected),
+        run: () => executeAppCommand(Commands.attachHandle.run),
       }
     default:
       return {}

@@ -474,7 +474,7 @@
                         >
                           Press keys…
                         </span>
-                        <HotkeyKbd v-else :keys="formatChord(chord)" size="sm" />
+                        <HotkeyKbd v-else :chord="chord" size="sm" />
                       </Button>
                       <Button
                         v-if="!isCapturing(row.binding.id, chordIndex)"
@@ -521,21 +521,20 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Slider } from '@/components/ui/slider'
 import HotkeyKbd from './HotkeyKbd.vue'
 import { formatHotkeyWhenLabel } from './hotkeyWhenLabels'
-import type { HotkeyBindingConfig } from '../utils/hotkeys'
+import type { HotkeyBindingConfig } from '../core/hotkeys/index.ts'
 import {
   chordFromKeyboardEvent,
-  findChordConflicts,
+  findHotkeyBindingConflicts,
   formatChord,
   formatChords,
   removeChordAt,
   upsertChord,
-} from '../utils/hotkeys'
-import { defaultWhenPredicates } from '../when'
-import { getAppCommand, type AppCommand } from '../commands'
+} from '../core/hotkeys/index.ts'
+import { getAppCommand, getAppCommandLabel, type AppCommand } from '../core/commands/index.ts'
 import { DEFAULT_TEXT_LOD_CACHE_SCREEN_PX } from '../utils/graph/pixiText'
 import type { DiagramGridSettings } from '../utils/graph/diagramDotGrid'
 import {
-  hotkeyBindings,
+  hotkeyBindingsRef,
   resetAllHotkeyBindings,
   resetHotkeyBinding,
   setHotkeyChords,
@@ -624,7 +623,7 @@ const onTextLodThresholdSlide = (v: number[] | undefined) => {
 const bindingGroupName = (row: HotkeyBindingView): string => row.command.group?.trim() || 'Other'
 
 const editableBindings = computed(() =>
-  hotkeyBindings.value
+  hotkeyBindingsRef.value
     .map((binding) => ({ binding, command: getAppCommand(binding.id) }))
     .filter((row) => !row.command.hidden)
 )
@@ -633,13 +632,11 @@ const conflictMap = computed(() => {
   const map: Record<string, string> = {}
   const configs = editableBindings.value.map((row) => row.binding)
   for (const row of editableBindings.value) {
-    const conflicts = findChordConflicts(
+    const conflicts = findHotkeyBindingConflicts(
       configs,
-      row.binding.id,
-      row.binding.chords,
-      defaultWhenPredicates
+      row.binding,
     )
-    if (conflicts.length) map[row.binding.id] = conflicts.join(', ')
+    if (conflicts.length) map[row.binding.id] = conflicts.map(binding => getAppCommandLabel(binding.id)).join(', ')
   }
   return map
 })

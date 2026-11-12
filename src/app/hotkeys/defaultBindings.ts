@@ -1,5 +1,5 @@
 import { Commands } from '../../appCommands/ids'
-import type { HotkeyBindingConfig } from './types'
+import type { HotkeyBindingConfig } from '../../core/hotkeys/types'
 
 /**
  * Default keymap as data. Remapping later = swap chords / when ids, keep command ids.
@@ -50,11 +50,6 @@ export const defaultHotkeyBindings: HotkeyBindingConfig[] = [
     id: Commands.grabMove.lockY,
     chords: [{ key: 'y' }],
   },
-  {
-    id: Commands.grabMove.swallow,
-    chords: [{ key: 'g' }],
-    exclusive: true,
-  },
 
   {
     id: Commands.resize.cancel,
@@ -79,11 +74,6 @@ export const defaultHotkeyBindings: HotkeyBindingConfig[] = [
   {
     id: Commands.resize.lockRight,
     chords: [{ key: 'd' }],
-  },
-  {
-    id: Commands.resize.swallow,
-    chords: [{ key: 'g' }],
-    exclusive: true,
   },
 
   {

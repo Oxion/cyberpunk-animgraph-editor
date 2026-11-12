@@ -86,7 +86,6 @@ import {
   InputGroupInput,
 } from '@/components/ui/input-group'
 import { getActiveRenderData } from '@/stores/graphProject'
-import { whenEnabled } from '@/stores/appContext'
 import { addNodeToolState } from '@/stores/tools'
 import {
   collectOccupiedNodeIds,
@@ -95,6 +94,8 @@ import {
 import NodeTypePicker, {
   type NodeTypeOption,
 } from './NodeTypePicker.vue'
+import { resolveAppPredicateContext } from '@/app/when/context.ts'
+import { whenTrue } from '@/core/when'
 
 export type { NodeTypeOption }
 
@@ -120,9 +121,9 @@ const selectedOption = computed(() =>
   props.addableTypes.find((o) => o.key === settings.selectedTypeKey)
 )
 
-const canSubmit = computed(
-  () => whenEnabled('graphEditable') && !!settings.draftNodeId.trim() && !!selectedOption.value
-)
+const canSubmit = computed(() => {
+  return whenTrue('graphEditable', resolveAppPredicateContext()) && !!settings.draftNodeId.trim() && !!selectedOption.value
+})
 
 const occupiedIds = () => {
   const data = getActiveRenderData()

@@ -1,5 +1,5 @@
 import './types'
-import type { AppCommandId } from '../commands/types'
+import type { AppCommandId } from '../core/commands/types'
 
 /**
  * Canonical command id constants — use these instead of inline strings.
@@ -23,7 +23,6 @@ export const Commands = {
     lockX: 'grabMove.lockX',
     lockY: 'grabMove.lockY',
     clearAxisLock: 'grabMove.clearAxisLock',
-    swallow: 'grabMove.swallow',
     begin: 'grabMove.begin',
   },
   resize: {
@@ -34,7 +33,6 @@ export const Commands = {
     lockBottom: 'resize.lockBottom',
     lockRight: 'resize.lockRight',
     clearSideLock: 'resize.clearSideLock',
-    swallow: 'resize.swallow',
     begin: 'resize.begin',
   },
   addNode: {

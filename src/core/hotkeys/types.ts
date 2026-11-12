@@ -1,17 +1,17 @@
-import type { AppCommandId } from '../../commands'
-import type { WhenPredicate } from '../../when'
+import { WhenPredicate } from '@/core/when'
+import type { AppCommandId } from '@/core/commands'
 
 /** Serializable key chord for configs / future remapping UI. */
 export interface KeyChord {
   /** Normalized key: lowercase letter, or platform key like ArrowUp / Escape / Enter */
-  key: string
-  ctrl?: boolean
-  shift?: boolean
-  alt?: boolean
+  readonly key: string
+  readonly ctrl?: boolean
+  readonly shift?: boolean
+  readonly alt?: boolean
   /** macOS Command; treat as interchangeable with ctrl in matcher when either is set as "mod". */
-  meta?: boolean
+  readonly meta?: boolean
   /** If true, ctrl OR meta matches (Blender/VSCode-style mod). */
-  mod?: boolean
+  readonly mod?: boolean
 }
 
 /**
@@ -21,20 +21,22 @@ export interface KeyChord {
  */
 export interface HotkeyBindingConfig {
   /** Command id this binding triggers. */
-  id: AppCommandId
-  chords: KeyChord[]
+  readonly id: AppCommandId
+  readonly chords: KeyChord[]
   /** Named when-predicate; omit = command precondition only. */
-  when?: string
-  preventDefault?: boolean
+  readonly when?: string
+  readonly preventDefault?: boolean
   /**
    * If true, stop after this binding (even if action is a no-op).
    * Useful for in-progress tools that swallow keys.
    */
-  exclusive?: boolean
+  readonly exclusive?: boolean
   /** If false, binding may run while focus is textInput. Default false. */
-  allowInTextInput?: boolean
+  readonly allowInTextInput?: boolean
 }
 
 export interface ResolvedHotkeyBinding extends HotkeyBindingConfig {
-  whenFn?: WhenPredicate
+  readonly whenFn?: WhenPredicate
 }
+
+export type HotkeyChordOverrides = Record<string, KeyChord[]>

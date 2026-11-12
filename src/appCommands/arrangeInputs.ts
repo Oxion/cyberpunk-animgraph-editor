@@ -1,4 +1,4 @@
-import type { AppCommandArgs } from '../commands/types'
+import type { AppCommandArgs } from '../core/commands/types'
 import { moveInputNodesOnly } from '../composables/tools/moveResizeSession'
 import { requireActiveDiagramId } from '../stores/graphProject'
 import {

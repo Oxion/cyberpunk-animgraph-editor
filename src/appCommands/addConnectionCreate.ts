@@ -1,4 +1,4 @@
-import type { AppCommandArgs } from '../commands/types'
+import type { AppCommandArgs } from '../core/commands/types'
 import { requireActiveDiagramId } from '../stores/graphProject'
 import { createConnection } from '../stores/graphWireRecord'
 import { Commands } from './ids'

@@ -1,5 +1,5 @@
 import { formatAddNodeDenial } from '../components/tools/addNodeCopy'
-import type { AppCommandArgs } from '../commands/types'
+import type { AppCommandArgs } from '../core/commands/types'
 import { addNewNode } from '../stores/graphNodeCrud'
 import { requireActiveDiagramId } from '../stores/graphProject'
 import { Commands } from './ids'

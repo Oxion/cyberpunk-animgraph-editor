@@ -2,7 +2,7 @@
  * App-specific command definitions. Augments commands/types AppCommandMap.
  */
 
-import type { AppCommandDef } from '../commands/types'
+import type { AppCommandDef } from '../core/commands/types'
 import type { ArrangeSelectionAlgorithm, ElkLayeredVariant } from '../utils/graph/ElkGraphLayout'
 
 export interface HistoryUndoCommand extends AppCommandDef {
@@ -45,11 +45,6 @@ export interface GrabMoveClearAxisLockCommand extends AppCommandDef {
   id: 'grabMove.clearAxisLock'
 }
 
-export interface GrabMoveSwallowCommand extends AppCommandDef {
-  id: 'grabMove.swallow'
-  hidden: true
-}
-
 export interface GrabMoveBeginCommand extends AppCommandDef {
   id: 'grabMove.begin'
 }
@@ -80,11 +75,6 @@ export interface ResizeLockRightCommand extends AppCommandDef {
 
 export interface ResizeClearSideLockCommand extends AppCommandDef {
   id: 'resize.clearSideLock'
-}
-
-export interface ResizeSwallowCommand extends AppCommandDef {
-  id: 'resize.swallow'
-  hidden: true
 }
 
 export interface ResizeBeginCommand extends AppCommandDef {
@@ -203,7 +193,7 @@ export interface AttachHandleRunCommand extends AppCommandDef {
   id: 'attachHandle.run'
 }
 
-declare module '../commands/types' {
+declare module '../core/commands/types' {
   interface AppCommandMap {
     'history.undo': HistoryUndoCommand
     'history.redo': HistoryRedoCommand
@@ -215,7 +205,6 @@ declare module '../commands/types' {
     'grabMove.lockX': GrabMoveLockXCommand
     'grabMove.lockY': GrabMoveLockYCommand
     'grabMove.clearAxisLock': GrabMoveClearAxisLockCommand
-    'grabMove.swallow': GrabMoveSwallowCommand
     'grabMove.begin': GrabMoveBeginCommand
     'resize.cancel': ResizeCancelCommand
     'resize.confirm': ResizeConfirmCommand
@@ -224,7 +213,6 @@ declare module '../commands/types' {
     'resize.lockBottom': ResizeLockBottomCommand
     'resize.lockRight': ResizeLockRightCommand
     'resize.clearSideLock': ResizeClearSideLockCommand
-    'resize.swallow': ResizeSwallowCommand
     'resize.begin': ResizeBeginCommand
     'addNode.focus': AddNodeFocusCommand
     'nodes.add': NodesAddCommand
@@ -253,5 +241,3 @@ declare module '../commands/types' {
     'attachHandle.run': AttachHandleRunCommand
   }
 }
-
-export type { AppCommand, AppCommandArgs, AppCommandId } from '../commands/types'

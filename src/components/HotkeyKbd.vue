@@ -1,24 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { AppCommandId } from '../commands'
-import { commandShortcut } from '../stores/hotkeyBindings'
+import { formatChord, KeyChord } from '@/core/hotkeys';
 
 const props = withDefaults(
   defineProps<{
-    /** Single key, chord ("Ctrl+Z"), or list of key labels. */
-    keys?: string | string[]
-    /** Resolve the first chord from current hotkey bindings. */
-    command?: AppCommandId
+    /** Chord ("Ctrl+Z"). */
+    chord?: KeyChord
     size?: 'sm' | 'md'
   }>(),
   { size: 'md' }
 )
 
 const parts = computed(() => {
-  const source = props.command ? commandShortcut(props.command) : props.keys
-  if (!source) return []
-  if (Array.isArray(source)) return source.filter(Boolean)
-  return source
+  if (!props.chord) return []
+
+  return formatChord(props.chord)
     .split('+')
     .map((part) => part.trim())
     .filter(Boolean)

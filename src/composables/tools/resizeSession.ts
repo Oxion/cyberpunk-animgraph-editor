@@ -61,7 +61,7 @@ import {
 } from './moveResizeShared'
 import { cancelGrabMove } from './grabMove'
 import { Commands } from '../../appCommands/ids'
-import { commandEnabled } from '../../stores/appContext'
+import { appCommandWithIdEnabled } from '@/app/commands/predicate'
 
 export const computeResizedLayout = (
   start: ResizeStartLayout,
@@ -210,7 +210,7 @@ export const flushScheduledResize = () => {
 }
 
 export const beginResize = () => {
-  if (!commandEnabled(Commands.resize.begin)) return
+  if (!appCommandWithIdEnabled(Commands.resize.begin)) return
   const active = getActiveDiagramRenderer()
   let diagramId: string
   try {

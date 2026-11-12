@@ -3,7 +3,7 @@
     <Field class="gap-1.5">
       <FieldLabel for="connection-from-id" class="flex items-center gap-1.5 text-xs">
         From Node ID
-        <HotkeyKbd :command="Commands.addConnection.pickFrom" size="sm" />
+        <HotkeyKbd :chord="getFirstHotkeyChord(Commands.addConnection.pickFrom)" size="sm" />
       </FieldLabel>
       <InputGroup class="h-8 rounded-sm">
         <InputGroupInput
@@ -30,7 +30,7 @@
     <Field class="gap-1.5">
       <FieldLabel for="connection-to-id" class="flex items-center gap-1.5 text-xs">
         To Node ID
-        <HotkeyKbd :command="Commands.addConnection.pickTo" size="sm" />
+        <HotkeyKbd :chord="getFirstHotkeyChord(Commands.addConnection.pickTo)" size="sm" />
       </FieldLabel>
       <InputGroup class="h-8 rounded-sm">
         <InputGroupInput
@@ -83,8 +83,6 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from 'vue'
-import { PipetteIcon, XIcon } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import {
   Field,
@@ -97,9 +95,6 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from '@/components/ui/input-group'
-import HotkeyKbd from '../HotkeyKbd.vue'
-import { Commands } from '../../appCommands/ids'
-import { commandShortcut } from '../../stores/hotkeyBindings'
 import { getActiveRenderData } from '@/stores/graphProject'
 import { selectedNodeRef } from '@/stores/graphSession'
 import {
@@ -108,6 +103,12 @@ import {
   pickCreateConnectionTo,
 } from '@/stores/tools'
 import { listInputPinOptions } from '@/utils/graph/NodePins'
+import { formatChord } from '@/core/hotkeys/format.ts'
+import { PipetteIcon, XIcon } from 'lucide-vue-next'
+import { computed, watch } from 'vue'
+import { Commands } from '../../appCommands/ids'
+import { getFirstHotkeyChord } from '../../stores/hotkeyBindings'
+import HotkeyKbd from '../HotkeyKbd.vue'
 import PinNamePicker from './PinNamePicker.vue'
 
 const emit = defineEmits<{
@@ -163,13 +164,13 @@ watch(
 )
 
 const pickFromTitle = computed(() => {
-  const shortcut = commandShortcut(Commands.addConnection.pickFrom)
-  return shortcut ? `Pick from selected node (${shortcut})` : 'Pick from selected node'
+  const hotkeyChord = getFirstHotkeyChord(Commands.addConnection.pickFrom)
+  return hotkeyChord ? `Pick from selected node (${formatChord(hotkeyChord)})` : 'Pick from selected node'
 })
 
 const pickToTitle = computed(() => {
-  const shortcut = commandShortcut(Commands.addConnection.pickTo)
-  return shortcut ? `Pick to selected node (${shortcut})` : 'Pick to selected node'
+  const hotkeyChord = getFirstHotkeyChord(Commands.addConnection.pickTo)
+  return hotkeyChord ? `Pick to selected node (${formatChord(hotkeyChord)})` : 'Pick to selected node'
 })
 
 const pickFrom = () => {

@@ -11,7 +11,7 @@ import {
   Wrench,
 } from 'lucide-vue-next'
 import { Commands } from '../appCommands/ids'
-import type { AppCommandId } from '../commands/types'
+import type { AppCommandId } from '../core/commands/types'
 
 export type AppToolId =
   | 'move'

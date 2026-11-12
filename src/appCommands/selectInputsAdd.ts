@@ -1,4 +1,4 @@
-import type { AppCommandArgs } from '../commands/types'
+import type { AppCommandArgs } from '../core/commands/types'
 import { currentView, setViewSelection } from '../stores/bodyViews'
 import { getActiveDiagramRenderer } from '../stores/diagramRenderers'
 import { getActiveRenderData } from '../stores/graphProject'

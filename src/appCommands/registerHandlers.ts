@@ -12,7 +12,7 @@ import {
   clearResizeSideLock,
   confirmResize,
 } from '../composables/tools/resizeSession'
-import { registerAppCommandHandler } from '../commands/handlers'
+import { registerAppCommandHandler } from '../core/commands/handlers'
 import { Commands } from './ids'
 import { copySelection } from './copySelection'
 import { pasteNodes } from './pasteNodes'
