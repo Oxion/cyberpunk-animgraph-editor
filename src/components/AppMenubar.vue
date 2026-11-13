@@ -34,23 +34,31 @@ import {
 } from 'lucide-vue-next'
 import { computed } from 'vue'
 import { Commands } from '@/app/commands'
+import { toolMenuCommand } from './toolMenuCommand'
 import {
-  addMenuTools,
-  arrangeMenuTools,
-  editMenuTools,
-  selectMenuTools,
-  type AppToolId,
-} from '../appTools/catalog'
-import { canToggleAppTool } from '../stores/appContext'
+  activeToolsRegistry,
+  canToggleTool,
+  Tools,
+} from '@/app/tools'
+import { getAppTool, type AppToolId } from '@/core/tools'
 import { isSettingsWindowOpen, toggleSettingsWindow } from '../stores/appWindows'
 import { hasProject } from '../stores/graphProject'
 import { selectedNodeRef } from '../stores/graphSession'
 import { getFirstHotkeyChord, hasHotkeyBinding } from '../stores/hotkeyBindings'
-import { activeToolsRegistry } from '../stores/toolManager'
+import { toolIcons } from './tools/toolIcons'
 import { ANIM_NODE_STATE_TYPE_SET } from '../utils/graph/animNodeStateTypes'
 import { isSmStatesPropertyGroup } from '../utils/graph/DiagramConversion'
 import { isElectron } from '../utils/platform'
 import HotkeyKbd from './HotkeyKbd.vue'
+
+const editMenuTools = [getAppTool(Tools.move), getAppTool(Tools.resize), getAppTool(Tools.pasteNode)]
+const selectMenuTools = [getAppTool(Tools.selectInputs)]
+const arrangeMenuTools = [getAppTool(Tools.arrangeInputs), getAppTool(Tools.arrangeSelection)]
+const addMenuTools = [
+  getAppTool(Tools.addNode),
+  getAppTool(Tools.addConnection),
+  getAppTool(Tools.attachHandle),
+]
 
 defineProps<{
   filename: string | null
@@ -229,15 +237,17 @@ async function onQuit() {
           v-for="tool in editMenuTools"
           :key="tool.id"
           class="header-menu-item"
-          :disabled="!canToggleAppTool(tool.id)"
+          :disabled="!canToggleTool(tool.id)"
           :title="tool.label"
           @select="emit('toggle-tool', tool.id)"
         >
-          <component :is="tool.icon" class="size-3.5" />
+          <component :is="toolIcons[tool.id]" class="size-3.5" />
           {{ tool.label }}
           <Check v-if="activeToolsRegistry[tool.id]" class="ml-auto size-3.5 opacity-80" />
-          <MenubarShortcut v-else-if="tool.commandId && hasHotkeyBinding(tool.commandId)">
-            <HotkeyKbd :chord="getFirstHotkeyChord(tool.commandId)" size="sm" />
+          <MenubarShortcut
+            v-else-if="toolMenuCommand[tool.id] && hasHotkeyBinding(toolMenuCommand[tool.id]!)"
+          >
+            <HotkeyKbd :chord="getFirstHotkeyChord(toolMenuCommand[tool.id]!)" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
       </MenubarContent>
@@ -269,10 +279,10 @@ async function onQuit() {
           v-for="tool in selectMenuTools"
           :key="tool.id"
           class="header-menu-item"
-          :disabled="!canToggleAppTool(tool.id)"
+          :disabled="!canToggleTool(tool.id)"
           @select="emit('toggle-tool', tool.id)"
         >
-          <component :is="tool.icon" class="size-3.5" />
+          <component :is="toolIcons[tool.id]" class="size-3.5" />
           {{ tool.label }}
           <Check v-if="activeToolsRegistry[tool.id]" class="ml-auto size-3.5 opacity-80" />
         </MenubarItem>
@@ -286,10 +296,10 @@ async function onQuit() {
           v-for="tool in arrangeMenuTools"
           :key="tool.id"
           class="header-menu-item"
-          :disabled="!canToggleAppTool(tool.id)"
+          :disabled="!canToggleTool(tool.id)"
           @select="emit('toggle-tool', tool.id)"
         >
-          <component :is="tool.icon" class="size-3.5" />
+          <component :is="toolIcons[tool.id]" class="size-3.5" />
           {{ tool.label }}
           <Check v-if="activeToolsRegistry[tool.id]" class="ml-auto size-3.5 opacity-80" />
         </MenubarItem>
@@ -303,14 +313,16 @@ async function onQuit() {
           v-for="tool in addMenuTools"
           :key="tool.id"
           class="header-menu-item"
-          :disabled="!canToggleAppTool(tool.id)"
+          :disabled="!canToggleTool(tool.id)"
           @select="emit('toggle-tool', tool.id)"
         >
-          <component :is="tool.icon" class="size-3.5" />
+          <component :is="toolIcons[tool.id]" class="size-3.5" />
           {{ tool.label }}
           <Check v-if="activeToolsRegistry[tool.id]" class="ml-auto size-3.5 opacity-80" />
-          <MenubarShortcut v-else-if="tool.commandId && hasHotkeyBinding(tool.commandId)">
-            <HotkeyKbd :chord="getFirstHotkeyChord(tool.commandId)" size="sm" />
+          <MenubarShortcut
+            v-else-if="toolMenuCommand[tool.id] && hasHotkeyBinding(toolMenuCommand[tool.id]!)"
+          >
+            <HotkeyKbd :chord="getFirstHotkeyChord(toolMenuCommand[tool.id]!)" size="sm" />
           </MenubarShortcut>
         </MenubarItem>
       </MenubarContent>

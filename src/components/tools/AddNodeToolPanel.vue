@@ -86,7 +86,7 @@ import {
   InputGroupInput,
 } from '@/components/ui/input-group'
 import { getActiveRenderData } from '@/stores/graphProject'
-import { addNodeToolState } from '@/stores/tools'
+import { addNodeToolCache, addNodeToolState } from '@/stores/tools'
 import {
   collectOccupiedNodeIds,
   suggestIdFromNodeType,
@@ -96,20 +96,15 @@ import NodeTypePicker, {
 } from './NodeTypePicker.vue'
 import { resolveAppPredicateContext } from '@/app/when/context.ts'
 import { whenTrue } from '@/core/when'
+import { Commands } from '@/app/commands'
+import { executeAppCommand } from '@/app/commands/execute'
 
 export type { NodeTypeOption }
 
-const props = defineProps<{
-  targetLabel: string
-  addableTypes: NodeTypeOption[]
-  gateMessage?: string
-}>()
-
-const emit = defineEmits<{
-  add: [payload: { id: string; type: string; slotName?: string }]
-}>()
-
 const settings = addNodeToolState
+const targetLabel = computed(() => addNodeToolCache.targetLabel)
+const addableTypes = computed(() => addNodeToolCache.addableTypes)
+const gateMessage = computed(() => addNodeToolCache.gateMessage)
 
 const isAutoId = computed(() => settings.idMode === 'auto')
 
@@ -118,7 +113,7 @@ const idModeTitle = computed(() =>
 )
 
 const selectedOption = computed(() =>
-  props.addableTypes.find((o) => o.key === settings.selectedTypeKey)
+  addableTypes.value.find((o) => o.key === settings.selectedTypeKey)
 )
 
 const canSubmit = computed(() => {
@@ -145,7 +140,7 @@ const applySuggestedId = (reserved?: string) => {
 }
 
 watch(
-  () => props.addableTypes,
+  addableTypes,
   (types) => {
     if (types.length === 0) {
       settings.selectedTypeKey = ''
@@ -179,7 +174,7 @@ const onAdd = () => {
   const id = settings.draftNodeId.trim()
   const opt = selectedOption.value
   if (!id || !opt) return
-  emit('add', {
+  executeAppCommand(Commands.nodes.add, {
     id,
     type: opt.diagramNodeType,
     ...(opt.slotName ? { slotName: opt.slotName } : {}),

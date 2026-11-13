@@ -1,5 +1,5 @@
 <template>
-  <div class="tool-session-header" :title="titleText">
+  <div v-if="session" class="tool-session-header" :title="titleText">
     <span class="tool-session-header__item">
       <span class="tool-session-header__k">size</span>
       <span class="tool-session-header__v">
@@ -25,12 +25,23 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { nodePositionRef, nodeSizeRef, selectedNodeRef } from '../../stores/graphSession'
+import { resizeSessionState } from '@/app/tools/handlers/resize'
 
-const props = defineProps<{
-  size: { width: number; height: number }
-  position: { x: number; y: number }
-  sizeDelta: { width: number; height: number }
-}>()
+const session = computed(() => resizeSessionState.session)
+const size = nodeSizeRef
+const position = nodePositionRef
+const sizeDelta = computed(() => {
+  const s = session.value
+  const primaryId = selectedNodeRef.value?.id
+  if (!s || !primaryId) return { width: 0, height: 0 }
+  const start = s.startLayouts.get(primaryId)
+  if (!start) return { width: 0, height: 0 }
+  return {
+    width: size.value.width - start.width,
+    height: size.value.height - start.height,
+  }
+})
 
 const formatNumber = (value: number) => {
   if (!Number.isFinite(value)) return '—'
@@ -40,7 +51,7 @@ const formatNumber = (value: number) => {
 
 const titleText = computed(
   () =>
-    `size ${formatNumber(props.size.width)}×${formatNumber(props.size.height)} · pos ${formatNumber(props.position.x)}, ${formatNumber(props.position.y)} · Δ ${formatNumber(props.sizeDelta.width)}, ${formatNumber(props.sizeDelta.height)}`
+    `size ${formatNumber(size.value.width)}×${formatNumber(size.value.height)} · pos ${formatNumber(position.value.x)}, ${formatNumber(position.value.y)} · Δ ${formatNumber(sizeDelta.value.width)}, ${formatNumber(sizeDelta.value.height)}`
 )
 </script>
 

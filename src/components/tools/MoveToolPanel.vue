@@ -24,7 +24,7 @@
         type="button"
         class="inline-flex w-full items-center justify-center gap-1.5"
         :disabled="!appCommandWithIdEnabled(Commands.grabMove.begin)"
-        @click="emit('start')"
+        @click="executeAppCommand(Commands.grabMove.begin)"
       >
         <span>Start Move</span>
         <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.begin)" />
@@ -37,7 +37,7 @@
           type="button"
           size="xs"
           :variant="axisLock === 'none' ? 'default' : 'outline'"
-          @click="emit('clearAxisLock')"
+          @click="executeAppCommand(Commands.grabMove.clearAxisLock)"
         >
           Free
         </Button>
@@ -46,7 +46,7 @@
           size="xs"
           class="inline-flex items-center gap-1"
           :variant="axisLock === 'x' ? 'default' : 'outline'"
-          @click="emit('setAxisLock', 'x')"
+          @click="executeAppCommand(Commands.grabMove.lockX)"
         >
           <span>X</span>
           <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.lockX)" size="sm" />
@@ -56,7 +56,7 @@
           size="xs"
           class="inline-flex items-center gap-1"
           :variant="axisLock === 'y' ? 'default' : 'outline'"
-          @click="emit('setAxisLock', 'y')"
+          @click="executeAppCommand(Commands.grabMove.lockY)"
         >
           <span>Y</span>
           <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.lockY)" size="sm" />
@@ -67,7 +67,7 @@
         <Button
           type="button"
           class="inline-flex w-full items-center justify-center gap-1.5"
-          @click="emit('confirm')"
+          @click="executeAppCommand(Commands.grabMove.confirm)"
         >
           <span>OK</span>
           <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.confirm)" size="sm" />
@@ -76,7 +76,7 @@
           type="button"
           variant="secondary"
           class="inline-flex w-full items-center justify-center gap-1.5"
-          @click="emit('cancel')"
+          @click="executeAppCommand(Commands.grabMove.cancel)"
         >
           <span>Cancel</span>
           <HotkeyKbd :chord="getFirstHotkeyChord(Commands.grabMove.cancel)" size="sm" />
@@ -87,26 +87,18 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Button } from '@/components/ui/button'
 import { FieldDescription, FieldGroup } from '@/components/ui/field'
 import { Commands } from '@/app/commands'
+import { executeAppCommand } from '@/app/commands/execute'
+import { appCommandWithIdEnabled } from '@/app/commands/predicate'
 import { getFirstHotkeyChord, hasHotkeyBinding } from '../../stores/hotkeyBindings'
+import { selectedNodeIdsRef } from '../../stores/graphSession'
+import { moveSessionState } from '@/app/tools/handlers/move'
 import HotkeyKbd from '../HotkeyKbd.vue'
-import { appCommandWithIdEnabled } from '@/app/commands/predicate.ts'
 
-defineProps<{
-  selectedCount: number
-  active: boolean
-  position: { x: number; y: number }
-  delta: { x: number; y: number }
-  axisLock: 'none' | 'x' | 'y'
-}>()
-
-const emit = defineEmits<{
-  start: []
-  confirm: []
-  cancel: []
-  clearAxisLock: []
-  setAxisLock: ['x' | 'y']
-}>()
+const selectedCount = computed(() => selectedNodeIdsRef.value.length)
+const active = computed(() => Boolean(moveSessionState.session))
+const axisLock = computed(() => moveSessionState.session?.axisLock ?? ('none' as const))
 </script>

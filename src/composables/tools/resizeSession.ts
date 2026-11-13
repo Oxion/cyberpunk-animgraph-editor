@@ -1,47 +1,18 @@
 import { computed } from 'vue'
-import {
-  beginLayoutCapture,
-  cancelLayoutCapture,
-  commitLayoutCapture,
-  commitPositionCapture,
-  isLayoutGestureOpen,
-  isPositionGestureOpen,
-  trackLayoutBeforeChange,
-} from '../../stores/graphHistory'
-import { activeDiagramId, getRenderData, requireActiveDiagramId } from '../../stores/graphProject'
+import { trackLayoutBeforeChange } from '../../stores/graphHistory'
+import { activeDiagramId, getRenderData } from '../../stores/graphProject'
 import {
   nodePositionRef,
   nodeSizeRef,
   selectedNodeIdsRef,
   selectedNodeRef,
 } from '../../stores/graphSession'
-import { getActiveDiagramRenderer } from '../../stores/diagramRenderers'
-import {
-  autoResizeParents,
-  beginModalGestureTool,
-  lastPointerClient,
-  modalGestureReplacedFocus,
-  pressedArrowKeys,
-  suppressModalGestureRestore,
-} from '../../stores/modalGestureUi'
-import {
-  activeToolsRegistry,
-  onToolDeactivate,
-  toolManager,
-} from '../../stores/toolManager'
-import {
-  moveToolState,
-  resizeToolState,
-  type ResizeSideLock,
-  type ResizeStartLayout,
-} from '../../stores/tools'
+import { autoResizeParents } from '../../stores/modalGestureUi'
+import type { ResizeSession, ResizeSideLock, ResizeStartLayout } from '../../stores/tools'
 import type { RenderData, RenderNode } from '../../utils/graph/diagramTypes'
 import {
   applyResizeCascadePlan,
   applyResizeStartLayout,
-  buildResizeCascadePlan,
-  captureResizeCascadeBaselines,
-  captureResizeStartLayout,
   MIN_NODE_HEIGHT,
   MIN_NODE_WIDTH,
   restoreResizeCascadeBaselines,
@@ -52,16 +23,6 @@ import {
   getSelectionResizeLocks,
 } from '../../utils/graph/resizeLocks'
 import { updateActiveNodes } from '../../stores/graphPaint'
-import {
-  attachModalPointerListeners,
-  detachModalPointerListeners,
-  registerResizeModalApi,
-  requireHost,
-  restoreToolAfterModalGesture,
-} from './moveResizeShared'
-import { cancelGrabMove } from './grabMove'
-import { Commands } from '@/app/commands/ids'
-import { appCommandWithIdEnabled } from '@/app/commands/predicate'
 
 export const computeResizedLayout = (
   start: ResizeStartLayout,
@@ -123,9 +84,12 @@ export const selectionResizeLocks = computed(() => {
   return getSelectionResizeLocks(diagramData, nodes)
 })
 
-export const applyResizeFromMouseDelta = (mouseDx: number, mouseDy: number) => {
-  const session = resizeToolState.session
-  if (!session) return
+/** Pure session apply — caller owns session lifecycle. */
+export const applyResizeFromMouseDelta = (
+  session: ResizeSession,
+  mouseDx: number,
+  mouseDy: number
+) => {
   const diagramData = getRenderData(session.diagramId)
   if (!diagramData) return
 
@@ -134,7 +98,6 @@ export const applyResizeFromMouseDelta = (mouseDx: number, mouseDy: number) => {
   const affectedIds = new Set<string>()
   const cascadeOptions = {
     growParents: autoResizeParents.value,
-    // Move/resize: grow parents only (union bbox of operation seeds); no neighbour push.
     moveParentNeighbours: false,
     onBeforeLayoutMutate: trackLayoutBeforeChange,
   }
@@ -178,168 +141,3 @@ export const applyResizeFromMouseDelta = (mouseDx: number, mouseDy: number) => {
     nodeSizeRef.value = { ...node.size }
   }
 }
-
-export const updateResizeFromClient = (clientX: number, clientY: number) => {
-  const session = resizeToolState.session
-  const active = getActiveDiagramRenderer()
-  if (!session || !active) return
-  const world = active.clientPosToWorldPos(clientX, clientY)
-  if (!world) return
-  applyResizeFromMouseDelta(world.x - session.startWorld.x, world.y - session.startWorld.y)
-}
-
-let resizeRafId = 0
-const pendingResizeClient = { x: 0, y: 0 }
-export const scheduleResizeFromClient = (clientX: number, clientY: number) => {
-  pendingResizeClient.x = clientX
-  pendingResizeClient.y = clientY
-  if (resizeRafId) return
-  resizeRafId = requestAnimationFrame(() => {
-    resizeRafId = 0
-    if (!resizeToolState.session) return
-    updateResizeFromClient(pendingResizeClient.x, pendingResizeClient.y)
-  })
-}
-
-export const flushScheduledResize = () => {
-  if (!resizeRafId) return
-  cancelAnimationFrame(resizeRafId)
-  resizeRafId = 0
-  if (!resizeToolState.session) return
-  updateResizeFromClient(pendingResizeClient.x, pendingResizeClient.y)
-}
-
-export const beginResize = () => {
-  if (!appCommandWithIdEnabled(Commands.resize.begin)) return
-  const active = getActiveDiagramRenderer()
-  let diagramId: string
-  try {
-    diagramId = requireActiveDiagramId()
-  } catch {
-    return
-  }
-  const diagramData = getRenderData(diagramId)
-  if (!diagramData || !active || selectedNodeIdsRef.value.length === 0) return
-  if (resizeToolState.session) return
-  if (moveToolState.session) {
-    suppressModalGestureRestore.value = true
-    cancelGrabMove()
-    if (activeToolsRegistry.move) {
-      toolManager.deactivateTool('move')
-    }
-    suppressModalGestureRestore.value = false
-  }
-
-  if (isLayoutGestureOpen()) {
-    commitLayoutCapture(diagramId)
-  }
-  if (isPositionGestureOpen()) {
-    commitPositionCapture(diagramId)
-  }
-  pressedArrowKeys.clear()
-
-  const world =
-    active.clientPosToWorldPos(lastPointerClient.x, lastPointerClient.y) ??
-    active.getViewportCenter()
-
-  const startLayouts = new Map<string, ResizeStartLayout>()
-  for (const nodeId of selectedNodeIdsRef.value) {
-    const node = diagramData.allNodes.get(nodeId)
-    if (!node) continue
-    startLayouts.set(nodeId, captureResizeStartLayout(node))
-  }
-  if (startLayouts.size === 0) return
-
-  const cascadeStartLayouts = captureResizeCascadeBaselines(diagramData, startLayouts.keys())
-  const cascadePlan = buildResizeCascadePlan(diagramData, startLayouts.keys())
-
-  const historyLabel =
-    selectedNodeIdsRef.value.length > 1
-      ? `Resize ${selectedNodeIdsRef.value.length} nodes`
-      : 'Resize node'
-
-  beginLayoutCapture(diagramId, historyLabel)
-  resizeToolState.session = {
-    diagramId,
-    startWorld: { ...world },
-    sideLock: 'none',
-    startLayouts,
-    cascadeStartLayouts,
-    cascadePlan,
-  }
-  beginModalGestureTool('resize')
-  attachModalPointerListeners()
-  active.setCanvasCursor(selectionResizeLocks.value.allLockHeight ? 'ew-resize' : 'nwse-resize')
-  requireHost().graphCanvas.value?.focus({ preventScroll: true })
-  requireHost().updateGraphInteractionGate()
-}
-
-export const confirmResize = () => {
-  const session = resizeToolState.session
-  if (!session) return
-  const diagramId = session.diagramId
-  flushScheduledResize()
-  resizeToolState.session = null
-  if (!moveToolState.session) detachModalPointerListeners()
-  getActiveDiagramRenderer()?.setCanvasCursor('default')
-  commitLayoutCapture(diagramId)
-  requireHost().updateGraphInteractionGate()
-  if (modalGestureReplacedFocus.value) {
-    toolManager.deactivateTool('resize')
-  }
-}
-
-export const cancelResize = () => {
-  const session = resizeToolState.session
-  if (!session) return
-  const diagramId = session.diagramId
-  if (resizeRafId) {
-    cancelAnimationFrame(resizeRafId)
-    resizeRafId = 0
-  }
-  resizeToolState.session = null
-  if (!moveToolState.session) detachModalPointerListeners()
-  getActiveDiagramRenderer()?.setCanvasCursor('default')
-  cancelLayoutCapture(diagramId)
-  requireHost().updateGraphInteractionGate()
-  if (modalGestureReplacedFocus.value && !suppressModalGestureRestore.value) {
-    toolManager.deactivateTool('resize')
-  }
-}
-
-export const setResizeSideLock = (side: Exclude<ResizeSideLock, 'none'>) => {
-  const session = resizeToolState.session
-  if (!session) return
-  session.sideLock = session.sideLock === side ? 'none' : side
-  updateResizeFromClient(lastPointerClient.x, lastPointerClient.y)
-}
-
-export const clearResizeSideLock = () => {
-  const session = resizeToolState.session
-  if (!session || session.sideLock === 'none') return
-  session.sideLock = 'none'
-  updateResizeFromClient(lastPointerClient.x, lastPointerClient.y)
-}
-
-onToolDeactivate('resize', () => {
-  const session = resizeToolState.session
-  if (session) {
-    const diagramId = session.diagramId
-    if (resizeRafId) {
-      cancelAnimationFrame(resizeRafId)
-      resizeRafId = 0
-    }
-    resizeToolState.session = null
-    if (!moveToolState.session) detachModalPointerListeners()
-    getActiveDiagramRenderer()?.setCanvasCursor('default')
-    cancelLayoutCapture(diagramId)
-    requireHost().updateGraphInteractionGate()
-  }
-  restoreToolAfterModalGesture()
-})
-
-registerResizeModalApi({
-  scheduleFromClient: scheduleResizeFromClient,
-  confirm: confirmResize,
-  cancel: cancelResize,
-})

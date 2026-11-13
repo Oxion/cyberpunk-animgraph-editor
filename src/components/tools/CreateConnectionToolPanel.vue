@@ -107,13 +107,10 @@ import { formatChord } from '@/core/hotkeys/format.ts'
 import { PipetteIcon, XIcon } from 'lucide-vue-next'
 import { computed, watch } from 'vue'
 import { Commands } from '@/app/commands'
+import { executeAppCommand } from '@/app/commands/execute'
 import { getFirstHotkeyChord } from '../../stores/hotkeyBindings'
 import HotkeyKbd from '../HotkeyKbd.vue'
 import PinNamePicker from './PinNamePicker.vue'
-
-const emit = defineEmits<{
-  create: [payload: { fromId: string; toId: string; pinName: string }]
-}>()
 
 const settings = createConnectionToolState
 
@@ -190,6 +187,6 @@ const onCreate = () => {
   const fromId = settings.fromId.trim()
   const toId = effectiveToId.value
   if (!fromId || !toId || fromId === toId) return
-  emit('create', { fromId, toId, pinName: settings.pinName })
+  executeAppCommand(Commands.addConnection.create, { fromId, toId, pinName: settings.pinName })
 }
 </script>

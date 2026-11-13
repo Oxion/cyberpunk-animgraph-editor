@@ -38,8 +38,6 @@ import {
 } from './graphSession'
 import { createConnectionCore, deleteConnectionCore } from './graphWiring'
 import { markProjectDirty } from './projectDirty'
-import { moveToolState, resizeToolState } from './tools'
-
 /** Mutable flag — use this object so importers can assign `.isApplying`. */
 export const graphHistoryState = {
   isApplying: false,
@@ -321,9 +319,6 @@ export const cancelLayoutCapture = (diagramId: string) => {
 /** Commit any open move gesture (e.g. arrow-key hold) before undo/other actions. */
 export const flushOpenGestures = () => {
   if (deps?.flushModalToolSessions()) {
-    return
-  }
-  if (moveToolState.session || resizeToolState.session) {
     return
   }
   const id = currentGestureDiagramId ?? activeDiagramId.value

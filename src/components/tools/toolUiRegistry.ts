@@ -1,5 +1,5 @@
 import type { Component } from 'vue'
-import type { AppToolId } from '../../appTools/catalog'
+import type { AppToolId } from '@/core/tools'
 import AddNodeToolPanel from './AddNodeToolPanel.vue'
 import ArrangeInputsToolPanel from './ArrangeInputsToolPanel.vue'
 import ArrangeSelectionToolPanel from './ArrangeSelectionToolPanel.vue'
@@ -18,7 +18,7 @@ export type ToolUiEntry = {
   Header?: Component
 }
 
-export const toolUiRegistry: Record<AppToolId, ToolUiEntry> = {
+export const toolUiRegistry: Partial<Record<AppToolId, ToolUiEntry>> = {
   move: { Body: MoveToolPanel, Header: MoveSessionHeader },
   resize: { Body: ResizeToolPanel, Header: ResizeSessionHeader },
   addNode: { Body: AddNodeToolPanel },

@@ -113,7 +113,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ArrangeSelectionAlgorithm, ElkLayeredVariant } from '../../utils/graph/ElkGraphLayout'
+import type { ArrangeSelectionAlgorithm } from '../../utils/graph/ElkGraphLayout'
 import { PropertyNumberSlider } from '@/components/nodeDetails'
 import { Button } from '@/components/ui/button'
 import {
@@ -123,25 +123,15 @@ import {
   FieldLabel,
 } from '@/components/ui/field'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { arrangeSelectionToolState } from '@/stores/tools'
-
-defineProps<{
-  selectedCount: number
-  anchorId: string | null
-  busy: boolean
-}>()
-
-const emit = defineEmits<{
-  arrange: [payload: {
-    algorithm: ArrangeSelectionAlgorithm
-    layeredVariant: ElkLayeredVariant
-    nodeNodeSpacing: number
-    layerSpacing: number
-    forceIterations: number
-  }]
-}>()
+import { arrangeSelectionToolCache, arrangeSelectionToolState } from '@/stores/tools'
+import { selectedNodeIdsRef } from '@/stores/graphSession'
+import { Commands } from '@/app/commands'
+import { executeAppCommand } from '@/app/commands/execute'
 
 const settings = arrangeSelectionToolState
+const selectedCount = computed(() => selectedNodeIdsRef.value.length)
+const anchorId = computed(() => arrangeSelectionToolCache.anchorId)
+const busy = computed(() => arrangeSelectionToolCache.busy)
 
 const algorithmDescriptions = {
   layered: 'Layered left → right (ELK).',
@@ -163,7 +153,7 @@ const showsLayerSpacing = computed(
 )
 
 const onArrange = () => {
-  emit('arrange', {
+  executeAppCommand(Commands.arrangeSelection.run, {
     algorithm: settings.algorithm,
     layeredVariant: settings.layeredMode,
     nodeNodeSpacing: settings.nodeSpacing,

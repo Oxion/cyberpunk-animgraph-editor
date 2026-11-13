@@ -70,10 +70,8 @@ import {
 import { selectedNodeRef } from '@/stores/graphSession'
 import { pasteNodeToolCache, pasteNodeToolState } from '@/stores/tools'
 import { clearPasteTarget, pickPasteTarget } from '@/stores/tools/pasteNode'
-
-const emit = defineEmits<{
-  paste: []
-}>()
+import { Commands } from '@/app/commands'
+import { executeAppCommand } from '@/app/commands/execute'
 
 const settings = pasteNodeToolState
 
@@ -116,6 +114,6 @@ const clearTarget = () => {
 
 const onPaste = () => {
   if (!canSubmit.value) return
-  emit('paste')
+  executeAppCommand(Commands.nodes.paste)
 }
 </script>

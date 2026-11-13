@@ -1,19 +1,14 @@
-import { focusedDiagramSurface, getActiveDiagramRenderer, isStateLinksRootContext, isStateLinksRootViewFocused } from "@/stores/diagramRenderers"
-import { moveToolState, resizeToolState } from "@/stores/tools"
+import { focusedDiagramSurface, isStateLinksRootContext, isStateLinksRootViewFocused } from "@/stores/diagramRenderers"
 import { AppFocus } from "./types"
 import { hasProject } from "@/stores/graphProject"
 import { PredicateContext } from "@/core/when"
-import { focusedTool, toolManager } from "@/stores/toolManager"
+import { focusedTool, getInProgressToolId, getStackToolIds } from "@/app/tools/pipeline"
 import { selectedNodeIdsRef } from "@/stores/graphSession"
 
-// TODO not related to when
 export function resolveAppInProgressTool(): string {
-  if (moveToolState.session) return 'move'
-  if (resizeToolState.session) return 'resize'
-  return getActiveDiagramRenderer()?.isPinDragging() ? 'connectionDrag' : ''
+  return getInProgressToolId() ?? ''
 }
 
-// TODO not related to when
 function resolveAppFocus(): AppFocus {
   const el = document.activeElement
   if (
@@ -34,7 +29,7 @@ export function resolveAppPredicateContext(): PredicateContext {
     focus: resolveAppFocus(),
     diagramEditable: hasProject.value && !isStateLinksRootContext(),
     focusedTool: focusedTool.value ?? '',
-    activeToolCount: toolManager.getActiveToolIds().length,
+    activeToolCount: getStackToolIds().length,
     inProgressTool: resolveAppInProgressTool(),
     hasSelection: selectedNodeIdsRef.value.length > 0,
     hasGraph: hasProject.value,

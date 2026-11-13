@@ -47,7 +47,7 @@ import {
   presentClosedProject,
   presentReplacedProject,
 } from './projectViewSession'
-import { toolManager } from './toolManager'
+import { deactivateAllTools } from '@/app/tools'
 import { currentLoadedPath } from './loadedProjectPath'
 import { diagramViewReadyRef } from '../composables/useMainDiagramMount'
 import { rewriteRunnerSlotsDiagramIds } from '../composables/useAnimgraphSim'
@@ -194,7 +194,7 @@ async function resolveDiagramIdForLoad(
 }
 
 function commitDiagramToProject(diagramId: string, renderData: RenderData, replaceProject: boolean) {
-  toolManager.deactivateAll()
+  deactivateAllTools()
   if (replaceProject || !projectRef.value) {
     clearSelectionState()
     clearGraphHistory()
@@ -231,7 +231,7 @@ export const loadProjectFile = async (data: AnimgraphProjectFile) => {
     const renderData = await parser.loadAnimgraphVisualizerData(entry.data)
     diagrams.push({ id: entry.id, data: renderData })
   }
-  toolManager.deactivateAll()
+  deactivateAllTools()
   clearSelectionState()
   clearGraphHistory()
   setProject(
@@ -1097,7 +1097,7 @@ export const handleSaveAs = async (filePath: string) => {
 }
 
 export const closeProject = () => {
-  toolManager.deactivateAll()
+  deactivateAllTools()
   clearSelectionState()
   clearGraphHistory()
   resetProject()

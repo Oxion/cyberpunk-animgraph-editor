@@ -29,7 +29,7 @@
     <Button
       class="w-full"
       :disabled="newCount === 0"
-      @click="emit('add', settings.recursive)"
+      @click="executeAppCommand(Commands.selectInputs.add, { recursive: settings.recursive })"
     >
       Add Inputs to Selection
     </Button>
@@ -46,17 +46,24 @@ import {
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field'
+import { Commands } from '@/app/commands'
+import { executeAppCommand } from '@/app/commands/execute'
+import { getActiveRenderData } from '@/stores/graphProject'
+import { selectedNodeIdsRef } from '@/stores/graphSession'
 import { selectInputsToolState } from '@/stores/tools'
-
-const props = defineProps<{
-  selectedCount: number
-  resolveNewCount: (recursive: boolean) => number
-}>()
-
-const emit = defineEmits<{
-  add: [recursive: boolean]
-}>()
+import { collectInputNodeIds } from '@/utils/graph/diagramUtils'
 
 const settings = selectInputsToolState
-const newCount = computed(() => props.resolveNewCount(settings.recursive))
+const selectedCount = computed(() => selectedNodeIdsRef.value.length)
+const newCount = computed(() => {
+  const data = getActiveRenderData()
+  if (!data || selectedNodeIdsRef.value.length === 0) return 0
+  const selectedSet = new Set(selectedNodeIdsRef.value)
+  const inputIds = collectInputNodeIds(
+    selectedNodeIdsRef.value,
+    data.connections,
+    settings.recursive
+  )
+  return inputIds.filter((id) => !selectedSet.has(id)).length
+})
 </script>

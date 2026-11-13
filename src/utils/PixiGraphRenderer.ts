@@ -70,7 +70,6 @@ import { OPEN_SCOPE_BTN_TEXT_LABEL, PixiDiagramNode, PixiDiagramNodeCtx } from '
 import { NodeElsContainer, PixiRenderStats } from './PixiGraphrenderer.types'
 import { SimNodeState, SimSnapshot, SimSnapshotUpdate } from './sim'
 
-
 type NodeGroup = Container
 
 export type PresentWorldRectOptions = {
@@ -377,6 +376,8 @@ export class PixiGraphRenderer {
         newPinName?: string
       }) => void)
     | null = null
+  private _onConnectionDragBegin: (() => void) | null = null
+  private _onConnectionDragEnd: ((reason: 'confirm' | 'cancel') => void) | null = null
   private interactionGate: () => boolean = () => true
   private allowPinDrag = true
   private _pinDrag?: PinDrag
@@ -994,6 +995,7 @@ export class PixiGraphRenderer {
     this._setupConnectionDragLine(this._pinDrag)
 
     this._updatePinDragLine(globalPos.x, globalPos.y)
+    this._onConnectionDragBegin?.()
   }
 
   private _updatePinDragLine(
@@ -1010,7 +1012,12 @@ export class PixiGraphRenderer {
     this._renderConnectionDragLine(this._pinDrag, stageX, stageY)
   }
 
-  private _endPinDrag(options?: { restoreHidden?: boolean }): void {
+  private _endPinDrag(options?: {
+    restoreHidden?: boolean
+    reason?: 'confirm' | 'cancel'
+    /** When false, skip pipeline notify (pipeline already ending the session). */
+    notify?: boolean
+  }): void {
     if (!this._pinDrag) return
 
     const restoreHidden = options?.restoreHidden !== false
@@ -1021,6 +1028,9 @@ export class PixiGraphRenderer {
     this._destroyPinSnapHighlight(this._pinDrag)
 
     this._pinDrag = undefined
+    if (options?.notify !== false) {
+      this._onConnectionDragEnd?.(options?.reason ?? 'cancel')
+    }
   }
 
   private _handlePinDragMove(e: FederatedPointerEvent): void {
@@ -1049,7 +1059,7 @@ export class PixiGraphRenderer {
     const fromNodeId = pinDrag.fromDiagramNodeId
     const rewire = pinDrag.rewire
     
-    this._endPinDrag({ restoreHidden: clickOnly })
+    this._endPinDrag({ restoreHidden: clickOnly, reason: clickOnly ? 'cancel' : 'confirm' })
     if (clickOnly) return
 
     if (rewire) {
@@ -3273,8 +3283,8 @@ export class PixiGraphRenderer {
     return !!this._pinDrag
   }
 
-  public abortPinDrag(): void {
-    this._endPinDrag()
+  public abortPinDrag(options?: { notify?: boolean }): void {
+    this._endPinDrag({ reason: 'cancel', notify: options?.notify })
   }
 
   // #endregion
@@ -3674,6 +3684,14 @@ export class PixiGraphRenderer {
     }) => void
   ): void {
     this._onPinRewire = callback
+  }
+
+  public setOnConnectionDragBegin(callback: () => void): void {
+    this._onConnectionDragBegin = callback
+  }
+
+  public setOnConnectionDragEnd(callback: (reason: 'confirm' | 'cancel') => void): void {
+    this._onConnectionDragEnd = callback
   }
 
   // #endregion

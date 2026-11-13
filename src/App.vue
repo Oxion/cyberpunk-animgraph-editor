@@ -30,7 +30,7 @@
             @move-sm-state-down="moveActiveSelectedSmStateByDelta(1)"
             @layout-sm-states-group="layoutActiveSelectedSmStatesGroup"
             @toggle-sim="toggleSimCard"
-            @toggle-tool="toggleAppTool"
+            @toggle-tool="toggleTool"
             @open-render-stats="openRenderStatsForActive"
             @about="showAboutDialog = true"
           />
@@ -214,14 +214,13 @@
             </SidebarPanel>
 
             <ToolsPanel
-              v-if="focusedTool"
+              v-if="panelTool"
               ref="toolsPanelRef"
               v-model:collapsed="toolsPanelCollapsed"
               v-model:height="toolsPanelHeight"
               :fill="sidebarFillPanelId === 'tools'"
               :min-height="SIDEBAR_PANEL_MIN.tools"
               :max-height="sidebarPanelMaxHeights.tools"
-              :resolve-select-inputs-new-count="resolveSelectInputsNewCount"
             />
 
             <NodeDetailsPanel
@@ -665,8 +664,6 @@ import { presentActiveDiagram } from './stores/projectViewSession'
 import {
   canRedo,
   canUndo,
-  commitLayoutCapture,
-  commitPositionCapture,
   graphHistory,
   graphHistoryState,
   handleDataRevision,
@@ -683,12 +680,11 @@ import {
 } from './stores/graphPaint'
 import {
   bindMoveResizeSession,
-  cancelGrabMove,
-  cancelResize,
-  detachModalPointerListeners,
   moveSelectedNodeByDelta,
   trackLastPointerClient,
 } from './composables/tools/moveResizeSession'
+import { grabMoveCancel } from './app/commands/handlers/grabMove'
+import { resizeCancel } from './app/commands/handlers/resize'
 import {
   deleteConnection,
   handlePinConnect,
@@ -698,10 +694,7 @@ import {
   attachHandleAction,
   createAttachHandleAction,
 } from './composables/tools/useAttachHandleTool'
-import {
-  autoResizeParents,
-  pressedArrowKeys,
-} from './stores/modalGestureUi'
+import { autoResizeParents } from './stores/modalGestureUi'
 import {
   bindGraphMutations,
   canLayoutSmStatesGroup,
@@ -720,16 +713,18 @@ import {
   windowStackRevision,
 } from './stores/windowStacks'
 import type { GraphViewEntry, GraphViewSelection } from './types/GraphView'
-import { registerAllToolRunners } from './stores/registerAllToolRunners'
 import {
-  activeToolsRegistry,
-  focusedTool,
-  toolManager,
-} from './stores/toolManager'
+  deactivateAllTools,
+  panelTool,
+  registerAppTools,
+  toggleTool,
+} from './app/tools'
 import {
-  moveToolState,
-  resizeToolState,
-} from './stores/tools'
+  notifyConnectionDragBegin,
+  notifyConnectionDragEnd,
+} from './app/tools/connectionDragBridge'
+import { moveSessionState } from './app/tools/handlers/move'
+import { resizeSessionState } from './app/tools/handlers/resize'
 import type { AppWindowState, RenderStatsWindowPayload } from './types/AppWindow'
 import type { AnimgraphNode } from './utils/graph/animgraphTypes'
 import type { DiagramConnection, RenderData } from './utils/graph/diagramTypes'
@@ -771,7 +766,6 @@ import {
   canMoveSmStateByDelta,
   resolveLiveStateIndex,
 } from './utils/graph/smStateSlot'
-import { toggleAppTool } from './stores/appToolSelect'
 import { initializeHotkeyBindings, handleHotkeyKeyDown } from './stores/hotkeyBindings'
 import {
   createGraphScopeView
@@ -782,7 +776,6 @@ import { SimSnapshot } from './utils/sim/simTypes.ts'
 import { resolveAppPredicateContext } from './app/when/context.ts'
 import { registerAppPredicates } from './app/when/predicates.ts'
 import { whenTrue } from '@/core/when'
-import { collectInputNodeIds } from './utils/graph/diagramUtils.ts'
 import { registerAppCommands } from './app/commands/index.ts'
 
 useWorkspace()
@@ -1020,6 +1013,8 @@ const onDiagramViewReady = (viewId: string) => {
   const diagramId = diagramIdForViewId(viewId)
   renderer?.setOnPinConnect((payload) => handlePinConnect(diagramId, payload))
   renderer?.setOnPinRewire((payload) => handlePinRewire(diagramId, payload))
+  renderer?.setOnConnectionDragBegin(notifyConnectionDragBegin)
+  renderer?.setOnConnectionDragEnd(notifyConnectionDragEnd)
   notifyDiagramViewReady(viewId)
   applyConnectionSettingsToRenderer(renderer)
   applySimOverlayToAllRenderers()
@@ -1257,7 +1252,7 @@ watch(
 const toolsPanelRef = ref<InstanceType<typeof ToolsPanel> | null>(null)
 registerAppPredicates()
 registerAppCommands()
-registerAllToolRunners()
+registerAppTools()
 initializeHotkeyBindings()
 
 const {
@@ -1285,14 +1280,12 @@ const {
   visibility: () => ({
     graphInfo: showGraphInfoCard.value,
     sim: showSimCard.value,
-    tools: hasProject.value && (focusedTool.value != null || toolManager.getActiveToolIds().length > 0),
+    tools: hasProject.value && panelTool.value != null,
     details: hasProject.value,
   }),
   chromeBarVisible: () => currentView.value.kind !== 'main',
   fillSinglePanel: () => selectedNodeRef.value != null,
 })
-void activeToolsRegistry
-
 const PRESENT_SIDEBAR_GAP = 12
 const bodyPresentRightInset = computed(
   () =>
@@ -1348,18 +1341,10 @@ const onSidebarGraphViewChromePin = () => {
 
 const connectionsEditMode = ref(false)
 
-const resolveSelectInputsNewCount = (recursive: boolean) => {
-  const data = getActiveRenderData()
-  if (!data || selectedNodeIdsRef.value.length === 0) return 0
-  const selectedSet = new Set(selectedNodeIdsRef.value)
-  const inputIds = collectInputNodeIds(selectedNodeIdsRef.value, data.connections, recursive)
-  return inputIds.filter((id) => !selectedSet.has(id)).length
-}
-
 const updateGraphInteractionGate = () => {
   const gate = () => {
     if (!diagramHotkeyFocus.value) return false
-    if (moveToolState.session || resizeToolState.session) return false
+    if (moveSessionState.session || resizeSessionState.session) return false
     if (suppressNextGraphInteraction.value) {
       suppressNextGraphInteraction.value = false
       return false
@@ -1812,38 +1797,19 @@ bindMoveResizeSession({
 })
 
 // Keyboard shortcuts — bindings are data; handlers live in commands/handlers.ts
-const ARROW_MOVE_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'])
-
 const handleKeydown = (event: KeyboardEvent) => {
   handleHotkeyKeyDown(event)
 }
 
-const handleKeyup = (event: KeyboardEvent) => {
-  if (!ARROW_MOVE_KEYS.has(event.code)) return
-  if (moveToolState.session) {
-    pressedArrowKeys.delete(event.code)
-    return
-  }
-  pressedArrowKeys.delete(event.code)
-  if (pressedArrowKeys.size === 0) {
-    try {
-      const diagramId = requireActiveDiagramId()
-      commitPositionCapture(diagramId)
-      commitLayoutCapture(diagramId)
-    } catch {
-      /* no active diagram */
-    }
-  }
-}
-
 installGraphHistoryRuntime({
+  // TODO rework this hack
   flushModalToolSessions: () => {
-    if (moveToolState.session) {
-      cancelGrabMove()
+    if (moveSessionState.session) {
+      grabMoveCancel()
       return true
     }
-    if (resizeToolState.session) {
-      cancelResize()
+    if (resizeSessionState.session) {
+      resizeCancel()
       return true
     }
     return false
@@ -1942,6 +1908,8 @@ bindGraphDocument({
   openLensForNode: (node, host) => openLensForNode(resolveMainDiagramId(), node, host),
   handlePinConnect: (payload) => handlePinConnect(resolveMainDiagramId(), payload),
   handlePinRewire: (payload) => handlePinRewire(resolveMainDiagramId(), payload),
+  handleConnectionDragBegin: notifyConnectionDragBegin,
+  handleConnectionDragEnd: notifyConnectionDragEnd,
   simReset: sim.reset,
   simRebind: sim.rebind,
   getCachedClipPoseCompactText: sim.getCachedClipPoseCompactText,
@@ -1998,7 +1966,6 @@ watch(selectedNodeRef, (newVal) => {
 onMounted(() => {
   // Add keyboard event listener
   document.addEventListener('keydown', handleKeydown)
-  document.addEventListener('keyup', handleKeyup)
   document.addEventListener('pointermove', trackLastPointerClient, { passive: true })
   window.addEventListener('resize', onWindowResize)
 
@@ -2010,16 +1977,14 @@ onMounted(() => {
 
 // Cleanup
 onUnmounted(() => {
-  toolManager.deactivateAll()
-  if (moveToolState.session) {
-    cancelGrabMove()
+  deactivateAllTools()
+  if (moveSessionState.session) {
+    grabMoveCancel()
   }
-  if (resizeToolState.session) {
-    cancelResize()
+  if (resizeSessionState.session) {
+    resizeCancel()
   }
-  detachModalPointerListeners()
   document.removeEventListener('keydown', handleKeydown)
-  document.removeEventListener('keyup', handleKeyup)
   document.removeEventListener('pointermove', trackLastPointerClient)
   window.removeEventListener('resize', onWindowResize)
   disposeSidebarLayout()

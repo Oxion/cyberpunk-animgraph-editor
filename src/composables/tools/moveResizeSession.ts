@@ -1,34 +1,29 @@
-/** Barrel — prefer grabMove / resizeSession / moveResizeShared directly. */
+/** Barrel — prefer grabMove / resizeSession / handlers directly. */
 export {
   arrangeSelectedNodesWithElk,
-  beginGrabMove,
-  cancelGrabMove,
-  clearGrabAxisLock,
-  confirmGrabMove,
   countDescendants,
   getAllInputNodes,
   getAllOutputNodes,
   moveInputNodesCloser,
   moveInputNodesOnly,
-  moveNode,
   moveSelectedNodeByDelta,
-  nudgeSelection,
-  setGrabAxisLock,
 } from './grabMove'
 
-export {
-  beginResize,
-  cancelResize,
-  clearResizeSideLock,
-  confirmResize,
-  selectionResizeLocks,
-  setResizeSideLock,
-} from './resizeSession'
+export { selectionResizeLocks } from './resizeSession'
 
 export {
-  attachModalPointerListeners,
+  lockMoveAxis as setGrabAxisLock,
+  clearMoveAxisLock as clearGrabAxisLock,
+  nudgeMoveSession,
+} from '@/app/tools/handlers/move'
+
+export {
+  lockResizeSide as setResizeSideLock,
+  clearResizeSideLock,
+} from '@/app/tools/handlers/resize'
+
+export {
   bindMoveResizeSession,
-  detachModalPointerListeners,
   getNodeHeight,
   getNodeWidth,
   trackLastPointerClient,

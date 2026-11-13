@@ -1,21 +1,8 @@
-import { watchEffect } from 'vue'
-import { resizeToolCache, resizeToolState } from '../../stores/tools'
-
 /**
- * Preferred session APIs: import from `./resizeSession` (or `./moveResizeSession`).
- * This module only syncs resizeToolCache.active while the resize tool runner is live.
+ * Resize tool activation shell. Session APIs: `@/app/tools/handlers/resize`.
  */
-export {
-  beginResize,
-  cancelResize,
-  clearResizeSideLock,
-  confirmResize,
-  selectionResizeLocks,
-  setResizeSideLock,
-} from './resizeSession'
+export { selectionResizeLocks } from './resizeSession'
 
 export function useResizeTool() {
-  watchEffect(() => {
-    resizeToolCache.active = Boolean(resizeToolState.session)
-  })
+  // Activation scope placeholder — session chrome lives in the tool handler.
 }

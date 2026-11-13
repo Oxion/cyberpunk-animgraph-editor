@@ -2,13 +2,17 @@
   <Button
     class="w-full rounded-sm"
     :disabled="!hasSelection"
-    @click="emit('create')"
+    @click="executeAppCommand(Commands.attachHandle.create)"
   >
     Create
   </Button>
 
   <template v-if="actionNodeId">
-    <Button variant="secondary" class="w-full rounded-sm" @click="emit('clear')">
+    <Button
+      variant="secondary"
+      class="w-full rounded-sm"
+      @click="executeAppCommand(Commands.attachHandle.clear)"
+    >
       Clear
     </Button>
     <div class="divider"></div>
@@ -20,11 +24,14 @@
       variant="secondary"
       class="w-full rounded-sm"
       :disabled="!hasSelection"
-      @click="emit('dataFromSelected')"
+      @click="executeAppCommand(Commands.attachHandle.dataFromSelected)"
     >
       Data from Selected
     </Button>
-    <Button class="w-full rounded-sm" @click="emit('run')">
+    <Button
+      class="w-full rounded-sm"
+      @click="executeAppCommand(Commands.attachHandle.run)"
+    >
       Run
     </Button>
   </template>
@@ -35,17 +42,13 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Button } from '@/components/ui/button'
+import { Commands } from '@/app/commands'
+import { executeAppCommand } from '@/app/commands/execute'
+import { selectedNodeRef } from '@/stores/graphSession'
+import { attachHandleToolState } from '@/stores/tools'
 
-defineProps<{
-  hasSelection: boolean
-  actionNodeId: string | null
-}>()
-
-const emit = defineEmits<{
-  create: []
-  clear: []
-  dataFromSelected: []
-  run: []
-}>()
+const hasSelection = computed(() => Boolean(selectedNodeRef.value))
+const actionNodeId = computed(() => attachHandleToolState.actionNodeId)
 </script>

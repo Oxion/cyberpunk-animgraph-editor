@@ -1,5 +1,5 @@
 <template>
-  <div class="tool-session-header" :title="titleText">
+  <div v-if="session" class="tool-session-header" :title="titleText">
     <span class="tool-session-header__item">
       <span class="tool-session-header__k">pos</span>
       <span class="tool-session-header__v">
@@ -18,11 +18,14 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { nodePositionRef } from '../../stores/graphSession'
+import { moveSessionState } from '@/app/tools/handlers/move'
 
-const props = defineProps<{
-  position: { x: number; y: number }
-  delta: { x: number; y: number }
-}>()
+const session = computed(() => moveSessionState.session)
+const position = nodePositionRef
+const delta = computed(() =>
+  session.value ? { ...session.value.appliedDelta } : { x: 0, y: 0 }
+)
 
 const formatNumber = (value: number) => {
   if (!Number.isFinite(value)) return '—'
@@ -32,7 +35,7 @@ const formatNumber = (value: number) => {
 
 const titleText = computed(
   () =>
-    `pos ${formatNumber(props.position.x)}, ${formatNumber(props.position.y)} · Δ ${formatNumber(props.delta.x)}, ${formatNumber(props.delta.y)}`
+    `pos ${formatNumber(position.value.x)}, ${formatNumber(position.value.y)} · Δ ${formatNumber(delta.value.x)}, ${formatNumber(delta.value.y)}`
 )
 </script>
 

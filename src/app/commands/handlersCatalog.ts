@@ -31,18 +31,10 @@ import { pickConnectionFrom, pickConnectionTo } from './handlers/pickConnection'
 import { saveAs } from './handlers/saveAs'
 import { selectChildren } from './handlers/selectChildren'
 import { selectInputsAdd } from './handlers/selectInputsAdd'
-import {
-  beginGrabMove,
-  cancelGrabMove,
-  clearGrabAxisLock,
-  confirmGrabMove,
-} from '../../composables/tools/grabMove'
-import {
-  beginResize,
-  cancelResize,
-  clearResizeSideLock,
-  confirmResize,
-} from '../../composables/tools/resizeSession'
+import { clearMoveAxisLock } from '../tools/handlers/move'
+import { clearResizeSideLock } from '../tools/handlers/resize'
+import { grabMoveBegin, grabMoveCancel, grabMoveConfirm } from './handlers/grabMove'
+import { resizeBegin, resizeCancel, resizeConfirm } from './handlers/resize'
 import { registerAppCommandHandler } from '@/core/commands/handlers'
 import { saveCurrentGraph } from '../../stores/graphDocumentIo'
 import { redoGraphAction, undoGraphAction } from '../../stores/graphHistory'
@@ -55,20 +47,20 @@ export function registerAllAppCommandHandlers(): void {
   registerAppCommandHandler(Commands.document.save, saveCurrentGraph)
   registerAppCommandHandler(Commands.document.saveAs, saveAs)
   registerAppCommandHandler(Commands.connectionDrag.cancel, cancelConnectionDrag)
-  registerAppCommandHandler(Commands.grabMove.cancel, cancelGrabMove)
-  registerAppCommandHandler(Commands.grabMove.confirm, confirmGrabMove)
+  registerAppCommandHandler(Commands.grabMove.cancel, grabMoveCancel)
+  registerAppCommandHandler(Commands.grabMove.confirm, grabMoveConfirm)
   registerAppCommandHandler(Commands.grabMove.lockX, lockGrabMoveX)
   registerAppCommandHandler(Commands.grabMove.lockY, lockGrabMoveY)
-  registerAppCommandHandler(Commands.grabMove.clearAxisLock, clearGrabAxisLock)
-  registerAppCommandHandler(Commands.grabMove.begin, beginGrabMove)
-  registerAppCommandHandler(Commands.resize.cancel, cancelResize)
-  registerAppCommandHandler(Commands.resize.confirm, confirmResize)
+  registerAppCommandHandler(Commands.grabMove.clearAxisLock, clearMoveAxisLock)
+  registerAppCommandHandler(Commands.grabMove.begin, grabMoveBegin)
+  registerAppCommandHandler(Commands.resize.cancel, resizeCancel)
+  registerAppCommandHandler(Commands.resize.confirm, resizeConfirm)
   registerAppCommandHandler(Commands.resize.lockTop, lockResizeTop)
   registerAppCommandHandler(Commands.resize.lockLeft, lockResizeLeft)
   registerAppCommandHandler(Commands.resize.lockBottom, lockResizeBottom)
   registerAppCommandHandler(Commands.resize.lockRight, lockResizeRight)
   registerAppCommandHandler(Commands.resize.clearSideLock, clearResizeSideLock)
-  registerAppCommandHandler(Commands.resize.begin, beginResize)
+  registerAppCommandHandler(Commands.resize.begin, resizeBegin)
   registerAppCommandHandler(Commands.addNode.focus, focusAddNode)
   registerAppCommandHandler(Commands.nodes.add, nodesAdd)
   registerAppCommandHandler(Commands.addConnection.focus, focusAddConnection)

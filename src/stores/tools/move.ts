@@ -1,4 +1,3 @@
-import { reactive } from 'vue'
 import type { ResizeAncestorPlan, ResizeStartLayout } from './resize'
 
 export type GrabAxisLock = 'none' | 'x' | 'y'
@@ -18,12 +17,3 @@ export type GrabMoveSession = {
   cascadeStartLayouts: Map<string, ResizeStartLayout>
   cascadePlan: ResizeAncestorPlan[]
 }
-
-export const moveToolState = reactive({
-  session: null as GrabMoveSession | null,
-})
-
-/** Only derived field: session present. */
-export const moveToolCache = reactive({
-  active: false,
-})

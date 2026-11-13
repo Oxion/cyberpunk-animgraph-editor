@@ -1,9 +1,9 @@
-import { selectAppTool } from '../../../stores/appToolSelect'
+import { selectTool, Tools } from '@/app/tools'
 
 export function focusAddNode() {
-  selectAppTool('addNode')
+  selectTool(Tools.addNode)
 }
 
 export function focusAddConnection() {
-  selectAppTool('addConnection')
+  selectTool(Tools.addConnection)
 }

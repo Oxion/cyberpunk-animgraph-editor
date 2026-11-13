@@ -36,6 +36,8 @@ export type MainDiagramMountHost = {
     pinName: string
   }) => void
   handlePinRewire: (payload: any) => void
+  handleConnectionDragBegin: () => void
+  handleConnectionDragEnd: (reason: 'confirm' | 'cancel') => void
   simReset: () => void
   simRebind: () => void
 }
@@ -87,6 +89,8 @@ function wireMainRenderer(diagramId: string, canvas: HTMLDivElement, renderer: P
   })
   renderer.setOnPinConnect(host.handlePinConnect)
   renderer.setOnPinRewire(host.handlePinRewire)
+  renderer.setOnConnectionDragBegin(host.handleConnectionDragBegin)
+  renderer.setOnConnectionDragEnd(host.handleConnectionDragEnd)
   host.updateGraphInteractionGate()
   host.setupCanvasControls(canvas, renderer)
   host.updateDebugSettings()

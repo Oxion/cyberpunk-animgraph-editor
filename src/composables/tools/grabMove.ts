@@ -1,13 +1,8 @@
 import {
-  beginLayoutCapture,
   beginPositionCapture,
-  cancelLayoutCapture,
-  cancelPositionCapture,
-  commitLayoutCapture,
   commitPositionCapture,
   discardOpenPositionGesture,
   graphHistoryState,
-  isLayoutGestureOpen,
   isPositionGestureOpen,
   runWithLayoutHistory,
   runWithPositionHistory,
@@ -15,7 +10,7 @@ import {
   trackPositionBeforeChange,
 } from '../../stores/graphHistory'
 import { updateActiveNodes } from '../../stores/graphPaint'
-import { getRenderData, requireActiveDiagramId } from '../../stores/graphProject'
+import { getRenderData } from '../../stores/graphProject'
 import {
   nodePositionRef,
   selectedIncomingConnectionsRef,
@@ -23,33 +18,14 @@ import {
   selectedNodeIdsRef,
   selectedNodeRef,
 } from '../../stores/graphSession'
-import {
-  getActiveDiagramRenderer,
-  mainDiagramRenderer as graphRenderer,
-} from '../../stores/diagramRenderers'
+import { mainDiagramRenderer as graphRenderer } from '../../stores/diagramRenderers'
 import {
   autoResizeParents,
-  beginModalGestureTool,
-  lastPointerClient,
-  modalGestureReplacedFocus,
   moveDescendants,
   moveInputs,
   moveOutputs,
-  moveStep,
-  pressedArrowKeys,
-  suppressModalGestureRestore,
 } from '../../stores/modalGestureUi'
-import {
-  activeToolsRegistry,
-  onToolDeactivate,
-  toolManager,
-} from '../../stores/toolManager'
-import {
-  arrangeSelectionToolCache,
-  moveToolState,
-  resizeToolState,
-  type GrabAxisLock,
-} from '../../stores/tools'
+import { arrangeSelectionToolCache } from '../../stores/tools'
 import { getConnectionKey } from '../../utils/graph/diagramModel'
 import type { RenderData, RenderNode } from '../../utils/graph/diagramTypes'
 import { getWorldPosition } from '../../utils/graph/DiagramGeometry'
@@ -69,37 +45,9 @@ import {
   type BeforeLayoutMutate,
 } from '../../utils/graph/resizeCascade'
 import type { ResizeAncestorPlan, ResizeStartLayout } from '../../stores/tools'
-import {
-  attachModalPointerListeners,
-  detachModalPointerListeners,
-  getNodeHeight,
-  getNodeWidth,
-  registerGrabModalApi,
-  requireHost,
-  restoreToolAfterModalGesture,
-} from './moveResizeShared'
-import { cancelResize } from './resizeSession'
-import { Commands } from '@/app/commands/ids'
-import { appCommandWithIdEnabled } from '@/app/commands/predicate'
+import { getNodeHeight, getNodeWidth } from './moveResizeShared'
 
-/** Non-modal arrow-key gesture: absolute restore + parent grow across key repeats. */
-type ArrowMoveCascade = {
-  diagramId: string
-  growParents: boolean
-  seedStartLayouts: Map<string, ResizeStartLayout>
-  satelliteStartLayouts: Map<string, ResizeStartLayout>
-  cascadeStartLayouts: Map<string, ResizeStartLayout>
-  cascadePlan: ResizeAncestorPlan[]
-  totalDelta: { x: number; y: number }
-}
-
-let arrowMoveCascade: ArrowMoveCascade | null = null
-
-const clearArrowMoveCascade = () => {
-  arrowMoveCascade = null
-}
-
-const collectMoveOperationSeedIds = (diagramId: string): string[] => {
+export const collectMoveOperationSeedIds = (diagramId: string): string[] => {
   const diagramData = getRenderData(diagramId)
   if (!diagramData) return []
   const ids = new Set<string>(selectedNodeIdsRef.value)
@@ -118,7 +66,7 @@ const collectMoveOperationSeedIds = (diagramId: string): string[] => {
   return [...ids].filter((id) => diagramData.allNodes.has(id))
 }
 
-const captureMoveStartLayouts = (
+export const captureMoveStartLayouts = (
   diagramData: RenderData,
   seedIds: Iterable<string>,
   selectedIds: ReadonlySet<string>
@@ -158,7 +106,7 @@ const applyLayoutDeltaToNode = (
  * Restore baselines, place all operation nodes at start+delta, grow parents to the
  * union bbox of those nodes (leaf→root). No neighbour push.
  */
-const applyAbsoluteMoveWithParentGrow = (
+export const applyAbsoluteMoveWithParentGrow = (
   diagramData: RenderData,
   deltaX: number,
   deltaY: number,
@@ -375,49 +323,7 @@ export const clearMovedNodes = () => {
   movedNodeIds.clear()
 }
 
-export const moveNode = (
-  diagramId: string,
-  direction: 'up' | 'down' | 'left' | 'right',
-  event?: KeyboardEvent | MouseEvent
-) => {
-  if (selectedNodeIdsRef.value.length === 0 || !getRenderData(diagramId)) return
-
-  clearMovedNodes()
-
-  let step = moveStep.value
-
-  if (event) {
-    if (event.shiftKey && event.altKey) {
-      step *= 10
-    } else if (event.shiftKey) {
-      step *= 5
-    } else if (event.altKey) {
-      step *= 2
-    }
-  }
-
-  let deltaX = 0
-  let deltaY = 0
-
-  switch (direction) {
-    case 'up':
-      deltaY = -step
-      break
-    case 'down':
-      deltaY = step
-      break
-    case 'left':
-      deltaX = -step
-      break
-    case 'right':
-      deltaX = step
-      break
-  }
-
-  moveSelectedNodeByDelta(diagramId, deltaX, deltaY, { gesture: true })
-}
-
-const paintMoveAffected = (diagramId: string, affectedIds: string[]) => {
+export const paintMoveAffected = (diagramId: string, affectedIds: string[]) => {
   clearMovedNodes()
   for (const id of affectedIds) movedNodeIds.add(id)
   if (graphRenderer.value && affectedIds.length > 0) {
@@ -431,48 +337,13 @@ const paintMoveAffected = (diagramId: string, affectedIds: string[]) => {
   }
 }
 
-const applyGrabSessionToDelta = (targetDelta: { x: number; y: number }) => {
-  const session = moveToolState.session
-  const diagramData = session ? getRenderData(session.diagramId) : null
-  if (!session || !diagramData) return
-
-  const onBefore: BeforeLayoutMutate = session.growParents
-    ? trackLayoutBeforeChange
-    : trackPositionBeforeChange
-
-  const affectedIds = applyAbsoluteMoveWithParentGrow(
-    diagramData,
-    targetDelta.x,
-    targetDelta.y,
-    session.seedStartLayouts,
-    session.satelliteStartLayouts,
-    session.cascadeStartLayouts,
-    session.cascadePlan,
-    session.growParents,
-    onBefore
-  )
-  paintMoveAffected(session.diagramId, affectedIds)
-  session.appliedDelta = { ...targetDelta }
-}
-
 export const moveSelectedNodeByDelta = (
   diagramId: string,
   deltaX: number,
-  deltaY: number,
-  options?: { gesture?: boolean }
+  deltaY: number
 ) => {
   if (!getRenderData(diagramId) || selectedNodeIdsRef.value.length === 0) return
   if (deltaX === 0 && deltaY === 0) return
-
-  // Modal grab session owns absolute apply + parent grow.
-  if (moveToolState.session) {
-    const session = moveToolState.session
-    applyGrabSessionToDelta({
-      x: session.appliedDelta.x + deltaX,
-      y: session.appliedDelta.y + deltaY,
-    })
-    return
-  }
 
   const historyLabel =
     selectedNodeIdsRef.value.length > 1
@@ -489,76 +360,11 @@ export const moveSelectedNodeByDelta = (
     const selectedIds = new Set(selectedNodeIdsRef.value)
     const operationIds = collectMoveOperationSeedIds(diagramId)
 
-    if (options?.gesture && growParents) {
-      const gestureOpen = isLayoutGestureOpen()
-      if (!gestureOpen || !arrowMoveCascade || arrowMoveCascade.diagramId !== diagramId) {
-        const { seedStartLayouts, satelliteStartLayouts } = captureMoveStartLayouts(
-          diagramData,
-          operationIds,
-          selectedIds
-        )
-        arrowMoveCascade = {
-          diagramId,
-          growParents: true,
-          seedStartLayouts,
-          satelliteStartLayouts,
-          cascadeStartLayouts: captureResizeCascadeBaselines(diagramData, operationIds),
-          cascadePlan: buildResizeCascadePlan(diagramData, operationIds),
-          totalDelta: { x: 0, y: 0 },
-        }
-      }
-      arrowMoveCascade.totalDelta.x += deltaX
-      arrowMoveCascade.totalDelta.y += deltaY
-      const affectedIds = applyAbsoluteMoveWithParentGrow(
-        diagramData,
-        arrowMoveCascade.totalDelta.x,
-        arrowMoveCascade.totalDelta.y,
-        arrowMoveCascade.seedStartLayouts,
-        arrowMoveCascade.satelliteStartLayouts,
-        arrowMoveCascade.cascadeStartLayouts,
-        arrowMoveCascade.cascadePlan,
-        true,
-        onBefore
-      )
-      paintMoveAffected(diagramId, affectedIds)
-      return
-    }
-
-    if (options?.gesture && !growParents) {
-      clearMovedNodes()
-      for (const nodeId of selectedNodeIdsRef.value) {
-        const node = diagramData.allNodes.get(nodeId)
-        if (node) moveNodeAndDescendants(diagramId, node, deltaX, deltaY)
-      }
-      if (selectedNodeIdsRef.value.length === 1 && selectedNodeRef.value) {
-        if (moveOutputs.value) {
-          for (const outputNode of getAllOutputNodes(diagramId, selectedNodeRef.value)) {
-            moveNodeAndDescendants(diagramId, outputNode, deltaX, deltaY)
-          }
-        }
-        if (moveInputs.value) {
-          for (const inputNode of getAllInputNodes(diagramId, selectedNodeRef.value)) {
-            moveNodeAndDescendants(diagramId, inputNode, deltaX, deltaY)
-          }
-        }
-      }
-      if (graphRenderer.value && movedNodeIds.size > 0) {
-        updateActiveNodes(Array.from(movedNodeIds))
-      }
-      if (selectedNodeRef.value) {
-        nodePositionRef.value.x = selectedNodeRef.value.position.x
-        nodePositionRef.value.y = selectedNodeRef.value.position.y
-      }
-      return
-    }
-
-    // One-shot (sidebar apply, etc.): move then grow from current seed footprints.
     const { seedStartLayouts, satelliteStartLayouts } = captureMoveStartLayouts(
       diagramData,
       operationIds,
       selectedIds
     )
-    // Capture parent baselines BEFORE moving seeds.
     const cascadeStartLayouts = growParents
       ? captureResizeCascadeBaselines(diagramData, operationIds)
       : new Map<string, ResizeStartLayout>()
@@ -580,27 +386,6 @@ export const moveSelectedNodeByDelta = (
     paintMoveAffected(diagramId, affectedIds)
   }
 
-  if (options?.gesture) {
-    if (!graphHistoryState.isApplying) {
-      if (growParents) {
-        if (!isLayoutGestureOpen()) {
-          if (isPositionGestureOpen()) commitPositionCapture(diagramId)
-          beginLayoutCapture(diagramId, historyLabel)
-          clearArrowMoveCascade()
-        }
-      } else if (!isPositionGestureOpen()) {
-        if (isLayoutGestureOpen()) commitLayoutCapture(diagramId)
-        beginPositionCapture(diagramId, historyLabel)
-        clearArrowMoveCascade()
-      }
-      applyMove()
-      return
-    }
-    applyMove()
-    return
-  }
-
-  clearArrowMoveCascade()
   if (growParents) {
     runWithLayoutHistory(diagramId, historyLabel, applyMove)
   } else {
@@ -727,233 +512,3 @@ export const getAllInputNodes = (diagramId: string, node: any): any[] => {
 
   return inputNodes
 }
-
-export const applyAxisLock = (delta: { x: number; y: number }, lock: GrabAxisLock) => {
-  if (lock === 'x') return { x: delta.x, y: 0 }
-  if (lock === 'y') return { x: 0, y: delta.y }
-  return delta
-}
-
-export const syncGrabMoveToTargetDelta = (targetDelta: { x: number; y: number }) => {
-  const session = moveToolState.session
-  if (!session) return
-  const locked = applyAxisLock(targetDelta, session.axisLock)
-  const target = {
-    x: locked.x + session.keyboardOffset.x,
-    y: locked.y + session.keyboardOffset.y,
-  }
-  if (target.x === session.appliedDelta.x && target.y === session.appliedDelta.y) return
-  applyGrabSessionToDelta(target)
-}
-
-export const updateGrabMoveFromClient = (clientX: number, clientY: number) => {
-  const session = moveToolState.session
-  const active = getActiveDiagramRenderer()
-  if (!session || !active) return
-  const world = active.clientPosToWorldPos(clientX, clientY)
-  if (!world) return
-  syncGrabMoveToTargetDelta({
-    x: world.x - session.startWorld.x,
-    y: world.y - session.startWorld.y,
-  })
-}
-
-export const resolveNudgeDelta = (
-  direction: 'up' | 'down' | 'left' | 'right',
-  event?: KeyboardEvent | MouseEvent
-) => {
-  let step = moveStep.value
-  if (event) {
-    if (event.shiftKey && event.altKey) step *= 10
-    else if (event.shiftKey) step *= 5
-    else if (event.altKey) step *= 2
-  }
-  switch (direction) {
-    case 'up':
-      return { x: 0, y: -step }
-    case 'down':
-      return { x: 0, y: step }
-    case 'left':
-      return { x: -step, y: 0 }
-    case 'right':
-      return { x: step, y: 0 }
-  }
-}
-
-export const nudgeSelection = (
-  direction: 'up' | 'down' | 'left' | 'right',
-  event?: KeyboardEvent | MouseEvent
-) => {
-  const session = moveToolState.session
-  if (!session) {
-    const key =
-      direction === 'up'
-        ? 'ArrowUp'
-        : direction === 'down'
-          ? 'ArrowDown'
-          : direction === 'left'
-            ? 'ArrowLeft'
-            : 'ArrowRight'
-    pressedArrowKeys.add(key)
-    moveNode(requireActiveDiagramId(), direction, event)
-    return
-  }
-
-  const raw = resolveNudgeDelta(direction, event)
-  const locked = applyAxisLock(raw, session.axisLock)
-  if (locked.x === 0 && locked.y === 0) return
-
-  session.keyboardOffset.x += locked.x
-  session.keyboardOffset.y += locked.y
-  applyGrabSessionToDelta({
-    x: session.appliedDelta.x + locked.x,
-    y: session.appliedDelta.y + locked.y,
-  })
-}
-
-export const beginGrabMove = () => {
-  if (!appCommandWithIdEnabled(Commands.grabMove.begin)) return
-  const activeDiagramRenderer = getActiveDiagramRenderer()
-  let diagramId: string
-  try {
-    diagramId = requireActiveDiagramId()
-  } catch {
-    return
-  }
-  if (!getRenderData(diagramId) || !activeDiagramRenderer || selectedNodeIdsRef.value.length === 0)
-    return
-  if (moveToolState.session) return
-  if (resizeToolState.session) {
-    suppressModalGestureRestore.value = true
-    cancelResize()
-    if (activeToolsRegistry.resize) {
-      toolManager.deactivateTool('resize')
-    }
-    suppressModalGestureRestore.value = false
-  }
-
-  if (isPositionGestureOpen()) {
-    commitPositionCapture(diagramId)
-  }
-  if (isLayoutGestureOpen()) {
-    commitLayoutCapture(diagramId)
-  }
-  pressedArrowKeys.clear()
-  clearArrowMoveCascade()
-
-  const diagramData = getRenderData(diagramId)!
-  const world =
-    activeDiagramRenderer.clientPosToWorldPos(lastPointerClient.x, lastPointerClient.y) ??
-    activeDiagramRenderer.getViewportCenter()
-
-  const historyLabel =
-    selectedNodeIdsRef.value.length > 1
-      ? `Move ${selectedNodeIdsRef.value.length} nodes`
-      : 'Move nodes'
-
-  const growParents = autoResizeParents.value
-  const selectedIds = new Set(selectedNodeIdsRef.value)
-  const operationIds = collectMoveOperationSeedIds(diagramId)
-  const { seedStartLayouts, satelliteStartLayouts } = captureMoveStartLayouts(
-    diagramData,
-    operationIds,
-    selectedIds
-  )
-  if (seedStartLayouts.size === 0) return
-
-  if (growParents) {
-    beginLayoutCapture(diagramId, historyLabel)
-  } else {
-    beginPositionCapture(diagramId, historyLabel)
-  }
-
-  moveToolState.session = {
-    diagramId,
-    startWorld: { ...world },
-    appliedDelta: { x: 0, y: 0 },
-    keyboardOffset: { x: 0, y: 0 },
-    axisLock: 'none',
-    growParents,
-    seedStartLayouts,
-    satelliteStartLayouts,
-    cascadeStartLayouts: growParents
-      ? captureResizeCascadeBaselines(diagramData, operationIds)
-      : new Map(),
-    cascadePlan: growParents ? buildResizeCascadePlan(diagramData, operationIds) : [],
-  }
-  beginModalGestureTool('move')
-  attachModalPointerListeners()
-  activeDiagramRenderer.setCanvasCursor('move')
-  requireHost().graphCanvas.value?.focus({ preventScroll: true })
-  requireHost().updateGraphInteractionGate()
-}
-
-export const confirmGrabMove = () => {
-  const session = moveToolState.session
-  if (!session) return
-  const diagramId = session.diagramId
-  const growParents = session.growParents
-  moveToolState.session = null
-  clearArrowMoveCascade()
-  if (!resizeToolState.session) detachModalPointerListeners()
-  getActiveDiagramRenderer()?.setCanvasCursor('default')
-  if (growParents) commitLayoutCapture(diagramId)
-  else commitPositionCapture(diagramId)
-  requireHost().updateGraphInteractionGate()
-  if (modalGestureReplacedFocus.value) {
-    toolManager.deactivateTool('move')
-  }
-}
-
-export const cancelGrabMove = () => {
-  const session = moveToolState.session
-  if (!session) return
-  const diagramId = session.diagramId
-  const growParents = session.growParents
-  moveToolState.session = null
-  clearArrowMoveCascade()
-  if (!resizeToolState.session) detachModalPointerListeners()
-  getActiveDiagramRenderer()?.setCanvasCursor('default')
-  if (growParents) cancelLayoutCapture(diagramId)
-  else cancelPositionCapture(diagramId)
-  requireHost().updateGraphInteractionGate()
-  if (modalGestureReplacedFocus.value && !suppressModalGestureRestore.value) {
-    toolManager.deactivateTool('move')
-  }
-}
-
-export const setGrabAxisLock = (axis: 'x' | 'y') => {
-  const session = moveToolState.session
-  if (!session) return
-  session.axisLock = session.axisLock === axis ? 'none' : axis
-  updateGrabMoveFromClient(lastPointerClient.x, lastPointerClient.y)
-}
-
-onToolDeactivate('move', () => {
-  const session = moveToolState.session
-  if (session) {
-    const diagramId = session.diagramId
-    const growParents = session.growParents
-    moveToolState.session = null
-    clearArrowMoveCascade()
-    if (!resizeToolState.session) detachModalPointerListeners()
-    getActiveDiagramRenderer()?.setCanvasCursor('default')
-    if (growParents) cancelLayoutCapture(diagramId)
-    else cancelPositionCapture(diagramId)
-    requireHost().updateGraphInteractionGate()
-  }
-  restoreToolAfterModalGesture()
-})
-
-export function clearGrabAxisLock() {
-  const session = moveToolState.session
-  if (!session || session.axisLock === 'none') return
-  session.axisLock = 'none'
-  updateGrabMoveFromClient(lastPointerClient.x, lastPointerClient.y)
-}
-
-registerGrabModalApi({
-  updateFromClient: updateGrabMoveFromClient,
-  confirm: confirmGrabMove,
-  cancel: cancelGrabMove,
-})

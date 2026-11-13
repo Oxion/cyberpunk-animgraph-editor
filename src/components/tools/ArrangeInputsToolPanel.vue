@@ -47,10 +47,20 @@
           Input nodes
         </FieldTitle>
         <ButtonGroup>
-          <Button size="xs" variant="outline" title="Select all" @click="emit('selectAll')">
+          <Button
+            size="xs"
+            variant="outline"
+            title="Select all"
+            @click="executeAppCommand(Commands.arrangeInputs.selectAll)"
+          >
             All
           </Button>
-          <Button size="xs" variant="outline" title="Deselect all" @click="emit('deselectAll')">
+          <Button
+            size="xs"
+            variant="outline"
+            title="Deselect all"
+            @click="executeAppCommand(Commands.arrangeInputs.deselectAll)"
+          >
             None
           </Button>
         </ButtonGroup>
@@ -65,7 +75,7 @@
           <Checkbox
             :id="`arrange-input-${conn.key}`"
             :model-value="conn.selected"
-            @update:model-value="(v) => emit('toggle', conn.key, v === true)"
+            @update:model-value="(v) => executeAppCommand(Commands.arrangeInputs.toggle, { key: conn.key, checked: v === true })"
           />
           <FieldLabel
             :for="`arrange-input-${conn.key}`"
@@ -83,7 +93,7 @@
     <Button
       class="w-full"
       :disabled="selectedCount === 0"
-      @click="emit('arrange', { margin: settings.margin, spacing: settings.spacing })"
+      @click="executeAppCommand(Commands.arrangeInputs.run, { margin: settings.margin, spacing: settings.spacing })"
     >
       Arrange Inputs ({{ selectedCount }})
     </Button>
@@ -103,20 +113,14 @@ import {
   FieldSet,
   FieldTitle,
 } from '@/components/ui/field'
-import { arrangeInputsToolState } from '@/stores/tools'
-
-defineProps<{
-  hasSelection: boolean
-  incoming: Array<{ key: string; label: string; selected: boolean }>
-  selectedCount: number
-}>()
-
-const emit = defineEmits<{
-  selectAll: []
-  deselectAll: []
-  toggle: [key: string, checked: boolean]
-  arrange: [payload: { margin: number; spacing: number }]
-}>()
+import { arrangeInputsToolCache, arrangeInputsToolState } from '@/stores/tools'
+import { selectedNodeRef } from '@/stores/graphSession'
+import { Commands } from '@/app/commands'
+import { executeAppCommand } from '@/app/commands/execute'
+import { computed } from 'vue'
 
 const settings = arrangeInputsToolState
+const hasSelection = computed(() => Boolean(selectedNodeRef.value))
+const incoming = computed(() => arrangeInputsToolCache.incoming)
+const selectedCount = computed(() => arrangeInputsToolCache.selectedCount)
 </script>

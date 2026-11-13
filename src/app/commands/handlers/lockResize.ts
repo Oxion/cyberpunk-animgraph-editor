@@ -1,17 +1,17 @@
-import { setResizeSideLock } from '../../../composables/tools/resizeSession'
+import { lockResizeSide } from '@/app/tools/handlers/resize'
 
 export function lockResizeTop() {
-  setResizeSideLock('top')
+  lockResizeSide('top')
 }
 
 export function lockResizeLeft() {
-  setResizeSideLock('left')
+  lockResizeSide('left')
 }
 
 export function lockResizeBottom() {
-  setResizeSideLock('bottom')
+  lockResizeSide('bottom')
 }
 
 export function lockResizeRight() {
-  setResizeSideLock('right')
+  lockResizeSide('right')
 }

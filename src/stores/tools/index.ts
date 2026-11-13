@@ -1,15 +1,11 @@
-/** Per-tool state + derived cache — separate reactives to limit update fan-out. */
+/** Per-tool settings/data + shared session types. Session reactives live in tool handlers. */
 
 export {
-  moveToolState,
-  moveToolCache,
   type GrabAxisLock,
   type GrabMoveSession,
 } from './move'
 
 export {
-  resizeToolState,
-  resizeToolCache,
   type ResizeSideLock,
   type ResizeStartLayout,
   type ResizeNeighbourContact,

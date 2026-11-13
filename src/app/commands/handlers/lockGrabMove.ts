@@ -1,9 +1,9 @@
-import { setGrabAxisLock } from '../../../composables/tools/grabMove'
+import { lockMoveAxis } from '@/app/tools/handlers/move'
 
 export function lockGrabMoveX() {
-  setGrabAxisLock('x')
+  lockMoveAxis('x')
 }
 
 export function lockGrabMoveY() {
-  setGrabAxisLock('y')
+  lockMoveAxis('y')
 }

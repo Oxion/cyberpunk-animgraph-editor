@@ -19,7 +19,7 @@
         type="button"
         class="inline-flex w-full items-center justify-center gap-1.5"
         :disabled="!appCommandWithIdEnabled(Commands.resize.begin)"
-        @click="emit('start')"
+        @click="executeAppCommand(Commands.resize.begin)"
       >
         <span>Start Resize</span>
         <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.begin)" />
@@ -33,7 +33,7 @@
           size="xs"
           class="inline-flex items-center gap-1"
           :variant="sideLock === 'none' ? 'default' : 'outline'"
-          @click="emit('clearSideLock')"
+          @click="executeAppCommand(Commands.resize.clearSideLock)"
         >
           <span>Free</span>
           <span class="text-[10px] text-muted-foreground">R+B</span>
@@ -43,7 +43,7 @@
           size="xs"
           class="inline-flex items-center gap-1"
           :variant="sideLock === 'left' ? 'default' : 'outline'"
-          @click="emit('setSideLock', 'left')"
+          @click="executeAppCommand(Commands.resize.lockLeft)"
         >
           <span>x−</span>
           <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.lockLeft)" size="sm" />
@@ -53,7 +53,7 @@
           size="xs"
           class="inline-flex items-center gap-1"
           :variant="sideLock === 'right' ? 'default' : 'outline'"
-          @click="emit('setSideLock', 'right')"
+          @click="executeAppCommand(Commands.resize.lockRight)"
         >
           <span>x+</span>
           <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.lockRight)" size="sm" />
@@ -63,7 +63,7 @@
           size="xs"
           class="inline-flex items-center gap-1"
           :variant="sideLock === 'top' ? 'default' : 'outline'"
-          @click="emit('setSideLock', 'top')"
+          @click="executeAppCommand(Commands.resize.lockTop)"
         >
           <span>y−</span>
           <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.lockTop)" size="sm" />
@@ -73,7 +73,7 @@
           size="xs"
           class="inline-flex items-center gap-1"
           :variant="sideLock === 'bottom' ? 'default' : 'outline'"
-          @click="emit('setSideLock', 'bottom')"
+          @click="executeAppCommand(Commands.resize.lockBottom)"
         >
           <span>y+</span>
           <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.lockBottom)" size="sm" />
@@ -84,7 +84,7 @@
         <Button
           type="button"
           class="inline-flex w-full items-center justify-center gap-1.5"
-          @click="emit('confirm')"
+          @click="executeAppCommand(Commands.resize.confirm)"
         >
           <span>OK</span>
           <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.confirm)" size="sm" />
@@ -93,7 +93,7 @@
           type="button"
           variant="secondary"
           class="inline-flex w-full items-center justify-center gap-1.5"
-          @click="emit('cancel')"
+          @click="executeAppCommand(Commands.resize.cancel)"
         >
           <span>Cancel</span>
           <HotkeyKbd :chord="getFirstHotkeyChord(Commands.resize.cancel)" size="sm" />
@@ -104,27 +104,18 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Button } from '@/components/ui/button'
 import { FieldDescription, FieldGroup } from '@/components/ui/field'
 import { Commands } from '@/app/commands'
+import { executeAppCommand } from '@/app/commands/execute'
+import { appCommandWithIdEnabled } from '@/app/commands/predicate'
 import { getFirstHotkeyChord, hasHotkeyBinding } from '../../stores/hotkeyBindings'
+import { selectedNodeIdsRef } from '../../stores/graphSession'
+import { resizeSessionState } from '@/app/tools/handlers/resize'
 import HotkeyKbd from '../HotkeyKbd.vue'
-import { appCommandWithIdEnabled } from '@/app/commands/predicate.ts'
 
-defineProps<{
-  selectedCount: number
-  active: boolean
-  size: { width: number; height: number }
-  position: { x: number; y: number }
-  sizeDelta: { width: number; height: number }
-  sideLock: 'none' | 'left' | 'right' | 'top' | 'bottom'
-}>()
-
-const emit = defineEmits<{
-  start: []
-  confirm: []
-  cancel: []
-  clearSideLock: []
-  setSideLock: ['left' | 'right' | 'top' | 'bottom']
-}>()
+const selectedCount = computed(() => selectedNodeIdsRef.value.length)
+const active = computed(() => Boolean(resizeSessionState.session))
+const sideLock = computed(() => resizeSessionState.session?.sideLock ?? ('none' as const))
 </script>

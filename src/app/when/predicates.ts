@@ -25,7 +25,9 @@ export const registerAppPredicates = () => {
   registerPredicate('canBeginResize', graphSelectionIdle)
   registerPredicate('canNudgeSelection', (ctx) =>
     ctx.hasSelection &&
-    (ctx.inProgressTool === 'move' || (noToolInProgress(ctx) && ctx.diagramEditable))
+    (ctx.inProgressTool === 'move' ||
+      ctx.inProgressTool === 'nodeNudge' ||
+      (noToolInProgress(ctx) && ctx.diagramEditable))
   )
   registerPredicate('canDeleteSelection', graphSelectionIdle)
   registerPredicate('canFocusAppTool', (ctx) => noToolInProgress(ctx) && ctx.hasGraph && ctx.diagramEditable)

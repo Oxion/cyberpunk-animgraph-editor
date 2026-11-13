@@ -1,5 +1,3 @@
-import { reactive } from 'vue'
-
 export type ResizeSideLock = 'none' | 'left' | 'right' | 'top' | 'bottom'
 
 export type ResizeStartLayout = {
@@ -32,12 +30,3 @@ export type ResizeSession = {
   cascadeStartLayouts: Map<string, ResizeStartLayout>
   cascadePlan: ResizeAncestorPlan[]
 }
-
-export const resizeToolState = reactive({
-  session: null as ResizeSession | null,
-})
-
-/** Only derived field: session present. */
-export const resizeToolCache = reactive({
-  active: false,
-})
