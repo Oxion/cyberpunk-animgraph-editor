@@ -11,6 +11,15 @@ import {
   PROPERTY_GROUP_OUTER_PADDING,
   SM_NODE_HEADER_HEIGHT,
 } from './NodeChromeMetrics'
+import {
+  applyResizeStartLayout,
+  captureResizeStartLayout,
+  compensateChildrenForParentOriginShift,
+  computeParentFitDelta,
+  isResizeLayoutDeltaZero,
+  MIN_NODE_HEIGHT,
+  MIN_NODE_WIDTH,
+} from './resizeCascade'
 
 export const DIAGRAM_FRAME_DEFAULT_WIDTH = 320
 export const DIAGRAM_FRAME_DEFAULT_HEIGHT = 200
@@ -77,31 +86,76 @@ export function noteFooterHeight(node: RenderNode, nodeWidth: number): number {
   )
 }
 
-export function fitDiagramFrameToChildren(frame: RenderNode): void {
+/** @returns layout-affected ids (frame + compensated children) for renderer sync. */
+export function fitDiagramFrameToChildren(frame: RenderNode): string[] {
   const kids = getChildSlot(frame, DEFAULT_CHILD_SLOT)
   const pad = DIAGRAM_FRAME_CHILD_PAD
   const footer = pad.bottom
-  let maxX = DIAGRAM_FRAME_DEFAULT_WIDTH
-  let maxY = DIAGRAM_FRAME_DEFAULT_HEIGHT
-  for (const child of kids) {
-    if (child.visible === false) continue
-    const w = child.size?.width ?? 120
-    const h = child.size?.height ?? 80
-    const x = child.position?.x ?? 0
-    const y = child.position?.y ?? 0
-    maxX = Math.max(maxX, x + w + pad.right)
-    maxY = Math.max(maxY, y + h + footer)
-  }
+
   if (kids.length === 0) {
-    maxY = Math.max(maxY, pad.top + footer)
+    const w = Math.max(frame.size?.width ?? 0, DIAGRAM_FRAME_DEFAULT_WIDTH)
+    const h = Math.max(
+      frame.size?.height ?? 0,
+      DIAGRAM_FRAME_DEFAULT_HEIGHT,
+      pad.top + footer
+    )
+    const sizeChanged =
+      (frame.size?.width ?? 0) !== w || (frame.size?.height ?? 0) !== h
+    frame.size = { width: w, height: h }
+    frame.bounds = {
+      x: frame.position.x,
+      y: frame.position.y,
+      width: w,
+      height: h,
+    }
+    return sizeChanged ? [frame.id] : []
   }
-  frame.size = { width: maxX, height: maxY }
-  frame.bounds = {
-    x: frame.position.x,
-    y: frame.position.y,
-    width: maxX,
-    height: maxY,
+
+  const parentStart = captureResizeStartLayout(frame)
+  // Floor at default size so empty-ish frames do not shrink below template.
+  const fitStart = {
+    ...parentStart,
+    width: Math.max(parentStart.width, DIAGRAM_FRAME_DEFAULT_WIDTH),
+    height: Math.max(parentStart.height, DIAGRAM_FRAME_DEFAULT_HEIGHT),
   }
+  const childLayouts = kids
+    .filter((child) => child.visible !== false)
+    .map((c) => {
+      const layout = captureResizeStartLayout(c)
+      return {
+        ...layout,
+        width: layout.width + pad.right,
+        height: layout.height + footer,
+      }
+    })
+  const delta = computeParentFitDelta(fitStart, childLayouts, {
+    left: pad.left,
+    top: pad.top,
+  })
+  if (isResizeLayoutDeltaZero(delta)) {
+    if (
+      fitStart.width !== parentStart.width ||
+      fitStart.height !== parentStart.height
+    ) {
+      applyResizeStartLayout(frame, fitStart)
+      return [frame.id]
+    }
+    return []
+  }
+
+  applyResizeStartLayout(frame, {
+    x: fitStart.x + delta.dx,
+    y: fitStart.y + delta.dy,
+    width: Math.max(MIN_NODE_WIDTH, fitStart.width + delta.dw),
+    height: Math.max(MIN_NODE_HEIGHT, fitStart.height + delta.dh),
+  })
+  const affected = [frame.id]
+  if (delta.dx !== 0 || delta.dy !== 0) {
+    affected.push(
+      ...compensateChildrenForParentOriginShift(frame, delta.dx, delta.dy)
+    )
+  }
+  return affected
 }
 
 export function ensureNoteFitsFooter(node: RenderNode): void {

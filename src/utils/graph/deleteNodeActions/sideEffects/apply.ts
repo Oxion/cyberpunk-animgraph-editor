@@ -145,8 +145,7 @@ export function applyRestackPropertyGroup(
     markDirty(child.id)
   }
 
-  fitPropertyGroupToChildren(pg)
-  markDirty(pg.id)
+  for (const id of fitPropertyGroupToChildren(pg)) markDirty(id)
 }
 
 export function applySyncSmSectionMetadata(

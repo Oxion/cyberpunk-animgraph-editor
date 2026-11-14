@@ -19,6 +19,15 @@ import {
   emptyChildSlots,
   getChildSlot,
 } from './nodeChildSlots'
+import {
+  applyResizeStartLayout,
+  captureResizeStartLayout,
+  compensateChildrenForParentOriginShift,
+  computeParentFitDelta,
+  isResizeLayoutDeltaZero,
+  MIN_NODE_HEIGHT,
+  MIN_NODE_WIDTH,
+} from './resizeCascade'
 
 export type BootstrapAttachCtx = NodeAddRulesContext & {
   originalAnimgraph: { nodesToInit: AnimgraphNodeLike[] }
@@ -276,27 +285,45 @@ export function appendChildToPropertyGroup(
   }
 }
 
-/** Grow PropertyGroup bbox to fit current children (does not move children). */
-export function fitPropertyGroupToChildren(pg: RenderNode): void {
+/**
+ * Grow PropertyGroup to fit children. Negative local x/y → shift origin (move
+ * container) + compensate children so world positions stay put, then grow size.
+ * @returns layout-affected ids (parent + compensated children) for renderer sync.
+ */
+export function fitPropertyGroupToChildren(pg: RenderNode): string[] {
   const padding = groupPadding(pg)
   const children = getChildSlot(pg, DEFAULT_CHILD_SLOT)
-  if (children.length === 0) return
+  if (children.length === 0) return []
 
-  const maxX = Math.max(
-    pg.size?.width ?? 0,
-    ...children.map((c) => (c.position?.x ?? 0) + (c.size?.width ?? 0) + padding.right)
-  )
-  const maxY = Math.max(
-    pg.size?.height ?? 0,
-    ...children.map((c) => (c.position?.y ?? 0) + (c.size?.height ?? 0) + padding.bottom)
-  )
-  pg.size = { width: maxX, height: maxY }
-  pg.bounds = {
-    x: pg.position.x,
-    y: pg.position.y,
-    width: pg.size.width,
-    height: pg.size.height,
+  const origin = propertyGroupContentOrigin(pg)
+  const parentStart = captureResizeStartLayout(pg)
+  const childLayouts = children.map((c) => {
+    const layout = captureResizeStartLayout(c)
+    return {
+      ...layout,
+      width: layout.width + padding.right,
+      height: layout.height + padding.bottom,
+    }
+  })
+  const delta = computeParentFitDelta(parentStart, childLayouts, {
+    left: origin.x,
+    top: origin.y,
+  })
+  if (isResizeLayoutDeltaZero(delta)) return []
+
+  applyResizeStartLayout(pg, {
+    x: parentStart.x + delta.dx,
+    y: parentStart.y + delta.dy,
+    width: Math.max(MIN_NODE_WIDTH, parentStart.width + delta.dw),
+    height: Math.max(MIN_NODE_HEIGHT, parentStart.height + delta.dh),
+  })
+  const affected = [pg.id]
+  if (delta.dx !== 0 || delta.dy !== 0) {
+    affected.push(
+      ...compensateChildrenForParentOriginShift(pg, delta.dx, delta.dy)
+    )
   }
+  return affected
 }
 
 export function findPropertyGroup(

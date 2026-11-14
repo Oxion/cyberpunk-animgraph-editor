@@ -494,11 +494,11 @@ export function applyPasteClipboardNode(
   diagramData.allNodes.set(node.id, node)
   diagramData.nodeTypes.add(node.type)
 
-  if (isPropertyGroupNode(diagramParent)) {
-    fitPropertyGroupToChildren(diagramParent)
-  } else if (isDiagramFrameNode(diagramParent)) {
-    fitDiagramFrameToChildren(diagramParent)
-  }
+  const fitAffectedIds = isPropertyGroupNode(diagramParent)
+    ? fitPropertyGroupToChildren(diagramParent)
+    : isDiagramFrameNode(diagramParent)
+      ? fitDiagramFrameToChildren(diagramParent)
+      : []
 
   applyNodeFootprint(node, diagramData)
 
@@ -508,7 +508,7 @@ export function applyPasteClipboardNode(
     primaryNode: node,
     placements: [placement],
     handle,
-    parentRefreshIds: [diagramParent.id],
+    parentRefreshIds: [...new Set([diagramParent.id, ...fitAffectedIds])],
     allAddedIds: [node.id],
     label: `Paste ${item.diagramNodeType}`,
   }
@@ -659,10 +659,12 @@ export function remapClipboardConnections(
 export function computePasteAnchorWorld(
   viewportCenter: { x: number; y: number },
   parentNode: RenderNode,
-  parentInView: boolean
+  parentInView: boolean,
+  /** Parent bounds in the same space as viewportCenter (scoped renderer world). */
+  parentBoundsInView?: { x: number; y: number; width: number; height: number } | null
 ): { x: number; y: number } {
   if (parentInView) return { ...viewportCenter }
-  const parentBounds = getWorldBounds(parentNode)
+  const parentBounds = parentBoundsInView ?? getWorldBounds(parentNode)
   if (!parentBounds) return { ...viewportCenter }
   return {
     x: parentBounds.x + parentBounds.width / 2,
@@ -675,9 +677,11 @@ export function clipboardItemLocalPosition(
   item: NodeClipboardItem,
   anchorRoot: NodeClipboardItem,
   anchorWorld: { x: number; y: number },
-  parentNode: RenderNode
+  parentNode: RenderNode,
+  /** Parent top-left in the same space as anchorWorld (scoped renderer world). */
+  parentWorldInView?: { x: number; y: number } | null
 ): { x: number; y: number } | null {
-  const parentWorld = getWorldPosition(parentNode)
+  const parentWorld = parentWorldInView ?? getWorldPosition(parentNode)
   if (!parentWorld) return null
 
   const rootCenterX = anchorRoot.worldX + anchorRoot.width / 2
@@ -752,10 +756,17 @@ export function resolvePasteItemLocalPosition(
   anchorRoot: NodeClipboardItem,
   anchorWorld: { x: number; y: number },
   pasteParent: RenderNode,
-  copiedSourceIds: ReadonlySet<string>
+  copiedSourceIds: ReadonlySet<string>,
+  parentWorldInView?: { x: number; y: number } | null
 ): { x: number; y: number } | null {
   if (item.sourceParentId && copiedSourceIds.has(item.sourceParentId)) {
     return { x: item.localX, y: item.localY }
   }
-  return clipboardItemLocalPosition(item, anchorRoot, anchorWorld, pasteParent)
+  return clipboardItemLocalPosition(
+    item,
+    anchorRoot,
+    anchorWorld,
+    pasteParent,
+    parentWorldInView
+  )
 }

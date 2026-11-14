@@ -32,14 +32,13 @@ import {
   type AddedNodePlacement,
   type NodeLayoutState,
 } from '../utils/graph/GraphHistory'
-import { getWorldBounds } from '../utils/graph/DiagramGeometry'
 import { allocateNextNumericId } from '../utils/graph/nodeAddBootstrap'
 import {
   canAddNode,
   type AddNodeDenialReason,
   type AnimgraphAttachContext,
 } from '../utils/graph/nodeAddRules'
-import { DEFAULT_CHILD_SLOT } from '../utils/graph/nodeChildSlots'
+import { DEFAULT_CHILD_SLOT, getDirectChildren } from '../utils/graph/nodeChildSlots'
 import {
   applyPasteClipboardNode,
   computePasteAnchorWorld,
@@ -159,15 +158,23 @@ export const addNewNode = (
     }
   }
 
+  const diagramParent = gate.place.diagramTarget ?? null
   const plan = buildAddNodePlan({
     id: diagramNodeId,
     gate,
     viewportCenter: activeRenderer.getViewportCenter(),
+    parentWorld: diagramParent
+      ? activeRenderer.getDiagramNodeWorldPosition(diagramParent)
+      : null,
     diagramData,
     preferredSlotName,
   })
+  // Parent + existing siblings: negative-local fit may move container and compensate kids.
   const parentLayoutsBeforeSnapshot = plan.diagramParent
-    ? snapshotParentLayoutsByIds(diagramData, [plan.diagramParent.id])
+    ? snapshotParentLayoutsByIds(diagramData, [
+        plan.diagramParent.id,
+        ...getDirectChildren(plan.diagramParent).map((c) => c.id),
+      ])
     : null
   const applied = applyAddNodePlan(diagramData, plan)
   if (!applied.ok) {
@@ -228,10 +235,16 @@ export const pasteClipboardNodes = (diagramId: string): PasteClipboardResult => 
   if (!anchorRoot) return { ok: true }
 
   const viewportCenter = activeRenderer.getViewportCenter()
-  const parentBounds = getWorldBounds(parentNode)
+  const parentWorld = activeRenderer.getDiagramNodeWorldPosition(parentNode)
+  const parentSize = parentNode.size ?? { width: 120, height: 80 }
+  const parentBounds = {
+    x: parentWorld.x,
+    y: parentWorld.y,
+    width: parentSize.width,
+    height: parentSize.height,
+  }
   const viewport = activeRenderer.getViewportBounds()
   const parentInView =
-    !!parentBounds &&
     !!viewport &&
     !(
       parentBounds.x + parentBounds.width < viewport.left ||
@@ -242,7 +255,8 @@ export const pasteClipboardNodes = (diagramId: string): PasteClipboardResult => 
   const pasteAnchor = computePasteAnchorWorld(
     viewportCenter,
     parentNode,
-    parentInView
+    parentInView,
+    parentBounds
   )
 
   const reserved = new Set<string>()
@@ -312,11 +326,16 @@ export const pasteClipboardNodes = (diagramId: string): PasteClipboardResult => 
         parentSlot = gate.place.parentSlot ?? item.parentSlot ?? DEFAULT_CHILD_SLOT
         rootAnimgraphAttach = gate.animgraphAttach
 
-        const pid = diagramParent.id
-        if (!parentLayoutsBeforeSnapshot.has(pid)) {
-          const layouts = snapshotParentLayoutsByIds(renderData, [pid])
-          const captured = layouts.get(pid)
-          if (captured) parentLayoutsBeforeSnapshot.set(pid, captured)
+        if (!parentLayoutsBeforeSnapshot.has(diagramParent.id)) {
+          const layouts = snapshotParentLayoutsByIds(renderData, [
+            diagramParent.id,
+            ...getDirectChildren(diagramParent).map((c) => c.id),
+          ])
+          for (const [id, layout] of layouts) {
+            if (!parentLayoutsBeforeSnapshot.has(id)) {
+              parentLayoutsBeforeSnapshot.set(id, layout)
+            }
+          }
         }
       }
 
@@ -325,7 +344,8 @@ export const pasteClipboardNodes = (diagramId: string): PasteClipboardResult => 
         anchorRoot,
         pasteAnchor,
         diagramParent,
-        copiedSourceIds
+        copiedSourceIds,
+        activeRenderer.getDiagramNodeWorldPosition(diagramParent)
       )
       if (!localPosition) {
         rollback()

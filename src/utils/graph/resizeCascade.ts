@@ -210,19 +210,23 @@ export const unionLayoutsBBox = (
  * Grow parent only enough to contain the union bbox of link children
  * (overflow in parent-local space). Children use coords relative to the
  * parent's top-left (0,0), not parent.position.
+ * `contentInset` raises the min child corner (e.g. below node header).
  */
 export const computeParentFitDelta = (
   parentStart: ResizeStartLayout,
-  childLayouts: ResizeStartLayout[]
+  childLayouts: ResizeStartLayout[],
+  contentInset?: { left?: number; top?: number }
 ): ResizeLayoutDelta => {
   const union = unionLayoutsBBox(childLayouts)
   if (!union) {
     return { dx: 0, dy: 0, dw: 0, dh: 0 }
   }
 
-  const overflowL = Math.max(0, -union.x)
+  const minX = contentInset?.left ?? 0
+  const minY = contentInset?.top ?? 0
+  const overflowL = Math.max(0, minX - union.x)
   const overflowR = Math.max(0, union.x + union.width - parentStart.width)
-  const overflowT = Math.max(0, -union.y)
+  const overflowT = Math.max(0, minY - union.y)
   const overflowB = Math.max(0, union.y + union.height - parentStart.height)
 
   return {

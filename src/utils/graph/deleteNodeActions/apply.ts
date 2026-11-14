@@ -143,8 +143,7 @@ export function applyDeleteNodeActions(
     if (action.kind !== 'fit-parent-group') continue
     const parent = renderData.allNodes.get(action.parentId)
     if (parent && isPropertyGroupNode(parent)) {
-      fitPropertyGroupToChildren(parent)
-      markDirty(parent.id)
+      for (const id of fitPropertyGroupToChildren(parent)) markDirty(id)
     }
   }
 

@@ -122,6 +122,8 @@ export type BuildAddNodePlanInput = {
   id: string
   gate: Extract<CanAddNodeResult, { ok: true }>
   viewportCenter: { x: number; y: number }
+  /** Parent top-left in viewport/renderer space (scoped views). */
+  parentWorld?: { x: number; y: number } | null
   diagramData: RenderData
   preferredSlotName?: string
   /** Paste: keep clipboard-relative layout instead of append/stack placement. */
@@ -151,6 +153,7 @@ export function buildAddNodePlan(input: BuildAddNodePlanInput): AddNodePlan {
     id,
     gate,
     viewportCenter,
+    parentWorld,
     diagramData,
     preferredSlotName,
     preserveLayout,
@@ -188,6 +191,7 @@ export function buildAddNodePlan(input: BuildAddNodePlanInput): AddNodePlan {
     animgraphNodeType,
     gate,
     viewportCenter,
+    ...(parentWorld !== undefined ? { parentWorld } : {}),
     diagramData,
     preferredSlotName,
     rootHandleId: resolved.rootHandleId,
@@ -374,15 +378,16 @@ function placePrimaryInParent(
   graphData: RenderData,
   plan: AddNodePlan,
   mode: PlaceInParentMode
-): { ok: true } | { ok: false; message: string } {
+): { ok: true; fitAffectedIds: string[] } | { ok: false; message: string } {
   const { node, diagramParent, parentSlot } = plan
 
   if (!diagramParent) {
     graphData.rootNodes.push(node)
     registerDiagramNode(graphData, node)
-    return { ok: true }
+    return { ok: true, fitAffectedIds: [] }
   }
 
+  let fitAffectedIds: string[] = []
   if (mode === 'append-bottom-grow') {
     if (!isPropertyGroupNode(diagramParent)) {
       return {
@@ -391,6 +396,7 @@ function placePrimaryInParent(
       }
     }
     appendChildToPropertyGroup(diagramParent, node, { grow: true })
+    fitAffectedIds = [diagramParent.id]
   } else {
     const w = node.size?.width ?? 240
     const h = node.size?.height ?? 80
@@ -399,14 +405,14 @@ function placePrimaryInParent(
     node.bounds = { x: px, y: py, width: w, height: h }
     appendChild(diagramParent, node, parentSlot)
     if (isPropertyGroupNode(diagramParent)) {
-      fitPropertyGroupToChildren(diagramParent)
+      fitAffectedIds = fitPropertyGroupToChildren(diagramParent)
     } else if (isDiagramFrameNode(diagramParent)) {
-      fitDiagramFrameToChildren(diagramParent)
+      fitAffectedIds = fitDiagramFrameToChildren(diagramParent)
     }
   }
 
   registerDiagramNode(graphData, node)
-  return { ok: true }
+  return { ok: true, fitAffectedIds }
 }
 
 function resolveEnsureChildParent(
@@ -457,7 +463,10 @@ function rollbackPartialAdd(
   }
 }
 
-function syncPrimaryFootprint(graphData: RenderData, plan: AddNodePlan): void {
+function syncPrimaryFootprint(
+  graphData: RenderData,
+  plan: AddNodePlan
+): string[] {
   applyNodeFootprint(plan.node, graphData)
 
   const place = plan.actions.find(
@@ -468,8 +477,9 @@ function syncPrimaryFootprint(graphData: RenderData, plan: AddNodePlan): void {
     plan.diagramParent &&
     isPropertyGroupNode(plan.diagramParent)
   ) {
-    fitPropertyGroupToChildren(plan.diagramParent)
+    return fitPropertyGroupToChildren(plan.diagramParent)
   }
+  return []
 }
 
 export function applyAddNodePlan(
@@ -480,6 +490,7 @@ export function applyAddNodePlan(
   let handle: HandleMutationSnapshot | undefined
   const ensuredIds: string[] = []
   let primaryPlaced = false
+  const fitAffectedIds: string[] = []
 
   const fail = (message: string): ApplyAddNodeResult => {
     rollbackPartialAdd(graphData, plan, handle, ensuredIds, primaryPlaced)
@@ -495,6 +506,7 @@ export function applyAddNodePlan(
         const placed = placePrimaryInParent(graphData, plan, action.mode)
         if (!placed.ok) return fail(placed.message)
         primaryPlaced = true
+        fitAffectedIds.push(...placed.fitAffectedIds)
         break
       }
       case 'ensure-property-group': {
@@ -651,7 +663,7 @@ export function applyAddNodePlan(
   }
 
   // Recompute footprint after handle attach (overview body uses animgraph data).
-  syncPrimaryFootprint(graphData, plan)
+  fitAffectedIds.push(...syncPrimaryFootprint(graphData, plan))
 
   const placement = captureAddedNodePlacement(graphData, plan.node, plan.diagramParent)
   const ensuredPlacements = ensuredIds
@@ -663,7 +675,12 @@ export function applyAddNodePlan(
     .filter((p): p is AddedNodePlacement => !!p)
 
   const placements = [placement, ...ensuredPlacements]
-  const parentRefreshIds = collectAddNodeParentRefreshIds(graphData, plan, handle)
+  const parentRefreshIds = [
+    ...new Set([
+      ...collectAddNodeParentRefreshIds(graphData, plan, handle),
+      ...fitAffectedIds,
+    ]),
+  ]
 
   return {
     ok: true,

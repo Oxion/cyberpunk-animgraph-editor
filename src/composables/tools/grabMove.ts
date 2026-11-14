@@ -151,6 +151,9 @@ export const applyAbsoluteMoveWithParentGrow = (
       onBeforeLayoutMutate: onBefore,
     })
     cascade.affectedIds.forEach((id) => affected.add(id))
+    // Restored every frame from baselines; prior origin-shift compensate must not
+    // linger in Pixi when this frame no longer shifts (e.g. -grow then +grow).
+    for (const id of cascadeStartLayouts.keys()) affected.add(id)
   }
 
   return [...affected]

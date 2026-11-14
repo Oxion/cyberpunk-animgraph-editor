@@ -31,6 +31,11 @@ export type DiagramAddBuilderInput = {
   animgraphNodeType: string
   gate: Extract<CanAddNodeResult, { ok: true }>
   viewportCenter: { x: number; y: number }
+  /**
+   * Parent top-left in the same space as viewportCenter (scoped renderer world).
+   * When omitted, falls back to absolute getWorldPosition (root view only).
+   */
+  parentWorld?: { x: number; y: number } | null
   diagramData: RenderData
   preferredSlotName?: string
   /** Animgraph root handle id for wrappers (Description / Entry). */
@@ -54,7 +59,8 @@ function positionInPlace(
   }
   const parent = input.gate.place.diagramTarget
   if (!parent) return world
-  const parentWorld = getWorldPosition(parent)
+  const parentWorld =
+    input.parentWorld !== undefined ? input.parentWorld : getWorldPosition(parent)
   if (!parentWorld) return world
   return { x: world.x - parentWorld.x, y: world.y - parentWorld.y }
 }

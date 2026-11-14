@@ -130,6 +130,8 @@ export const applyResizeFromMouseDelta = (
     cascadeOptions
   )
   cascade.affectedIds.forEach((id) => affectedIds.add(id))
+  // Baselines restored every frame — refresh siblings that prior origin-shift compensated.
+  for (const id of session.cascadeStartLayouts.keys()) affectedIds.add(id)
 
   if (affectedIds.size > 0) {
     updateActiveNodes(Array.from(affectedIds))
