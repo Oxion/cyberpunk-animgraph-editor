@@ -1034,13 +1034,18 @@ export const saveGraphToServer = async (filePath: string) => {
 
   const abs = filePath.endsWith('.json') ? filePath : `${filePath}.json`
   const posePath = clipPoseSidecarPath(abs)
+  // Save As (or first save) must write sidecar even when pose rev is unchanged —
+  // the skip-rewrite cache only applies to overwriting the same project path.
+  const prev = currentLoadedPath.value
+  const pathChanged =
+    prev == null || prev.replace(/\\/g, '/').toLowerCase() !== abs.replace(/\\/g, '/').toLowerCase()
   try {
     await fsSaveJson(abs, projectData)
     const host = requireHost()
     const poseRev = host.getProjectSimResources?.()?.clipPoseRevision ?? -1
     const poseText = host.getCachedClipPoseCompactText?.() ?? null
     if (poseText != null) {
-      if (poseRev !== lastSavedClipPoseRev) {
+      if (pathChanged || poseRev !== lastSavedClipPoseRev) {
         await fsSaveText(posePath, poseText)
         lastSavedClipPoseRev = poseRev
       }
