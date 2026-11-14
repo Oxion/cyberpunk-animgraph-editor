@@ -476,6 +476,11 @@ export class PixiGraphRenderer {
     diagramNode: RenderNode,
     viewRootDiagramNodeIdsSet?: Set<string>,
   ): { x: number; y: number } {
+    if (this.hideScopeRoot && this._scopeRootId && diagramNode.id === this._scopeRootId) {
+      // in scope mode, the diagram node is the scope root and its hidden, so its world position is (0,0)
+      return { x: 0, y: 0 }
+    }
+
     const _viewRootDiagramNodeIdsSet = viewRootDiagramNodeIdsSet 
       ?? this._resolveViewRootDiagramNodeIdsSet()
 
@@ -2701,6 +2706,14 @@ export class PixiGraphRenderer {
     const worldY = (stageHeight / 2 - this._panYRef.value) / this._zoomRef.value
     
     return { x: worldX, y: worldY }
+  }
+
+  /**
+   * Node top-left in the same space as getViewportCenter / clientPosToWorldPos
+   * (stops at view roots — not absolute getWorldPosition when scoped).
+   */
+  public getDiagramNodeWorldPosition(diagramNode: RenderNode): { x: number; y: number } {
+    return this._resolveDiagramNodeRendererWorldPosition(diagramNode)
   }
 
   /**
