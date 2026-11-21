@@ -127,8 +127,12 @@ import { Button } from '@/components/ui/button'
 import SimRunnerSelect from './sim/SimRunnerSelect.vue'
 import { activeDiagramId as activeDiagramIdRef, listDiagramIds } from '../stores/graphProject'
 import { sim } from '../stores/animgraphSim'
-import { activeBodyViewId as activeBodyViewIdRef, bodyBelongsToDiagram, bodyViews } from '@/stores/bodyViews.ts'
-import { bodyViewRoot, bodyViewTop } from '@/types/DiagramBodyView.ts'
+import {
+  bodyBelongsToDiagram,
+  resolveBodyViewRoot,
+  resolveBodyViewTop,
+} from '@/stores/activeGraphView.ts'
+import { activeBodyViewId as activeBodyViewIdRef, bodyViews } from '@/stores/bodyViews.ts'
 
 export interface TaskbarItem {
   id: string
@@ -192,7 +196,7 @@ const bodyViewTaskbarItemsComputed = computed(() => {
   if (root && parallels.length > 0) {
     items.push({
       id: root.id,
-      title: bodyViewRoot(root).title,
+      title: resolveBodyViewRoot(root)?.title ?? root.id,
       type: 'body-main',
       minimized: activeBodyViewId !== root.id,
       active: activeBodyViewId === root.id,
@@ -203,7 +207,7 @@ const bodyViewTaskbarItemsComputed = computed(() => {
   for (const bodyView of parallels) {
     items.push({
       id: bodyView.id,
-      title: `${bodyView.preview ? 'Preview · ' : ''}${bodyViewTop(bodyView).title}`,
+      title: `${bodyView.preview ? 'Preview · ' : ''}${resolveBodyViewTop(bodyView)?.title ?? bodyView.id}`,
       type: 'body-view',
       minimized: bodyView.minimized || activeBodyViewId !== bodyView.id,
       active: activeBodyViewId === bodyView.id && !bodyView.minimized,

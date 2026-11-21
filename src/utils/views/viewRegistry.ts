@@ -1,5 +1,6 @@
 import type { GraphViewChromeAction, GraphViewEntry, GraphViewKind } from '../../types/GraphView'
 import { isStackableViewKind } from '../../types/DiagramBodyView'
+import { allocDiagramRendererId } from '../../stores/diagramRenderers'
 
 /** Type-dependent chrome for diagram views (custom UI per view kind). */
 export function getGraphViewChromeActions(entry: GraphViewEntry): GraphViewChromeAction[] {
@@ -23,6 +24,7 @@ export function createMainGraphView(projectDiagramId = 'main'): GraphViewEntry<'
   const isPrimary = projectDiagramId === 'main'
   return {
     id: isPrimary ? 'main' : `main_${projectDiagramId}`,
+    rendererId: allocDiagramRendererId(),
     kind: 'main',
     title: isPrimary ? 'Main' : projectDiagramId,
     crumb: isPrimary ? 'Main' : projectDiagramId,
@@ -44,6 +46,7 @@ export function createGraphScopeView(opts: {
   viewSeq += 1
   return {
     id: `view_scope_${opts.scopeRootId}_${viewSeq}`,
+    rendererId: allocDiagramRendererId(),
     kind: 'graph-scope',
     title: opts.label,
     crumb: opts.label,
@@ -65,6 +68,7 @@ export function createSmRingView(opts: {
   viewSeq += 1
   return {
     id: `view_smring_${opts.stateMachineNodeId}_${viewSeq}`,
+    rendererId: allocDiagramRendererId(),
     kind: 'sm-ring',
     title: `SM Ring · ${opts.label}`,
     crumb: `Ring · ${opts.label}`,
@@ -84,6 +88,7 @@ export function createStateLinksView(opts: {
   viewSeq += 1
   return {
     id: `view_statelinks_${opts.stateNodeId}_${viewSeq}`,
+    rendererId: allocDiagramRendererId(),
     kind: 'state-links',
     title: opts.label,
     crumb: opts.label,

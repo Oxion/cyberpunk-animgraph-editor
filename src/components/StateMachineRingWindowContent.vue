@@ -1,16 +1,4 @@
-<template>
-  <div class="sm-ring-window-content">
-    <StateMachineRingView
-      v-if="presentation"
-      ref="ringViewRef"
-      fill-container
-      :presentation="presentation"
-      :sim-highlight="simHighlight"
-    />
-  </div>
-</template>
-
-<script setup lang="ts">
+<script lang="ts">
 import { computed, ref, watch } from 'vue'
 import StateMachineRingView from './StateMachineRingView.vue'
 import type { RenderData } from '../utils/graph/diagramTypes'
@@ -19,6 +7,17 @@ import {
   buildStateMachineRingPresentation,
   resolveStateMachineInfoNode,
 } from '../utils/graph/DiagramConversion'
+
+export interface IStateMachineRingWindowContentExposeRef {
+  fitView: () => void
+}
+
+export const isStateMachineRingWindowContentExposeRef = (value: any): value is IStateMachineRingWindowContentExposeRef => {
+  return typeof value === 'object' && value !== null && 'fitView' in value
+}
+</script>
+
+<script setup lang="ts">
 
 const props = withDefaults(
   defineProps<{
@@ -49,8 +48,20 @@ watch(
   }
 )
 
-defineExpose({ fitView })
+defineExpose<IStateMachineRingWindowContentExposeRef>({ fitView })
 </script>
+
+<template>
+  <div class="sm-ring-window-content">
+    <StateMachineRingView
+      v-if="presentation"
+      ref="ringViewRef"
+      fill-container
+      :presentation="presentation"
+      :sim-highlight="simHighlight"
+    />
+  </div>
+</template>
 
 <style scoped>
 .sm-ring-window-content {

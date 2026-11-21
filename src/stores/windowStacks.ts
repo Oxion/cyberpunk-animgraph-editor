@@ -1,51 +1,13 @@
 import { computed, ref } from 'vue'
-import type { GraphViewEntry } from '../types/GraphView'
-import { createGraphScopeView, createStateLinksView } from '../utils/views/viewRegistry'
 
 /**
- * Per-window DiagramStack for stackable window hosts (state-links, lens).
- * Push stays inside the window — host is the window, not the entry.
+ * Per-window stack of graph-view ids (state-links, lens).
+ * Entries live in graphViewRegistry; host is the window.
  */
-const windowStacks = ref<Record<string, GraphViewEntry[]>>({})
+export const windowStacks = ref<Record<string, string[]>>({})
 
-export function initStateLinksWindowStack(
-  windowId: string,
-  opts: {
-    stateNodeId: string
-    label: string
-    stateMachineNodeId?: string
-    projectDiagramId: string
-  }
-) {
-  const root = createStateLinksView({
-    stateNodeId: opts.stateNodeId,
-    label: opts.label,
-    stateMachineNodeId: opts.stateMachineNodeId,
-    projectDiagramId: opts.projectDiagramId,
-  })
-  root.id = `${windowId}__root`
-  windowStacks.value = { ...windowStacks.value, [windowId]: [root] }
-}
-
-export function initLensWindowStack(
-  windowId: string,
-  opts: {
-    scopeRootId: string
-    label: string
-    hideScopeRoot?: boolean
-    stateMachineNodeId?: string
-    projectDiagramId: string
-  }
-) {
-  const root = createGraphScopeView({
-    scopeRootId: opts.scopeRootId,
-    label: opts.label,
-    hideScopeRoot: opts.hideScopeRoot,
-    stateMachineNodeId: opts.stateMachineNodeId,
-    projectDiagramId: opts.projectDiagramId,
-  })
-  root.id = `${windowId}__root`
-  windowStacks.value = { ...windowStacks.value, [windowId]: [root] }
+export function setWindowStack(windowId: string, entryIds: string[]) {
+  windowStacks.value = { ...windowStacks.value, [windowId]: [...entryIds] }
 }
 
 export function clearWindowStack(windowId: string) {
@@ -55,37 +17,36 @@ export function clearWindowStack(windowId: string) {
   windowStacks.value = next
 }
 
-export function getWindowStack(windowId: string): GraphViewEntry[] {
+export function getWindowStack(windowId: string): string[] {
   return windowStacks.value[windowId] ?? []
 }
 
-export function getWindowStackTop(windowId: string): GraphViewEntry | null {
+export function getWindowStackTop(windowId: string): string | null {
   const stack = windowStacks.value[windowId]
   if (!stack || stack.length === 0) return null
   return stack[stack.length - 1]!
 }
 
-export function pushWindowStack(windowId: string, entry: GraphViewEntry) {
+/** Push a registered view id onto a window stack. */
+export function pushWindowStack(windowId: string, entryId: string) {
   const prev = windowStacks.value[windowId]
   if (!prev || prev.length === 0) return
-  // Namespace so body renderer sync can treat win_* ids as window-owned.
-  const id = entry.id.startsWith(`${windowId}__`) ? entry.id : `${windowId}__${entry.id}`
   windowStacks.value = {
     ...windowStacks.value,
-    [windowId]: [...prev, { ...entry, id }],
+    [windowId]: [...prev, entryId],
   }
 }
 
 /** View id registered for the focused layer of a window (stack top). */
 export function getWindowTopViewId(windowId: string): string | null {
-  return getWindowStackTop(windowId)?.id ?? null
+  return getWindowStackTop(windowId)
 }
 
 export function forEachWindowStackEntry(
-  fn: (windowId: string, entry: GraphViewEntry) => void
+  fn: (windowId: string, entryId: string) => void
 ): void {
   for (const [windowId, stack] of Object.entries(windowStacks.value)) {
-    for (const entry of stack) fn(windowId, entry)
+    for (const entryId of stack) fn(windowId, entryId)
   }
 }
 
@@ -109,6 +70,6 @@ export function jumpWindowStack(windowId: string, index: number) {
 
 export const windowStackRevision = computed(() =>
   Object.entries(windowStacks.value)
-    .map(([id, entries]) => `${id}:${entries.map((e) => e.id).join('|')}`)
+    .map(([id, entries]) => `${id}:${entries.join('|')}`)
     .join(';')
 )

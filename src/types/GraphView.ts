@@ -45,6 +45,11 @@ export interface GraphViewSelection {
 export type GraphViewEntry<K extends GraphViewKind = GraphViewKind> = {
   [P in K]: {
     id: string
+    /**
+     * Slot in diagramRenderers `viewApis` — from `allocDiagramRendererId()`.
+     * Not the same namespace as `id` / window ids.
+     */
+    rendererId: string
     kind: P
     /** Full title for host chrome */
     title: string
@@ -66,11 +71,6 @@ export interface GraphViewBreadcrumbItem {
   id: string
   crumb: string
   kind: GraphViewKind
-}
-
-/** Nested navigation entries for a stackable surface. */
-export type DiagramStack = {
-  entries: GraphViewEntry[]
 }
 
 export function isOverlayViewKind(kind: GraphViewKind): boolean {

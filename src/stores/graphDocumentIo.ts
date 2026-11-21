@@ -49,7 +49,6 @@ import {
 } from './projectViewSession'
 import { deactivateAllTools } from '@/app/tools'
 import { currentLoadedPath } from './loadedProjectPath'
-import { diagramViewReadyRef } from '../composables/useMainDiagramMount'
 import { rewriteRunnerSlotsDiagramIds } from '../composables/useAnimgraphSim'
 
 export { currentLoadedPath }
@@ -273,12 +272,7 @@ export type PendingDiagramLoad = {
 export const pendingDiagramLoad = ref<PendingDiagramLoad | null>(null)
 
 export function cancelPendingDiagramLoad() {
-  const hadPending = pendingDiagramLoad.value != null
   pendingDiagramLoad.value = null
-  // beginLoad may have flipped ready off before pending; restore canvas if we aborted.
-  if (hadPending && hasProject.value) {
-    diagramViewReadyRef.value = true
-  }
 }
 
 function basenamePath(filePath: string): string {
@@ -351,7 +345,6 @@ export const beginLoadFromPath = async (
     const detected = detectFileType(data)
     if (intent === 'open' && detected === 'project') {
       if (hasProject.value && !confirmDiscardUnsavedChanges()) return
-      diagramViewReadyRef.value = false
       const project = data as AnimgraphProjectFile
       if (project.clipPoseLibrary == null) {
         try {
@@ -412,7 +405,6 @@ export const beginLoadFromFile = async (file: File, opts?: { intent?: LoadIntent
     const detected = detectFileType(data)
     if (intent === 'open' && detected === 'project') {
       if (hasProject.value && !confirmDiscardUnsavedChanges()) return
-      diagramViewReadyRef.value = false
       await loadProjectFile(data as AnimgraphProjectFile)
       currentLoadedPath.value = null
       showWelcomeOpen.value = false
@@ -461,7 +453,6 @@ export const confirmPendingDiagramLoad = async (
 
   try {
     loadingRef.value = true
-    diagramViewReadyRef.value = false
 
     let renderGraphData: RenderData
     if (pending.kind === 'project') {

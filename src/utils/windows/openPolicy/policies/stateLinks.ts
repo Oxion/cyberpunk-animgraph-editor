@@ -1,5 +1,7 @@
 import type { StateLinksWindowPayload } from '../../../../types/AppWindow'
-import { initStateLinksWindowStack } from '../../../../stores/windowStacks'
+import { registerGraphView } from '../../../../stores/graphViewRegistry'
+import { setWindowStack } from '../../../../stores/windowStacks'
+import { createStateLinksView } from '../../../views/viewRegistry'
 import type { WindowOpenPolicy } from '../types'
 
 export function stateLinksWindowTitle(
@@ -16,11 +18,13 @@ export const stateLinksOpenPolicy: WindowOpenPolicy<'state-links'> = {
   makeId: (payload) => `win_statelinks_${Date.now()}_${payload.stateNodeId}`,
   title: stateLinksWindowTitle,
   afterOpen: (win) => {
-    initStateLinksWindowStack(win.id, {
+    const root = createStateLinksView({
       stateNodeId: win.payload.stateNodeId,
       label: win.payload.rootLabel,
       stateMachineNodeId: win.payload.stateMachineNodeId,
       projectDiagramId: win.payload.projectDiagramId,
     })
+    registerGraphView(root)
+    setWindowStack(win.id, [root.id])
   },
 }

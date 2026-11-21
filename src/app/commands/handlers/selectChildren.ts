@@ -1,4 +1,4 @@
-import { currentView, setViewSelection } from '../../../stores/bodyViews'
+import { currentView, setViewSelection } from '../../../stores/activeGraphView'
 import { getActiveDiagramRenderer } from '../../../stores/diagramRenderers'
 import { getActiveRenderData } from '../../../stores/graphProject'
 import { selectedNodeIdsRef, selectedNodeRef } from '../../../stores/graphSession'
@@ -30,5 +30,7 @@ export function selectChildren() {
       : (mergedIds[0] ?? null)
 
   active.setSelectedNodes(mergedIds, primaryId)
-  setViewSelection(currentView.value.id, { nodeIds: mergedIds, primaryNodeId: primaryId })
+  const viewId = currentView.value?.id
+  if (!viewId) return
+  setViewSelection(viewId, { nodeIds: mergedIds, primaryNodeId: primaryId })
 }

@@ -1,4 +1,4 @@
-import { getActiveGraphView } from './activeGraphView'
+import { currentView } from './activeGraphView'
 import {
   getActiveDiagramRenderer,
 } from './diagramRenderers'
@@ -147,7 +147,7 @@ export const addNewNode = (
     selectedNode,
     diagramNodeType,
     diagramData,
-    getActiveGraphView(),
+    currentView.value,
     preferredSlotName
   )
   if (!gate.ok) {
@@ -225,7 +225,7 @@ export const pasteClipboardNodes = (diagramId: string): PasteClipboardResult => 
     handlesRegistry: renderData.handlesRegistry,
     allNodes: renderData.allNodes,
   }
-  const activeView = getActiveGraphView()
+  const activeView = currentView.value
 
   const copiedSourceIds = new Set(clip.items.map((item) => item.sourceId))
   const orderedItems = orderClipboardItemsForPaste(clip.items)

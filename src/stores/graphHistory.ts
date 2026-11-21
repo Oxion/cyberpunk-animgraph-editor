@@ -9,10 +9,7 @@ import {
   type ConnectionDeleteSnapshot,
 } from '../utils/graph/GraphHistory'
 import { LayoutGesture, PositionGesture } from '../utils/graph/commands'
-import {
-  getActiveDiagramRenderer,
-  mainDiagramRenderer as graphRenderer,
-} from './diagramRenderers'
+import { getActiveDiagramRenderer } from './diagramRenderers'
 import {
   broadcastAddConnection,
   collectWireRenderers,
@@ -415,7 +412,7 @@ export const pushConnectionCreateHistory = (
     } else {
       const index = data.connections.findIndex((conn) => getConnectionKey(conn) === connectionKey)
       if (index >= 0) data.connections.splice(index, 1)
-      graphRenderer.value?.deleteConnection(snapshot)
+      getActiveDiagramRenderer()?.deleteConnection(snapshot)
     }
     bumpConnectionsRevision(diagramId)
   }

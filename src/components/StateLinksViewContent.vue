@@ -1,26 +1,22 @@
-<template>
-  <div class="state-links-view-content-root">
-    <div
-      ref="canvasRef"
-      class="state-links-view-content"
-      :class="{ 'state-links-view-content--inactive': !active }"
-      title="Click to focus diagram"
-      @pointerdown="onDiagramPointerDown"
-    />
-    <DiagramLoadingOverlay v-if="active && !viewReady" />
-  </div>
-</template>
+<script lang="ts">
+export {
+  isPixiDiagramViewContentExposeRef as isStateLinksViewContentExposeRef,
+  type IPixiDiagramViewContentExposeRef as IStateLinksViewContentExposeRef,
+} from './PixiDiagramViewContent.vue'
+</script>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
+import PixiDiagramViewContent, {
+  type IPixiDiagramViewContentExposeRef,
+} from './PixiDiagramViewContent.vue'
 import type { DiagramConnection, RenderData } from '../utils/graph/diagramTypes'
-import { PixiGraphRenderer, PresentWorldRectOptions } from '../utils/PixiGraphRenderer'
 import {
   buildStateAppliedLinksDiagramData,
   findOutgoingTransitionsSectionGroupDiagramNode,
 } from '../utils/graph/StateAppliedLinks'
-import DiagramLoadingOverlay from './DiagramLoadingOverlay.vue'
-import { focusDiagramHost } from '../utils/dom/focusDiagramHost'
+import type { PresentWorldRectOptions } from '../utils/PixiGraphRenderer'
+import type { PixiGraphRenderer } from '../utils/PixiGraphRenderer'
 
 const DEFAULT_PRESENT_WORLD_RECT_OPTIONS: PresentWorldRectOptions = {
   align: 'top-end',
@@ -58,86 +54,45 @@ const emit = defineEmits<{
   ready: []
 }>()
 
-const canvasRef = shallowRef<HTMLDivElement | null>(null)
-const rendererRef = shallowRef<PixiGraphRenderer | null>(null)
-const viewReady = ref(false)
-const stateAppliedLinksDiagramDataRef = shallowRef<RenderData | null>(null)
+const hostRef = ref<IPixiDiagramViewContentExposeRef | null>(null)
+const derivedGraphData = shallowRef<RenderData | null>(null)
 
-const buildPresentWorldRectConfig = () => {
-  if (!stateAppliedLinksDiagramDataRef.value) return
-  
-  const outgoingTransitionsSectionGroupDiagramNode = findOutgoingTransitionsSectionGroupDiagramNode(stateAppliedLinksDiagramDataRef.value)
-  if (!outgoingTransitionsSectionGroupDiagramNode) return
-  
+const rebuildDerived = () => {
+  derivedGraphData.value = buildStateAppliedLinksDiagramData(props.graphData, props.stateNodeId)
+}
+
+rebuildDerived()
+
+watch(
+  () => [props.graphData, props.stateNodeId] as const,
+  () => {
+    rebuildDerived()
+  }
+)
+
+const initialPresent = computed(() => {
+  const data = derivedGraphData.value
+  if (!data) return undefined
+  const group = findOutgoingTransitionsSectionGroupDiagramNode(data)
+  if (!group) return undefined
   return {
-    rect: outgoingTransitionsSectionGroupDiagramNode.bounds,
+    rect: group.bounds,
     options: DEFAULT_PRESENT_WORLD_RECT_OPTIONS,
   }
+})
+
+const presentDefaultFn = (renderer: PixiGraphRenderer) => {
+  const data = derivedGraphData.value
+  if (!data) return
+  const group = findOutgoingTransitionsSectionGroupDiagramNode(data)
+  if (!group) return
+  renderer.presentWorldRect(group.bounds, DEFAULT_PRESENT_WORLD_RECT_OPTIONS)
 }
 
-const presentDefault = () => {
-  const renderer = rendererRef.value
-  if (!renderer) return
-
-  const presentWorldRectConfig = buildPresentWorldRectConfig()
-  if (!presentWorldRectConfig) return
-
-  renderer.presentWorldRect(presentWorldRectConfig.rect, presentWorldRectConfig.options)
-}
-
-const applyActiveState = () => {
-  const instance = rendererRef.value
-  if (!instance) return
-  instance.setSuspended(!props.active)
-}
-
-const onDiagramPointerDown = () => {
-  if (!props.active) return
-  focusDiagramHost(canvasRef.value)
-}
-
-const mountRenderer = async () => {
-  if (!canvasRef.value) return
-  if (rendererRef.value) {
-    applyActiveState()
-    viewReady.value = true
-    return
-  }
-
-  viewReady.value = false
-  
-  stateAppliedLinksDiagramDataRef.value = buildStateAppliedLinksDiagramData(props.graphData, props.stateNodeId)
-  if (!stateAppliedLinksDiagramDataRef.value) {
-    viewReady.value = true
-    return
-  }
-
-  const renderer = new PixiGraphRenderer(canvasRef.value, stateAppliedLinksDiagramDataRef.value, {
-    skipInitialFit: true,
-    initialPresent: buildPresentWorldRectConfig(),
-  })
-  renderer.setOnNodeSelect((ids, primary) => emit('nodeSelect', ids, primary))
-  renderer.setOnOpenNodeScope((nodeId) => emit('openScope', nodeId))
-  renderer.setOnPinConnect((payload) => emit('pinConnect', payload))
-  renderer.setOnPinRewire((payload) => emit('pinRewire', payload))
-  rendererRef.value = renderer
-  
-  try {
-    await renderer._initPromise
-  } finally {
-    if (rendererRef.value === renderer) {
-      viewReady.value = true
-      applyActiveState()
-      presentDefault()
-      emit('ready')
-    }
-  }
-}
-
-const fitView = () => {
-  const bounds = stateAppliedLinksDiagramDataRef.value?.bounds
+const fitViewFn = (renderer: PixiGraphRenderer) => {
+  const bounds = derivedGraphData.value?.bounds
   if (bounds && bounds.width > 0 && bounds.height > 0) {
-    rendererRef.value?.presentWorldRect(bounds, {
+    renderer.presentWorldRect(bounds, {
       align: 'center',
       fit: 'contain',
       padding: 20,
@@ -146,66 +101,36 @@ const fitView = () => {
     })
     return
   }
-  rendererRef.value?.fitViewToScope()
+  renderer.fitViewToScope()
 }
 
-const getRenderer = () => rendererRef.value
-
-const focusCanvas = () => {
-  if (!props.active) return
-  focusDiagramHost(canvasRef.value)
-}
-
-onMounted(() => {
-  void mountRenderer()
+defineExpose({
+  fitView: () => hostRef.value?.fitView(),
+  presentDefault: () => hostRef.value?.presentDefault(),
+  getRenderer: () => hostRef.value?.getRenderer() ?? null,
+  getDiagramRenderer: () => hostRef.value?.getDiagramRenderer() ?? null,
+  focusRenderer: () => hostRef.value?.focusRenderer(),
+  focusDiagramRenderer: () => hostRef.value?.focusDiagramRenderer(),
+  applySimOverlay: (snap?: Parameters<IPixiDiagramViewContentExposeRef['applySimOverlay']>[0]) =>
+    hostRef.value?.applySimOverlay(snap),
 })
-
-onUnmounted(() => {
-  rendererRef.value?.destroy()
-  rendererRef.value = null
-  stateAppliedLinksDiagramDataRef.value = null
-  viewReady.value = false
-})
-
-watch(
-  () => props.active,
-  () => {
-    applyActiveState()
-  }
-)
-
-watch(
-  () => [props.graphData, props.stateNodeId] as const,
-  (next, prev) => {
-    if (prev && next[0] === prev[0] && next[1] === prev[1]) return
-    rendererRef.value?.destroy()
-    rendererRef.value = null
-    stateAppliedLinksDiagramDataRef.value = null
-    viewReady.value = false
-    void mountRenderer()
-  }
-)
-
-defineExpose({ fitView, presentDefault, getRenderer, focusCanvas })
 </script>
 
-<style scoped>
-.state-links-view-content-root {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-}
-
-.state-links-view-content {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  outline: none;
-  background: #1a1a1a;
-}
-
-.state-links-view-content--inactive {
-  pointer-events: none;
-}
-</style>
+<template>
+  <PixiDiagramViewContent
+    v-if="derivedGraphData"
+    ref="hostRef"
+    :graph-data="derivedGraphData"
+    :active="active"
+    :skip-initial-fit="true"
+    :initial-present="initialPresent"
+    :present-default-fn="presentDefaultFn"
+    :fit-view-fn="fitViewFn"
+    :remount-key="stateNodeId"
+    @node-select="(...args) => emit('nodeSelect', ...args)"
+    @open-scope="(id) => emit('openScope', id)"
+    @pin-connect="(p) => emit('pinConnect', p)"
+    @pin-rewire="(p) => emit('pinRewire', p)"
+    @ready="emit('ready')"
+  />
+</template>

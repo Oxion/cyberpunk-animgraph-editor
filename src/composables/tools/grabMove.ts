@@ -18,7 +18,7 @@ import {
   selectedNodeIdsRef,
   selectedNodeRef,
 } from '../../stores/graphSession'
-import { mainDiagramRenderer as graphRenderer } from '../../stores/diagramRenderers'
+import { getActiveDiagramRenderer } from '../../stores/diagramRenderers'
 import {
   autoResizeParents,
   moveDescendants,
@@ -214,7 +214,7 @@ export const moveInputNodesOnly = (diagramId: string, margin: number, spacing: n
   runWithPositionHistory(diagramId, 'Arrange inputs', () => {
     clearMovedNodes()
     moveInputNodesCloser(diagramId, selectedNodeRef.value!, margin, spacing)
-    if (graphRenderer.value && movedNodeIds.size > 0) {
+    if (getActiveDiagramRenderer() && movedNodeIds.size > 0) {
       updateActiveNodes(Array.from(movedNodeIds))
     }
   })
@@ -231,7 +231,7 @@ export const arrangeSelectedNodesWithElk = async (
   }
 ) => {
   const diagramData = getRenderData(diagramId)
-  if (!diagramData || !graphRenderer.value || selectedNodeIdsRef.value.length < 2) return
+  if (!diagramData || !getActiveDiagramRenderer() || selectedNodeIdsRef.value.length < 2) return
 
   arrangeSelectionToolCache.busy = true
   try {
@@ -329,7 +329,7 @@ export const clearMovedNodes = () => {
 export const paintMoveAffected = (diagramId: string, affectedIds: string[]) => {
   clearMovedNodes()
   for (const id of affectedIds) movedNodeIds.add(id)
-  if (graphRenderer.value && affectedIds.length > 0) {
+  if (getActiveDiagramRenderer() && affectedIds.length > 0) {
     updateActiveNodes(affectedIds)
   }
   const diagramData = getRenderData(diagramId)

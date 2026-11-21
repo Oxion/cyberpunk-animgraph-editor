@@ -1,4 +1,4 @@
-import { focusedDiagramSurface, isStateLinksRootContext, isStateLinksRootViewFocused } from "@/stores/diagramRenderers"
+import { focusedDiagramSurface, isStateLinksRootContext, isStateLinksRootViewFocused } from "@/stores/diagramFocus"
 import { AppFocus } from "./types"
 import { hasProject } from "@/stores/graphProject"
 import { PredicateContext } from "@/core/when"

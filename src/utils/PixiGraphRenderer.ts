@@ -2,7 +2,7 @@
  * Pixi Diagram Renderer
  */
 
-import { WatcherSub } from '@/lib/eagerReactive/types'
+import { Signal, WatcherSub } from '@/lib/eagerReactive/types'
 import {
   Application,
   Container,
@@ -66,9 +66,26 @@ import {
 import {
   isCrossViewConnection
 } from './graph/portalTopology'
-import { OPEN_SCOPE_BTN_TEXT_LABEL, PixiDiagramNode, PixiDiagramNodeCtx } from './pixi/PixiDiagramNode'
+import type { PixiDiagramNodeVisualOptions } from './pixi/PixiDiagramNode'
+import { IPixiDiagramRendererNodeSelectedStageChange, SelectedStageChangeKind } from './pixi/PixiDiagramRendererNodeSelectedStageChange'
+import { BodyStageChangeKind, IPixiDiagramRendererNodeBodyStageChange } from './pixi/PixiDiagramRendererNodeBodyStageChange'
+import { IPixiDiagramRendererNodeVisualOptionsStageChange, VisualOptionsStageChangeKind } from './pixi/PixiDiagramRendererNodeVisualOptionsStageChange'
+import { 
+  IPixiDiagramRendererNode, 
+  IPixiDiagramRendererPlugin, 
+  IPixiDiagramRendererPluginHost,
+  IPixiDiagramRendererNodeStageChangesMap,
+  IPixiDiagramRendererPluginHostEventsMap, 
+  PixiDiagramRendererNodeCtx,
+  PixiDiagramRendererPluginHostEventType 
+} from './pixi/types'
+import { PixiDiagramRendererPluginHostBeforeNodeCreatedEvent, PixiDiagramRendererPluginHostBeforeNodeCreatedEventType } from './pixi/PixiDiagramRendererPluginHostBeforeNodeCreatedEvent'
+import { PixiDiagramRendererPluginHostNodeSelectedEvent, PixiDiagramRendererPluginHostNodeSelectedEventType } from './pixi/PixiDiagramRendererPluginHostNodeSelectedEvent'
+import { IPixiDiagramRendererNodePositionStageChange, PositionStageChangeKind } from './pixi/PixiDiagramRendererNodePositionStageChange'
+import { IPixiDiagramRendererNodeSizeStageChange, SizeStageChangeKind } from './pixi/PixiDiagramRendererNodeSizeStageChange'
+import { IPixiDiagramRendererNodeNodePinDescsStageChange, NodePinDescsStageChangeKind } from './pixi/PixiDiagramRendererNodeNodePinDescsStageChange'
 import { NodeElsContainer, PixiRenderStats } from './PixiGraphrenderer.types'
-import { SimNodeState, SimSnapshot, SimSnapshotUpdate } from './sim'
+export type { PixiRenderStats } from './PixiGraphrenderer.types'
 
 type NodeGroup = Container
 
@@ -84,7 +101,24 @@ export type PresentWorldRectOptions = {
   rightInset?: number
 }
 
-export interface PixiGraphRendererOptions {
+export interface PixiGraphRendererProps {
+  containerElement: HTMLDivElement
+  graphData: RenderData
+  ensureStaticResources?: () => Promise<void>
+  createNode: (
+    context: PixiDiagramRendererNodeCtx,
+    diagramNode: RenderNode,
+  ) => IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>
+  updateNode?: (
+    rendererNode: IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>,
+    diagramNode: RenderNode,
+  ) => void
+  /** Optional visual-options resolver (node chrome). Kept out of the renderer core. */
+  resolveVisualOptions?: (
+    graphData: RenderData,
+    diagramNode: RenderNode,
+  ) => PixiDiagramNodeVisualOptions
+
   scopeRootId?: string
   /** Paint children of scope root as top-level; skip the root container frame. */
   hideScopeRoot?: boolean
@@ -98,6 +132,8 @@ export interface PixiGraphRendererOptions {
   /** Resolve a node rect after first paint, then frame it. */
   initialPresentNodeId?: string
   initialPresentOptions?: PresentWorldRectOptions
+
+  plugins?: IPixiDiagramRendererPlugin[]
 }
 
 const STAGE_BACKGROUND_COLOR_HEX = DIAGRAM_STAGE_BG
@@ -180,7 +216,7 @@ type VisibleDrawStats = {
 /** Approximate draw list: skip `visible: false` subtrees and children of cacheAsTexture. */
 function collectVisibleDrawStats(
   root: Container,
-  nodeMap: Map<string, PixiDiagramNode>
+  nodeMap: Map<string, IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>>
 ): VisibleDrawStats {
   const stats: VisibleDrawStats = {
     visibleDisplayObjects: 0,
@@ -265,6 +301,161 @@ type PinDragSnap = {
   y: number
 }
 
+type CameraProps = {
+  minZoom?: number
+  maxZoom?: number
+}
+
+type Rect = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export class Camera {
+  public static readonly DEFAULT_ZOOM = 1.0
+  public static readonly DEFAULT_PAN_X = 0
+  public static readonly DEFAULT_PAN_Y = 0
+
+  private _minZoom?: number
+  private _maxZoom?: number
+  private _zoomRef: WritableSignal<number>
+  private _panXRef: WritableSignal<number>
+  private _panYRef: WritableSignal<number>
+  private _prevZoomRef: WritableSignal<number>
+  private _prevPanXRef: WritableSignal<number>
+  private _prevPanYRef: WritableSignal<number>
+  private _revRef: WritableSignal<number>
+
+  constructor(props: CameraProps) {
+    this._minZoom = props.minZoom
+    this._maxZoom = props.maxZoom
+    this._zoomRef = signal(Camera.DEFAULT_ZOOM)
+    this._panXRef = signal(Camera.DEFAULT_PAN_X)
+    this._panYRef = signal(Camera.DEFAULT_PAN_Y)
+    this._prevZoomRef = signal(Camera.DEFAULT_ZOOM)
+    this._prevPanXRef = signal(Camera.DEFAULT_PAN_X)
+    this._prevPanYRef = signal(Camera.DEFAULT_PAN_Y)
+    this._revRef = signal(0)
+  }
+
+  reset() {
+    this._zoomRef.value = Camera.DEFAULT_ZOOM
+    this._panXRef.value = Camera.DEFAULT_PAN_X
+    this._panYRef.value = Camera.DEFAULT_PAN_Y
+  }
+
+  get minZoom(): number | undefined {
+    return this._minZoom
+  }
+
+  get maxZoom(): number | undefined {
+    return this._maxZoom
+  }
+
+  clampZoom(zoom: number): number {
+    if (this._minZoom !== undefined && zoom < this._minZoom) {
+      return this._minZoom
+    }
+    if (this._maxZoom !== undefined && zoom > this._maxZoom) {
+      return this._maxZoom
+    }
+    return zoom
+  }
+
+  get zoomRef(): Signal<number> {
+    return this._zoomRef
+  }
+
+  get panXRef(): Signal<number> {
+    return this._panXRef
+  }
+
+  get panYRef(): Signal<number> {
+    return this._panYRef
+  }
+
+  setZoom(zoom: number) {
+    this._zoomRef.value = this.clampZoom(zoom)
+  }
+
+  setPanX(panX: number) {
+    this._panXRef.value = panX
+  }
+
+  setPanY(panY: number) {
+    this._panYRef.value = panY
+  }
+
+  get prevZoomRef(): Signal<number> {
+    return this._prevZoomRef
+  }
+
+  get prevPanXRef(): Signal<number> {
+    return this._prevPanXRef
+  }
+
+  get prevPanYRef(): Signal<number> {
+    return this._prevPanYRef
+  }
+
+  get revRef(): Signal<number> {
+    return this._revRef
+  }
+
+  commit() {
+    if (this._prevZoomRef.value === this._zoomRef.value && 
+      this._prevPanXRef.value === this._panXRef.value && 
+      this._prevPanYRef.value === this._panYRef.value
+    ) {
+      return
+    }
+    this._prevZoomRef.value = this._zoomRef.value
+    this._prevPanXRef.value = this._panXRef.value
+    this._prevPanYRef.value = this._panYRef.value
+    this._revRef.value++
+  }
+
+  viewportRect(viewportWidth: number, viewportHeight: number): Rect {
+    const zoom = this._zoomRef.value
+    return {
+      x: -this._panXRef.value / zoom,
+      y: -this._panYRef.value / zoom,
+      width: viewportWidth / zoom,
+      height: viewportHeight / zoom
+    }
+  }
+
+  committedViewportRect(viewportWidth: number, viewportHeight: number): Rect {
+    const zoom = this._prevZoomRef.value
+    return {
+      x: -this._prevPanXRef.value / zoom,
+      y: -this._prevPanYRef.value / zoom,
+      width: viewportWidth / zoom,
+      height: viewportHeight / zoom
+    }
+  }
+}
+
+declare module './pixi/types' {
+  interface IPixiDiagramRendererNodeStageChangesMap {
+    [PositionStageChangeKind]: IPixiDiagramRendererNodePositionStageChange,
+    [SizeStageChangeKind]: IPixiDiagramRendererNodeSizeStageChange,
+    [BodyStageChangeKind]: IPixiDiagramRendererNodeBodyStageChange,
+    [SelectedStageChangeKind]: IPixiDiagramRendererNodeSelectedStageChange,
+    [VisualOptionsStageChangeKind]: IPixiDiagramRendererNodeVisualOptionsStageChange,
+    [NodePinDescsStageChangeKind]: IPixiDiagramRendererNodeNodePinDescsStageChange,
+  }
+}
+
+declare module './pixi/types' {
+  interface IPixiDiagramRendererPluginHostEventsMap {
+    [PixiDiagramRendererPluginHostBeforeNodeCreatedEventType]: PixiDiagramRendererPluginHostBeforeNodeCreatedEvent
+    [PixiDiagramRendererPluginHostNodeSelectedEventType]: PixiDiagramRendererPluginHostNodeSelectedEvent
+  }
+}
+
 export class PixiGraphRenderer {
   private container: HTMLDivElement
   private graphData: RenderData
@@ -295,35 +486,50 @@ export class PixiGraphRenderer {
   private _debugGraphicsLayer: RenderLayer
   private _debugTextLayer: RenderLayer
 
-  private _pixiDiagramNodeCtx: PixiDiagramNodeCtx
+  private _pixiDiagramNodeCtx: PixiDiagramRendererNodeCtx
   
   private _scopeRootId: string | undefined
   private hideScopeRoot = false
   private skipInitialFit = false
-  private initialPresent: PixiGraphRendererOptions['initialPresent']
+  private initialPresent: PixiGraphRendererProps['initialPresent']
   private initialPresentNodeId: string | undefined
   private initialPresentOptions: PresentWorldRectOptions | undefined
-  /** Last sim overlay payload — reapplied after lens paint / unsuspend. */
-  private _simOverlayData?: SimSnapshot
-  /** sim HandleId / metadata keys → render node ids (for delta overlay). */
-  private simOverlayKeyIndex: Map<string, string[]> | null = null
 
   private _wheelTileSyncPending = false
   private _showDebugTiles: boolean = false // Debug flag for tile visualization
   private _showDebugLayoutContainers: boolean = false
 
+  private _ensureStaticResources: (() => Promise<void>) | undefined
+  private _resolveVisualOptions:
+    | ((graphData: RenderData, diagramNode: RenderNode) => PixiDiagramNodeVisualOptions)
+    | undefined
+
+  // Node
+  private _createNode: ((
+    context: PixiDiagramRendererNodeCtx,
+    diagramNode: RenderNode,
+  ) => IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>) | undefined
+  
+  private _updateNode: ((
+    rendererNode: IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>,
+    diagramNode: RenderNode,
+  ) => void) | undefined
+
   // Render resources
-  private _diagramNodeIdToPixiDiagramNodeMap: Map<string, PixiDiagramNode> = new Map()
-  private _pixiDiagramNodeContainerToPixiDiagramNodeWeakMap: WeakMap<Container, PixiDiagramNode> = new WeakMap()
+  private _diagramNodeIdToPixiDiagramRendererNodeMap: Map<string, IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>> = new Map()
+  private _pixiDiagramNodeContainerToPixiDiagramNodeWeakMap: WeakMap<Container, IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>> = new WeakMap()
   private _connectionKeyToConnectionPixiContainerMap: Map<string, ConnectionPixiContainer> = new Map()
 
   // Virtual tile system resources
   private _tileSize: number = 4096
-  private _pixiDiagramNodeToTileKeysSetWeakMap: WeakMap<PixiDiagramNode, Set<string>> = new WeakMap()
+  private _pixiDiagramNodeToTileKeysSetWeakMap: WeakMap<IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>, Set<string>> = new WeakMap()
   private _connectionPixiContainerToTileKeysSetWeakMap: WeakMap<ConnectionPixiContainer, Set<string>> = new WeakMap()
   private _virtualTiles: Map<
     string,
-    { nodes: Set<PixiDiagramNode>; connections: Set<ConnectionPixiContainer> }
+    { 
+      nodes: Set<IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>>; 
+      connections: Set<ConnectionPixiContainer>;
+    }
   > = new Map()
   private _oversizedDiagramNodeIdsSet: Set<string> = new Set()
   private _mountedTileKeysSet: Set<string> = new Set()
@@ -340,12 +546,9 @@ export class PixiGraphRenderer {
   // View state
   private _minZoom = 0.001
   private _maxZoom = 5.0
-  private _zoomRef: WritableSignal<number>
-  private _panXRef: WritableSignal<number>
-  private _panYRef: WritableSignal<number>
   private _viewportWidthRef: WritableSignal<number>
   private _viewportHeightRef: WritableSignal<number>
-  private _viewportCommitIndexRef: WritableSignal<number>
+  private _camera: Camera
 
   // Connection rendering settings
   private _showConnections: boolean = true
@@ -364,7 +567,6 @@ export class PixiGraphRenderer {
   private _selectedNodeIdsSet = new Set<string>()
   private _primarySelectedNodeId: string | null = null
   private _onNodeSelect: ((nodeIds: string[], primaryNodeId: string | null, event?: MouseEvent) => void) | null = null
-  private _onOpenNodeScope: ((nodeId: string) => void) | null = null
   private _onPinConnect: ((payload: { fromNodeId: string; toNodeId: string; pinName: string }) => void) | null =
     null
   private _onPinRewire:
@@ -390,25 +592,41 @@ export class PixiGraphRenderer {
 
   
   private _updateWorldRenderEffectSub?: WatcherSub
-  private _updateMountedPixiDiagramNodeBordersEffectSub?: WatcherSub
-  private _updateMountedPixiDiagramNodeSimsEffectSub?: WatcherSub
   private _updateDebugOverlayRenderEffectSub?: WatcherSub
   private _viewportStateWatcherSub?: WatcherSub
 
-  constructor(
-    containerElement: HTMLDivElement,
-    graphData: RenderData,
-    options: PixiGraphRendererOptions = {}
-  ) {
-    this.container = containerElement
-    this.graphData = graphData
+  // Plugins
+  private _pluginHost: IPixiDiagramRendererPluginHost
+  private _plugins: IPixiDiagramRendererPlugin[] = []
+  private _pluginEventListnersByEventName: { [K in PixiDiagramRendererPluginHostEventType]: ((event: IPixiDiagramRendererPluginHostEventsMap[K]) => void)[] } = {
+    [PixiDiagramRendererPluginHostBeforeNodeCreatedEventType]: [],
+    [PixiDiagramRendererPluginHostNodeSelectedEventType]: [],
+  }
+  private _invokePluginEventListeners: <T extends PixiDiagramRendererPluginHostEventType>(
+    eventType: T, 
+    event: IPixiDiagramRendererPluginHostEventsMap[T]
+  ) => void = (eventType, event) => {
+    for (const listener of this._pluginEventListnersByEventName[eventType]) {
+      listener(event)
+    }
+  }
 
-    this._scopeRootId = options.scopeRootId
-    this.hideScopeRoot = !!options.hideScopeRoot
-    this.initialPresent = options.initialPresent
-    this.initialPresentNodeId = options.initialPresentNodeId
-    this.initialPresentOptions = options.initialPresentOptions
-    this.skipInitialFit = !!options.skipInitialFit
+  constructor(props: PixiGraphRendererProps) {
+    this.container = props.containerElement
+    this.graphData = props.graphData
+    
+    this._ensureStaticResources = props.ensureStaticResources
+    this._createNode = props.createNode
+    this._updateNode = props.updateNode
+    this._resolveVisualOptions = props.resolveVisualOptions
+    this._plugins = props.plugins ?? []
+
+    this._scopeRootId = props.scopeRootId
+    this.hideScopeRoot = !!props.hideScopeRoot
+    this.initialPresent = props.initialPresent
+    this.initialPresentNodeId = props.initialPresentNodeId
+    this.initialPresentOptions = props.initialPresentOptions
+    this.skipInitialFit = !!props.skipInitialFit
 
     this._app = new Application()
     this._worldPixiContainer = new Container()
@@ -430,7 +648,7 @@ export class PixiGraphRenderer {
 
     this._pixiDiagramNodeCtx = {
       worldLengthForScreenPx: (screenPx: number) => {
-        return worldLengthForScreenPx(screenPx, this._zoomRef.value)
+        return worldLengthForScreenPx(screenPx, this._camera.prevZoomRef.value)
       },
       beginInputPinDrag: (diagramNodeId: string, pos: { x: number, y: number }) => {
         this._handlePixiDiagramNodeInputPinStripDragStart(diagramNodeId, pos)
@@ -441,12 +659,25 @@ export class PixiGraphRenderer {
     }
 
     // View state
-    this._zoomRef = signal(1.0)
-    this._panXRef = signal(0)
-    this._panYRef = signal(0)
     this._viewportWidthRef = signal(800)
     this._viewportHeightRef = signal(800)
-    this._viewportCommitIndexRef = signal(0)
+    this._camera = new Camera({
+      minZoom: this._minZoom,
+      maxZoom: this._maxZoom,
+    })
+
+    this._pluginHost = {
+      diagramData: this.graphData,
+      diagramNodeIdToPixiDiagramNodeMap: this._diagramNodeIdToPixiDiagramRendererNodeMap,
+      viewportMountedDiagramNodeIdsSetRef:  this._viewportMountedDiagramNodeIdsSetRef,
+      camera: this._camera,
+      on: <T extends PixiDiagramRendererPluginHostEventType>(
+        eventType: T, 
+        callback: (event: IPixiDiagramRendererPluginHostEventsMap[T]
+      ) => void) => {
+        this._pluginEventListnersByEventName[eventType].push(callback)
+      },
+    }
 
     this._initPromise = this._init()
   }
@@ -464,11 +695,11 @@ export class PixiGraphRenderer {
     }
   }
 
-  private _canvasToWorldPosition(canvasX: number, canvasY: number): { x: number; y: number } {
-    const scale = this._zoomRef.value || 1
+  private _canvasPosToWorldPosition(canvasX: number, canvasY: number): { x: number; y: number } {
+    const zoom = this._camera.zoomRef.value
     return {
-      x: (canvasX - this._panXRef.value) / scale,
-      y: (canvasY - this._panYRef.value) / scale,
+      x: (canvasX - this._camera.panXRef.value) / zoom,
+      y: (canvasY - this._camera.panYRef.value) / zoom,
     }
   }
 
@@ -508,10 +739,10 @@ export class PixiGraphRenderer {
     let bestArea = Infinity
 
     for (const diagramNodeId of this._viewportMountedDiagramNodeIdsSetRef.value) {
-      const pixiDiagramNode = this._diagramNodeIdToPixiDiagramNodeMap.get(diagramNodeId)
-      if (!pixiDiagramNode) continue
+      const pixiDiagramRendererNode = this._diagramNodeIdToPixiDiagramRendererNodeMap.get(diagramNodeId)
+      if (!pixiDiagramRendererNode) continue
 
-      const diagramNodePixiContainerBounds = pixiDiagramNode.pixiContainer.getBounds()
+      const diagramNodePixiContainerBounds = pixiDiagramRendererNode.pixiContainer.getBounds()
       if (!diagramNodePixiContainerBounds.containsPoint(worldPos.x, worldPos.y)) continue
       
       const area = Math.max(1, diagramNodePixiContainerBounds.width) * Math.max(1, diagramNodePixiContainerBounds.height)
@@ -530,27 +761,28 @@ export class PixiGraphRenderer {
     this._app.canvas.addEventListener('wheel', (evt: WheelEvent) => {
       evt.preventDefault()
       
-      const scaleBy = 1.1
-      const oldScale = this._zoomRef.value
+      const scaleStepValue = 1.1
+
       const pointerCanvasPos = this._clientToCanvasPosition(evt.clientX, evt.clientY)
       if (!pointerCanvasPos) return
 
+      const cameraZoom = this._camera.zoomRef.value
       const mousePointTo = {
-        x: (pointerCanvasPos.x - this._panXRef.value) / oldScale,
-        y: (pointerCanvasPos.y - this._panYRef.value) / oldScale,
+        x: (pointerCanvasPos.x - this._camera.panXRef.value) / cameraZoom,
+        y: (pointerCanvasPos.y - this._camera.panYRef.value) / cameraZoom,
       }
-      const newScale = evt.deltaY > 0 ? oldScale / scaleBy : oldScale * scaleBy
-      const clampedScale = Math.max(0.1, Math.min(5.0, newScale))
-      this._zoomRef.value = clampedScale
-      this._panXRef.value = pointerCanvasPos.x - mousePointTo.x * clampedScale
-      this._panYRef.value = pointerCanvasPos.y - mousePointTo.y * clampedScale
-      
+      const newZoom = evt.deltaY > 0 
+        ? cameraZoom / scaleStepValue 
+        : cameraZoom * scaleStepValue
+      this._camera.setZoom(newZoom)
+      this._camera.setPanX(pointerCanvasPos.x - mousePointTo.x * this._camera.zoomRef.value)
+      this._camera.setPanY(pointerCanvasPos.y - mousePointTo.y * this._camera.zoomRef.value)
+
       if (!this._wheelTileSyncPending) {
         this._wheelTileSyncPending = true
         requestAnimationFrame(() => {
           this._wheelTileSyncPending = false
-          if (!this.ready) return
-          this._commitViewportCamera()
+          this._camera.commit()
           this._pixiRender()
         })
       }
@@ -581,16 +813,6 @@ export class PixiGraphRenderer {
     const evt = e.nativeEvent as MouseEvent
     const closestPixiDiagramNode = this._resolveClosestPixiDiagramNodeFromPixiEl(e.target)
     const diagramNodeId = closestPixiDiagramNode?.diagramNodeId
-
-    if (diagramNodeId) {
-      const openScopeBtnPixiEl = this._resolveClosestPixiElWithLabel(e.target, OPEN_SCOPE_BTN_TEXT_LABEL)
-      if (openScopeBtnPixiEl) {
-        this.setSelectedNodes([diagramNodeId], diagramNodeId, true)
-        this._onNodeSelect?.([diagramNodeId], diagramNodeId, evt)
-        this._onOpenNodeScope?.(diagramNodeId)
-        return
-      }
-    }
 
     const multiSelect = evt.ctrlKey || evt.metaKey
 
@@ -640,21 +862,6 @@ export class PixiGraphRenderer {
     }
     this.setSelectedNodes(nextIds, primaryId, true)
     this._onNodeSelect?.(nextIds, primaryId, evt)
-  }
-
-  private _resolveClosestPixiElWithLabel(pixiEl: Container, label: string): Container | null {
-    if (!this.ready) return null
-    
-    const appStage = this._app.stage
-    const worldPixiContainer = this._worldPixiContainer
-
-    let current: Container | null = pixiEl
-    while (current) {
-      if (current === appStage || current === worldPixiContainer) break
-      if (current.label === label) return current
-      current = current.parent
-    }
-    return null
   }
 
   /**
@@ -720,14 +927,14 @@ export class PixiGraphRenderer {
   }
 
   private _findValidNearestInputPinOnPixiDiagramNode(
-    pixiDiagramNode: PixiDiagramNode,
+    rendererNode: IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>,
     fromDiagramNodeId: string,
     worldX: number,
     worldY: number
   ): { nodeId: string; pinId: string; x: number; y: number } | undefined {
     if (!this._pinDrag) return
 
-    const diagramNodeId = pixiDiagramNode.diagramNodeId
+    const diagramNodeId = rendererNode.diagramNodeId
 
     const pinDragFromDiagramNodeId = this._pinDrag.fromDiagramNodeId
     if (pinDragFromDiagramNodeId === diagramNodeId) return
@@ -742,11 +949,12 @@ export class PixiGraphRenderer {
     
     let best: { nodeId: string; pinId: string; x: number; y: number } | undefined = undefined
     let bestDist = Infinity
-    for (const nodePinDesc of pixiDiagramNode.nodePinsDescs) {
+    for (const nodePinDesc of rendererNode.nodePinsDescs) {
       if (nodePinDesc.side !== 'in' || !canConnectByPinType(fromDiagramNode.type, toDiagramNode.type, nodePinDesc.pinId)) continue
       
-      const x = diagramNodeWorldPos.x + PixiDiagramNode.pinLocalX(nodePinDesc.side, toDiagramNode.size.width)
-      const y = diagramNodeWorldPos.y + nodePinDesc.localY
+      const pinLocal = rendererNode.getPinPosition(nodePinDesc.pinId)
+      const x = diagramNodeWorldPos.x + (pinLocal?.x ?? 0)
+      const y = diagramNodeWorldPos.y + (pinLocal?.y ?? nodePinDesc.localY)
       const d = (x - worldX) ** 2 + (y - worldY) ** 2
       if (d < bestDist) {
         bestDist = d
@@ -764,8 +972,9 @@ export class PixiGraphRenderer {
   ): { nodeId: string; pinId: string; x: number; y: number } | undefined {
     if (!this._pinDrag) return
 
-    const worldX = (stageX - this._panXRef.value) / this._zoomRef.value
-    const worldY = (stageY - this._panYRef.value) / this._zoomRef.value
+    const comittedZoom = this._camera.prevZoomRef.value
+    const worldX = (stageX - this._camera.prevPanXRef.value) / comittedZoom
+    const worldY = (stageY - this._camera.prevPanYRef.value) / comittedZoom
 
     // Portal wires: only snap back to original end (cancel); else detach on empty drop.
     if (
@@ -854,8 +1063,9 @@ export class PixiGraphRenderer {
     if (this._pinDrag) return
 
     /** @todo this is repeated code */
-    const worldX = (clientPos.x - this._panXRef.value) / this._zoomRef.value
-    const worldY = (clientPos.y - this._panYRef.value) / this._zoomRef.value
+    const comittedZoom = this._camera.prevZoomRef.value
+    const worldX = (clientPos.x - this._camera.prevPanXRef.value) / comittedZoom
+    const worldY = (clientPos.y - this._camera.prevPanYRef.value) / comittedZoom
     
     /** @todo quite slow method to resolve picked connection, because it iterates over all connections in the scope */
     const target = this._resolveTargetDiagramNodeClosestInputPinConnection(diagramNodeId, worldX, worldY)
@@ -896,8 +1106,9 @@ export class PixiGraphRenderer {
     stageY: number,
   ): void {
     const snap = pinDrag.snap
-    const toX = snap ? snap.x : (stageX - this._panXRef.value) / this._zoomRef.value
-    const toY = snap ? snap.y : (stageY - this._panYRef.value) / this._zoomRef.value
+    const comittedZoom = this._camera.prevZoomRef.value
+    const toX = snap ? snap.x : (stageX - this._camera.prevPanXRef.value) / comittedZoom
+    const toY = snap ? snap.y : (stageY - this._camera.prevPanYRef.value) / comittedZoom
     
     const fromPos = pinDrag.dragFrom
     const toPos = { x: toX, y: toY }
@@ -951,9 +1162,10 @@ export class PixiGraphRenderer {
   ): void {
     this._endPinDrag()
 
+    const comittedZoom = this._camera.prevZoomRef.value
     const dragStartWorldPos = {
-      x: (globalPos.x - this._panXRef.value) / this._zoomRef.value,
-      y: (globalPos.y - this._panYRef.value) / this._zoomRef.value,
+      x: (globalPos.x - this._camera.prevPanXRef.value) / comittedZoom,
+      y: (globalPos.y - this._camera.prevPanYRef.value) / comittedZoom,
     }
 
     const dragStrokeHex = resolvePinColor({
@@ -1046,10 +1258,10 @@ export class PixiGraphRenderer {
   private _handlePinDragEnd(e: FederatedPointerEvent): void {
     if (!this._pinDrag) return
     const pinDrag = this._pinDrag
-
+    const comittedZoom = this._camera.prevZoomRef.value
     const endWorld = {
-      x: (e.global.x - this._panXRef.value) / this._zoomRef.value,
-      y: (e.global.y - this._panYRef.value) / this._zoomRef.value,
+      x: (e.global.x - this._camera.prevPanXRef.value) / comittedZoom,
+      y: (e.global.y - this._camera.prevPanYRef.value) / comittedZoom,
     }
 
     const movedDx = endWorld.x - pinDrag.dragStartWorldPos.x
@@ -1102,7 +1314,7 @@ export class PixiGraphRenderer {
     })
   }
 
-  private _resolveClosestPixiDiagramNodeFromPixiEl(pixiEl: Container): PixiDiagramNode | undefined {
+  private _resolveClosestPixiDiagramNodeFromPixiEl(pixiEl: Container): IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap> | undefined {
     if (!this.ready) return
 
     const appStage = this._app.stage
@@ -1125,7 +1337,7 @@ export class PixiGraphRenderer {
       this._panSession = null
       canvas.style.cursor = 'default'
       
-      this._commitViewportCamera()
+      this._camera.commit()
       this._pixiRender()
     }
 
@@ -1139,7 +1351,10 @@ export class PixiGraphRenderer {
       canvas.style.cursor = 'grabbing'
       this._panSession = {
         startPointer: pointerCanvasPos,
-        startStagePos: { x: this._panXRef.value, y: this._panYRef.value },
+        startStagePos: { 
+          x: this._camera.prevPanXRef.value, 
+          y: this._camera.prevPanYRef.value 
+        },
       }
     })
 
@@ -1151,8 +1366,8 @@ export class PixiGraphRenderer {
 
       const dx = pointerCanvasPos.x - this._panSession.startPointer.x
       const dy = pointerCanvasPos.y - this._panSession.startPointer.y
-      this._panXRef.value = this._panSession.startStagePos.x + dx
-      this._panYRef.value = this._panSession.startStagePos.y + dy
+      this._camera.setPanX(this._panSession.startStagePos.x + dx)
+      this._camera.setPanY(this._panSession.startStagePos.y + dy)
       
       this._pixiRender()
     })
@@ -1282,11 +1497,11 @@ export class PixiGraphRenderer {
     width: number
     height: number
   } {
-    const scale = this._zoomRef.value || 1
-    const x = -this._panXRef.value / scale - padding
-    const y = -this._panYRef.value / scale - padding
-    const width = this._viewportWidthRef.value / scale + padding * 2
-    const height = this._viewportHeightRef.value / scale + padding * 2
+    const zoom = this._camera.zoomRef.value
+    const x = -this._camera.panXRef.value / zoom - padding
+    const y = -this._camera.panYRef.value / zoom - padding
+    const width = this._viewportWidthRef.value / zoom + padding * 2
+    const height = this._viewportHeightRef.value / zoom + padding * 2
     return { x, y, width, height }
   }
 
@@ -1309,7 +1524,7 @@ export class PixiGraphRenderer {
 
   public isDiagramNodeBelongToThisView(diagramNode: RenderNode): boolean {
     // If the node is already mounted, it belongs to this view
-    if (this._diagramNodeIdToPixiDiagramNodeMap.has(diagramNode.id)) return true
+    if (this._diagramNodeIdToPixiDiagramRendererNodeMap.has(diagramNode.id)) return true
 
     const viewRootDiagramNodeIdsSet = this._resolveViewRootDiagramNodeIdsSet()
     // hideScopeRoot view roots (e.g. State PropertyGroups) sit under an overview-leaf
@@ -1333,7 +1548,6 @@ export class PixiGraphRenderer {
     this._destroyConnectionRenderResources()
     
     // Clear existing objects and lookup maps
-    this.simOverlayKeyIndex = null
 
     // Render nodes using tile system
     this._renderNodes()
@@ -1343,10 +1557,10 @@ export class PixiGraphRenderer {
   }
 
   private _destroyNodeRenderResources(): void {
-    for (const pixiDiagramNode of this._diagramNodeIdToPixiDiagramNodeMap.values()) {
+    for (const pixiDiagramNode of this._diagramNodeIdToPixiDiagramRendererNodeMap.values()) {
       pixiDiagramNode.destroy()
     }
-    this._diagramNodeIdToPixiDiagramNodeMap.clear()
+    this._diagramNodeIdToPixiDiagramRendererNodeMap.clear()
   }
 
   private _destroyConnectionRenderResources(): void {
@@ -1361,7 +1575,10 @@ export class PixiGraphRenderer {
     this._oversizedDiagramNodeIdsSet.clear()
   }
 
-  private _ensureTile(tileKey: string): { nodes: Set<PixiDiagramNode>; connections: Set<ConnectionPixiContainer> } {
+  private _ensureTile(tileKey: string): { 
+    nodes: Set<IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>>; 
+    connections: Set<ConnectionPixiContainer> 
+  } {
     let tile = this._virtualTiles.get(tileKey)
     if (!tile) {
       tile = { nodes: new Set(), connections: new Set() }
@@ -1476,10 +1693,10 @@ export class PixiGraphRenderer {
     diagramNode: RenderNode,
     pinId: string,
   ): { x: number; y: number } | undefined {
-    const pixiDiagramNode = this._diagramNodeIdToPixiDiagramNodeMap.get(diagramNode.id)
-    if (!pixiDiagramNode) return
+    const pixiDiagramRendererNode = this._diagramNodeIdToPixiDiagramRendererNodeMap.get(diagramNode.id)
+    if (!pixiDiagramRendererNode) return
 
-    return pixiDiagramNode.getPinPosition(pinId)
+    return pixiDiagramRendererNode.getPinPosition(pinId)
   }
 
   private _resolveConnectionAnchors(
@@ -1666,17 +1883,17 @@ export class PixiGraphRenderer {
     const mountDiaramBranch = (diagramNode: RenderNode, depthLevel: number) => {
       const visible = viewportMountDiagramNodeIdsSet.has(diagramNode.id)
 
-      const pixiDiagramNode = this._diagramNodeIdToPixiDiagramNodeMap.get(diagramNode.id)
-      if (!pixiDiagramNode) return
+      const pixiDiagramRendererNode = this._diagramNodeIdToPixiDiagramRendererNodeMap.get(diagramNode.id)
+      if (!pixiDiagramRendererNode) return
 
-      pixiDiagramNode.pixiContainer.visible = visible
+      pixiDiagramRendererNode.pixiContainer.visible = visible
       if (!visible) return
 
       // Remount node local connections
       const connectionPixiContainersSet = diagramNodeIdToConnectionPixiContainersSetMap.get(diagramNode.id)
       if (connectionPixiContainersSet) {
-        const nodeConnectionsPixiContainer = pixiDiagramNode.connectionsPixiContainer
-        pixiDiagramNode.connectionsPixiContainer.removeChildren()
+        const nodeConnectionsPixiContainer = pixiDiagramRendererNode.connectionsPixiContainer
+        pixiDiagramRendererNode.connectionsPixiContainer.removeChildren()
         if (connectionPixiContainersSet.size > 0) {
           nodeConnectionsPixiContainer.addChild(...connectionPixiContainersSet)
         }
@@ -1692,16 +1909,16 @@ export class PixiGraphRenderer {
       const viewRootDiagramNode = this.graphData.allNodes.get(viewRootDiagramNodeId)
       if (!viewRootDiagramNode) return
 
-      const pixiDiagramNode = this._diagramNodeIdToPixiDiagramNodeMap.get(viewRootDiagramNodeId)
-      if (!pixiDiagramNode) return
+      const pixiDiagramRendererNode = this._diagramNodeIdToPixiDiagramRendererNodeMap.get(viewRootDiagramNodeId)
+      if (!pixiDiagramRendererNode) return
 
       if (!viewportMountDiagramNodeIdsSet.has(viewRootDiagramNodeId)) {
-        detachTreeFromRenderLayers(pixiDiagramNode.pixiContainer)
-        reparentTo(pixiDiagramNode.pixiContainer, this._stagingPixiContainer)
+        detachTreeFromRenderLayers(pixiDiagramRendererNode.pixiContainer)
+        reparentTo(pixiDiagramRendererNode.pixiContainer, this._stagingPixiContainer)
         return
       }
 
-      reparentTo(pixiDiagramNode.pixiContainer, this._mainNodesPixiContainer)
+      reparentTo(pixiDiagramRendererNode.pixiContainer, this._mainNodesPixiContainer)
 
       mountDiaramBranch(viewRootDiagramNode, 0)
     })
@@ -1789,20 +2006,24 @@ export class PixiGraphRenderer {
       this._debugTextLayer.attach(tileInfoText)
     }
 
-    const viewportRect = new Graphics()
-    viewportRect.label = 'debug-viewport'
-    viewportRect.eventMode = 'none'
-    viewportRect.rect(
-      -this._panXRef.value / this._zoomRef.value,
-      -this._panYRef.value / this._zoomRef.value,
-      this._viewportWidthRef.value / this._zoomRef.value,
-      this._viewportHeightRef.value / this._zoomRef.value
+    const viewportRect = this._camera.viewportRect(
+      this._viewportWidthRef.value, 
+      this._viewportHeightRef.value
     )
-    viewportRect.stroke({ width: 3, color: 0xffffff, alpha: 1 })
-    viewportRect.fill({ color: 0xffffff, alpha: 0.1 })
-    viewportRect.tint = 0x00ff00
-    this._debugContentPixiContainer.addChild(viewportRect)
-    this._debugGraphicsLayer.attach(viewportRect)
+    const viewportRectGraphics = new Graphics()
+    viewportRectGraphics.label = 'debug-viewport'
+    viewportRectGraphics.eventMode = 'none'
+    viewportRectGraphics.rect(
+      viewportRect.x,
+      viewportRect.y,
+      viewportRect.width,
+      viewportRect.height
+    )
+    viewportRectGraphics.stroke({ width: 3, color: 0xffffff, alpha: 1 })
+    viewportRectGraphics.fill({ color: 0xffffff, alpha: 0.1 })
+    viewportRectGraphics.tint = 0x00ff00
+    this._debugContentPixiContainer.addChild(viewportRectGraphics)
+    this._debugGraphicsLayer.attach(viewportRectGraphics)
   }
 
   /** @todo improve render batching of graphics  */
@@ -1860,10 +2081,16 @@ export class PixiGraphRenderer {
     if (affectedDiagramNodeIdsSet.size === 0) return
 
     // Batch process: collect all changes first, then apply them
-    const tileKeyToTileUpdateRecordMap = new Map<string, { toAdd: PixiDiagramNode[], toRemove: PixiDiagramNode[] }>()
+    const tileKeyToTileUpdateRecordMap = new Map<string, { 
+      toAdd: IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>[], 
+      toRemove: IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>[] 
+    }>()
     
     // Initialize tile updates map
-    const ensureTileUpdateRecord = (tileKey: string): { toAdd: PixiDiagramNode[], toRemove: PixiDiagramNode[] } => {
+    const ensureTileUpdateRecord = (tileKey: string): { 
+      toAdd: IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>[], 
+      toRemove: IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>[] 
+    } => {
       let record = tileKeyToTileUpdateRecordMap.get(tileKey)
       if (!record) {
         record = { toAdd: [], toRemove: [] }
@@ -1879,22 +2106,22 @@ export class PixiGraphRenderer {
       const diagramNode = this.graphData.allNodes.get(diagramNodeId)
       if (!diagramNode || !diagramNode.position) return
 
-      const pixiDiagramNode = this._diagramNodeIdToPixiDiagramNodeMap.get(diagramNodeId)
-      if (!pixiDiagramNode) return
+      const pixiDiagramRendererNode = this._diagramNodeIdToPixiDiagramRendererNodeMap.get(diagramNodeId)
+      if (!pixiDiagramRendererNode) return
 
       // Calculate new tile keys for this node
       const tileKeysResolveResult = this._resolveDiagramNodeTileKeys(diagramNode, viewRootDiagramNodeIdsSet)
       
       // Find current tile keys where this node exists (using reverse index)
       const currentTileKeys: string[] = []
-      const nodeTileKeysSet = this._pixiDiagramNodeToTileKeysSetWeakMap.get(pixiDiagramNode)
+      const nodeTileKeysSet = this._pixiDiagramNodeToTileKeysSetWeakMap.get(pixiDiagramRendererNode)
       if (nodeTileKeysSet) {
         currentTileKeys.push(...Array.from(nodeTileKeysSet))
       }
 
       // Mark tiles for removal
       currentTileKeys.forEach(tileKey => {
-        ensureTileUpdateRecord(tileKey).toRemove.push(pixiDiagramNode)
+        ensureTileUpdateRecord(tileKey).toRemove.push(pixiDiagramRendererNode)
       })
 
       // Mark tiles for addition
@@ -1902,7 +2129,7 @@ export class PixiGraphRenderer {
         this._oversizedDiagramNodeIdsSet.add(diagramNodeId)
       } else {
         for (const tileKey of tileKeysResolveResult.tileKeys) {
-          ensureTileUpdateRecord(tileKey).toAdd.push(pixiDiagramNode)
+          ensureTileUpdateRecord(tileKey).toAdd.push(pixiDiagramRendererNode)
         }
       }
     }
@@ -1953,34 +2180,59 @@ export class PixiGraphRenderer {
 
   private _createDiagramNodeRender(
     diagramNode: RenderNode,
-  ): PixiDiagramNode {
-    const pixiDiagramNode = new PixiDiagramNode({
-      ctx: this._pixiDiagramNodeCtx,
-      diagramNodeId: diagramNode.id,
-      diagramNodeType: diagramNode.type,
-      showOpenScopeBtn: isDiagramOverviewLeaf(diagramNode),
-      selected: this._selectedNodeIdsSet.has(diagramNode.id),
-      x: diagramNode.position.x,
-      y: diagramNode.position.y,
-      width: diagramNode.size.width,
-      height: diagramNode.size.height,
-      visualOptions: PixiDiagramNode.resolvePixiDiagramNodeVisualOptions(this.graphData, diagramNode),
-      nodePins: buildNodePins(
-        diagramNode,
-        diagramNode.size,
-        this.graphData,
-      ),
-      bodyModel: presentNodeBody(diagramNode, this.graphData),
-      simNodeState: this._lookupSimNodeState(this._simOverlayData?.update.simNodeStateByHandleId, diagramNode),
+  ): IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap> {
+    if (!this._createNode) {
+      throw new Error('createNode is not set')
+    }
+
+    const node = this._createNode(this._pixiDiagramNodeCtx, diagramNode)
+
+    const outStageChanges: IPixiDiagramRendererNodeStageChangesMap[keyof IPixiDiagramRendererNodeStageChangesMap][] = []
+    outStageChanges.push({
+      kind: PositionStageChangeKind,
+      position: { x: diagramNode.position.x, y: diagramNode.position.y },
     })
-    pixiDiagramNode.setup()
-    pixiDiagramNode.update()
+    outStageChanges.push({
+      kind: SizeStageChangeKind,
+      size: { width: diagramNode.size.width, height: diagramNode.size.height },
+    })
+    outStageChanges.push({
+      kind: BodyStageChangeKind,
+      bodyModel: presentNodeBody(diagramNode, this.graphData),
+    })
+    outStageChanges.push({
+      kind: SelectedStageChangeKind,
+      selected: this._selectedNodeIdsSet.has(diagramNode.id),
+    })
+    if (this._resolveVisualOptions) {
+      outStageChanges.push({
+        kind: VisualOptionsStageChangeKind,
+        visualOptions: this._resolveVisualOptions(this.graphData, diagramNode),
+      })
+    }
+    outStageChanges.push({
+      kind: NodePinDescsStageChangeKind,
+      nodePinDescs: buildNodePins(diagramNode, diagramNode.size, this.graphData),
+    })
+    
+    this._invokePluginEventListeners(PixiDiagramRendererPluginHostBeforeNodeCreatedEventType, {
+      type: PixiDiagramRendererPluginHostBeforeNodeCreatedEventType,
+      diagramNode,
+      outStageChanges,
+    })
 
-    this._diagramNodeIdToPixiDiagramNodeMap.set(diagramNode.id, pixiDiagramNode)
-    this._pixiDiagramNodeToTileKeysSetWeakMap.set(pixiDiagramNode, new Set())
-    this._pixiDiagramNodeContainerToPixiDiagramNodeWeakMap.set(pixiDiagramNode.pixiContainer, pixiDiagramNode)
+    for (const change of outStageChanges) {
+      node.stage(change)
+    }
+    node.setup()
+    this._updateNode?.(node, diagramNode)
+    node.update()
 
-    return pixiDiagramNode
+    this._diagramNodeIdToPixiDiagramRendererNodeMap.set(diagramNode.id, node)
+    this._pixiDiagramNodeToTileKeysSetWeakMap.set(node, new Set())
+    this._pixiDiagramNodeContainerToPixiDiagramNodeWeakMap.set(node.pixiContainer, node)
+
+    return node
   }
 
   private _renderDiagramSubtree(
@@ -1988,7 +2240,10 @@ export class PixiGraphRenderer {
     parentPixi: Container,
     viewRootDiagramNodeIdsSet: Set<string>,
   ): NodeGroup | undefined {
-    if (!diagramNode.position || diagramNode.visible === false || this._diagramNodeIdToPixiDiagramNodeMap.has(diagramNode.id)) return
+    if (!diagramNode.position || 
+      diagramNode.visible === false || 
+      this._diagramNodeIdToPixiDiagramRendererNodeMap.has(diagramNode.id)
+    ) return
 
     const pixiDiagramNode = this._createDiagramNodeRender(diagramNode)
     parentPixi.addChild(pixiDiagramNode.pixiContainer)
@@ -2008,7 +2263,7 @@ export class PixiGraphRenderer {
 
   private _getPixiContainerForRenderParent(parentRender?: RenderNode): Container {
     if (!parentRender) return this._stagingPixiContainer
-    return this._diagramNodeIdToPixiDiagramNodeMap.get(parentRender.id)?.pixiContainer ?? this._stagingPixiContainer
+    return this._diagramNodeIdToPixiDiagramRendererNodeMap.get(parentRender.id)?.pixiContainer ?? this._stagingPixiContainer
   }
 
   private _renderNodes(): void {
@@ -2024,7 +2279,7 @@ export class PixiGraphRenderer {
 
   private _registerDiagramNodePixiContainer(
     diagramNode: RenderNode,
-    pixiDiagramNode: PixiDiagramNode,
+    pixiDiagramNode: IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>,
     viewRootDiagramNodeIdsSet: Set<string>,
   ): void {
     let tileKeysSet = this._pixiDiagramNodeToTileKeysSetWeakMap.get(pixiDiagramNode)
@@ -2059,18 +2314,9 @@ export class PixiGraphRenderer {
   }
 
   private _updateWorldRender(): void {
-    this._worldPixiContainer.scale.set(this._zoomRef.value)
-    this._worldPixiContainer.position.set(this._panXRef.value, this._panYRef.value)
-    this._dotGrid?.sync(this._panXRef.value, this._panYRef.value, this._zoomRef.value)
-  }
-
-  private _updateMountedPixiDiagramNodeBorders(): void {
-    for (const nodeId of this._viewportMountedDiagramNodeIdsSetRef.value) {
-      const pixiDiagramNode = this._diagramNodeIdToPixiDiagramNodeMap.get(nodeId)
-      if (!pixiDiagramNode) continue
-
-      pixiDiagramNode.updateBorder()
-    }
+    this._worldPixiContainer.scale.set(this._camera.zoomRef.value)
+    this._worldPixiContainer.position.set(this._camera.panXRef.value, this._camera.panYRef.value)
+    this._dotGrid?.sync(this._camera.panXRef.value, this._camera.panYRef.value, this._camera.zoomRef.value)
   }
 
   // #endregion
@@ -2136,7 +2382,7 @@ export class PixiGraphRenderer {
     let textLodCached = 0
     let hitchhikersHidden = 0
     let hitchhikersVisible = 0
-    this._diagramNodeIdToPixiDiagramNodeMap.forEach((pixiDiagramNode, diagramNodeId) => {
+    this._diagramNodeIdToPixiDiagramRendererNodeMap.forEach((pixiDiagramNode, diagramNodeId) => {
       const pixiDiagramNodeMounted = viewportMountedDiagramNodeIdsSet.has(diagramNodeId)
       if (pixiDiagramNodeMounted) {
         nodesOnLayer++
@@ -2157,7 +2403,7 @@ export class PixiGraphRenderer {
     })
 
     const draw = this._worldPixiContainer
-      ? collectVisibleDrawStats(this._worldPixiContainer, this._diagramNodeIdToPixiDiagramNodeMap)
+      ? collectVisibleDrawStats(this._worldPixiContainer, this._diagramNodeIdToPixiDiagramRendererNodeMap)
       : {
           visibleDisplayObjects: 0,
           visibleText: 0,
@@ -2176,7 +2422,7 @@ export class PixiGraphRenderer {
       : undefined
     return {
       ready: Boolean(this._app && this._worldPixiContainer),
-      zoom: this._zoomRef.value,
+      zoom: this._camera.zoomRef.value,
       tileSize: this._tileSize,
       viewportCssW: this._viewportWidthRef.value,
       viewportCssH: this._viewportHeightRef.value,
@@ -2186,7 +2432,7 @@ export class PixiGraphRenderer {
       visibleTiles: this._mountedTileKeysSet.size,
       oversizedNodes: this._oversizedDiagramNodeIdsSet.size,
       graphNodes: this.graphData.allNodes.size,
-      pixiGroups: this._diagramNodeIdToPixiDiagramNodeMap.size,
+      pixiGroups: this._diagramNodeIdToPixiDiagramRendererNodeMap.size,
       mountedNodes: this._viewportMountedDiagramNodeIdsSetRef.value.size,
       inViewportNodes,
       nodesOnLayer,
@@ -2260,7 +2506,7 @@ export class PixiGraphRenderer {
   // #region Internal: Connections
 
   private _isConnectionBelongsToRenderScope(connection: DiagramConnection): boolean {
-    return this._diagramNodeIdToPixiDiagramNodeMap.has(connection.from) || this._diagramNodeIdToPixiDiagramNodeMap.has(connection.to)
+    return this._diagramNodeIdToPixiDiagramRendererNodeMap.has(connection.from) || this._diagramNodeIdToPixiDiagramRendererNodeMap.has(connection.to)
   }
 
   private _getRenderScopeConnections(): DiagramConnection[] {
@@ -2386,12 +2632,19 @@ export class PixiGraphRenderer {
   /**
    * Update node selection state (stroke / outline only — type chrome stays intact).
    */
-  private _updateNodeSelection(pixiDiagramNode: PixiDiagramNode, isSelected: boolean): void {
-    const diagramNode = this.graphData.allNodes.get(pixiDiagramNode.diagramNodeId)
+  private _updateNodeSelection(pixiDiagramRendererNode: IPixiDiagramRendererNode<IPixiDiagramRendererNodeStageChangesMap>, isSelected: boolean): void {
+    const diagramNode = this.graphData.allNodes.get(pixiDiagramRendererNode.diagramNodeId)
     if (!diagramNode) return
 
-    pixiDiagramNode.selected = isSelected
-    pixiDiagramNode.updateBorder()
+    pixiDiagramRendererNode.stage({
+      kind: SelectedStageChangeKind,
+      selected: isSelected,
+    })
+    this._invokePluginEventListeners(PixiDiagramRendererPluginHostNodeSelectedEventType, {
+      type: PixiDiagramRendererPluginHostNodeSelectedEventType,
+      node: pixiDiagramRendererNode,
+    })
+    pixiDiagramRendererNode.update()
   }
 
   // #endregion Internal: Selection
@@ -2425,7 +2678,7 @@ export class PixiGraphRenderer {
 
     for (const id of this._selectedNodeIdsSet) {
       if (!nextIds.has(id)) {
-        const prev = this._diagramNodeIdToPixiDiagramNodeMap.get(id)
+        const prev = this._diagramNodeIdToPixiDiagramRendererNodeMap.get(id)
         if (prev) {
           this._updateNodeSelection(prev, false)
           affectedDiagramNodeIdsSet.add(id)
@@ -2435,7 +2688,7 @@ export class PixiGraphRenderer {
 
     for (const id of nextIds) {
       if (!this._selectedNodeIdsSet.has(id)) {
-        const next = this._diagramNodeIdToPixiDiagramNodeMap.get(id)
+        const next = this._diagramNodeIdToPixiDiagramRendererNodeMap.get(id)
         if (next) {
           this._updateNodeSelection(next, true)
           affectedDiagramNodeIdsSet.add(id)
@@ -2466,154 +2719,10 @@ export class PixiGraphRenderer {
 
   // #endregion
 
-  // #region Internal: Simulation
+  // Sim overlay lives in PixiDiagramRendererSimOverlayPlugin (passed via props.plugins).
 
-  private _simOverlayLookupKeys(diagramNode?: RenderNode): string[] {
-    return [
-      diagramNode?.data?.originalNodeId as string | undefined,
-      diagramNode?.id,
-      diagramNode?.metadata?.handleId as string | undefined,
-      diagramNode?.metadata?.originalNodeId as string | undefined,
-      // After promote, diagram root id == HandleId; metadata kept for legacy keys / shell.
-      diagramNode?.metadata?.stateMachineNodeId as string | undefined,
-      diagramNode?.metadata?.ownerStateMachineId as string | undefined,
-    ].filter((k): k is string => Boolean(k))
-  }
-
-  private _ensureSimOverlayKeyIndex(): Map<string, string[]> {
-    if (this.simOverlayKeyIndex) return this.simOverlayKeyIndex
-    const index = new Map<string, string[]>()
-    const add = (key: string | undefined, nodeId: string) => {
-      if (!key) return
-      let list = index.get(key)
-      if (!list) {
-        list = []
-        index.set(key, list)
-      }
-      if (!list.includes(nodeId)) list.push(nodeId)
-    }
-    for (const [diagramNodeId, diagramNode] of this.graphData.allNodes) {
-      for (const key of this._simOverlayLookupKeys(diagramNode)) add(key, diagramNodeId)
-    }
-    this.simOverlayKeyIndex = index
-    return index
-  }
-
-  private _lookupSimNodeState(
-    animgraphHandleIdToSimNodeState?: SimSnapshotUpdate['simNodeStateByHandleId'],
-    diagramNode?: RenderNode,
-  ): SimNodeState | undefined {
-    if (!animgraphHandleIdToSimNodeState) return
-
-    for (const key of this._simOverlayLookupKeys(diagramNode)) {
-      const st = animgraphHandleIdToSimNodeState[key]
-      if (st) return st
-    }
-    return
-  }
-
-  private _applySimOverlayFull(
-    animgraphHandleIdToSimNodeState?: SimSnapshotUpdate['simNodeStateByHandleId'],
-  ): void {
-    if (!animgraphHandleIdToSimNodeState) {
-      for (const [_diagramNodeId, pixiDiagramNode] of this._diagramNodeIdToPixiDiagramNodeMap) {
-        pixiDiagramNode.simNodeState = undefined
-        pixiDiagramNode.update()
-      }
-      return
-    }
-
-    for (const [diagramNodeId, pixiDiagramNode] of this._diagramNodeIdToPixiDiagramNodeMap) {
-      const diagramNode = this.graphData.allNodes.get(diagramNodeId)
-      if (!diagramNode) continue
-
-      pixiDiagramNode.simNodeState = this._lookupSimNodeState(animgraphHandleIdToSimNodeState, diagramNode)
-      pixiDiagramNode.update()
-    }
-  }
-
-  private _applySimOverlayDelta(
-    animgraphHandleIdToSimNodeState: SimSnapshotUpdate['simNodeStateByHandleId'],
-    delta: NonNullable<SimSnapshotUpdate['nodeDelta']>
-  ): void {
-    this._applySimOverlayForSimKeys(
-      animgraphHandleIdToSimNodeState, 
-      Object.keys(delta.changes), 
-      delta.removed
-    )
-  }
-
-  private _applySimOverlayForSimKeys(
-    animgraphHandleIdToSimNodeState: SimSnapshotUpdate['simNodeStateByHandleId'],
-    ...simKeysList: readonly string[][]
-  ): void {
-    const index = this._ensureSimOverlayKeyIndex()
-    const touchedDiagramNodeIds = new Set<string>()
-
-    for (const simKeys of simKeysList) {
-      for (const simKey of simKeys) {
-        const diagramNodeIds = index.get(simKey)
-        if (!diagramNodeIds) continue
-
-        for (const diagramNodeId of diagramNodeIds) {
-          if (touchedDiagramNodeIds.has(diagramNodeId)) continue
-          
-          const pixiDiagramNode = this._diagramNodeIdToPixiDiagramNodeMap.get(diagramNodeId)
-          if (!pixiDiagramNode) continue
-
-          touchedDiagramNodeIds.add(diagramNodeId)
-          
-          const diagramNode = this.graphData.allNodes.get(diagramNodeId)
-          pixiDiagramNode.simNodeState = this._lookupSimNodeState(animgraphHandleIdToSimNodeState, diagramNode)
-          pixiDiagramNode.updateSim()
-        }
-      }
-    }
-  }
-
-  private _updateMountedPixiDiagramNodeSims() {
-    for (const diagramNodeId of this._viewportMountedDiagramNodeIdsSetRef.value) {
-      const pixiDiagramNode = this._diagramNodeIdToPixiDiagramNodeMap.get(diagramNodeId)
-      if (!pixiDiagramNode) continue
-
-      pixiDiagramNode.updateSim()
-    }
-  }
-
-  // #endregion
-
-  // #region API: Simulation
-
-  /**
-   * Offline sim overlay: colored inset border on active nodes; inactive chrome unchanged.
-   * Keys are animgraph HandleIds; also matched against render node id / originalNodeId.
-   * When `delta` is provided and a previous overlay exists, only changed / removed
-   * keys are painted; otherwise a full pass over mounted nodes runs.
-   */
-  public applySimOverlay(simSnapshot?: SimSnapshot): void {
-    const prevSimSnapshot = this._simOverlayData
-    this._simOverlayData = simSnapshot
-    
-    // Suspended / not ready: keep lastSimOverlay for resume / tile remount.
-    if (!this.ready || this._suspended) return
-
-    const simSnapshotUpdate = simSnapshot?.update
-    if (!!prevSimSnapshot && !!simSnapshotUpdate && !!simSnapshotUpdate.nodeDelta) {
-      if (Object.keys(simSnapshotUpdate.nodeDelta.changes).length === 0 && simSnapshotUpdate.nodeDelta.removed.length === 0) return
-      this._applySimOverlayDelta(simSnapshotUpdate.simNodeStateByHandleId, simSnapshotUpdate.nodeDelta)
-      return
-    }
-
-    this._applySimOverlayFull(simSnapshotUpdate?.simNodeStateByHandleId)
-  }
-
-  // #endregion API: Simulation
 
   // #region Internal: Viewport
-
-  private _commitViewportCamera() {
-    this._viewportCommitIndexRef.value++
-  }
 
   private _updateViewport(): void {
     if (!this.ready || this._suspended) return
@@ -2657,32 +2766,30 @@ export class PixiGraphRenderer {
     const availH = Math.max(1, this._viewportHeightRef.value - padding * 2)
     const fit = options.fit ?? 'contain'
     const align = options.align ?? 'center'
-    const minZoom = options.minZoom ?? 0.05
-    const maxZoom = options.maxZoom ?? 3
 
-    let zoom = options.zoom ?? this._zoomRef.value
-    if (options.zoom == null && fit === 'width') {
-      zoom = availW / rect.width
-    } else if (options.zoom == null && fit === 'contain') {
-      zoom = Math.min(availW / rect.width, availH / rect.height)
-    }
-    zoom = Math.max(minZoom, Math.min(maxZoom, zoom))
+    const nextZoom = options.zoom 
+      ? this._camera.clampZoom(options.zoom)
+      : fit === 'width'
+      ? availW / rect.width
+      : fit === 'contain'
+      ? Math.min(availW / rect.width, availH / rect.height)
+      : this._camera.zoomRef.value
 
     if (align === 'top-start') {
-      this._panXRef.value = padding - rect.x * zoom
-      this._panYRef.value = padding - rect.y * zoom
+      this._camera.setPanX(padding - rect.x * nextZoom)
+      this._camera.setPanY(padding - rect.y * nextZoom)
     } else if (align === 'top-end') {
       const trailing = options.rightInset ?? padding
-      this._panXRef.value = this._viewportWidthRef.value - trailing - (rect.x + rect.width) * zoom
-      this._panYRef.value = padding - rect.y * zoom
+      this._camera.setPanX(this._viewportWidthRef.value - trailing - (rect.x + rect.width) * nextZoom)
+      this._camera.setPanY(padding - rect.y * nextZoom)
     } else {
-      this._panXRef.value = this._viewportWidthRef.value / 2 - (rect.x + rect.width / 2) * zoom
-      this._panYRef.value = this._viewportHeightRef.value / 2 - (rect.y + rect.height / 2) * zoom
+      this._camera.setPanX(this._viewportWidthRef.value / 2 - (rect.x + rect.width / 2) * nextZoom)
+      this._camera.setPanY(this._viewportHeightRef.value / 2 - (rect.y + rect.height / 2) * nextZoom)
     }
-    this._zoomRef.value = zoom
+    this._camera.setZoom(nextZoom)
 
     this._lastMountedViewportWorldRect = null
-    this._commitViewportCamera()
+    this._camera.commit()
     this._pixiRender()
   }
 
@@ -2702,8 +2809,9 @@ export class PixiGraphRenderer {
     const stageHeight = this._viewportHeightRef.value
     
     // Convert screen coordinates to world coordinates
-    const worldX = (stageWidth / 2 - this._panXRef.value) / this._zoomRef.value
-    const worldY = (stageHeight / 2 - this._panYRef.value) / this._zoomRef.value
+    const zoom = this._camera.zoomRef.value
+    const worldX = (stageWidth / 2 - this._camera.panXRef.value) / zoom
+    const worldY = (stageHeight / 2 - this._camera.panYRef.value) / zoom
     
     return { x: worldX, y: worldY }
   }
@@ -2724,13 +2832,12 @@ export class PixiGraphRenderer {
       return null
     }
 
-    const scale = this._zoomRef.value
-    
     // Calculate viewport bounds in world coordinates
-    const viewportLeft = -this._panXRef.value / scale
-    const viewportTop = -this._panYRef.value / scale
-    const viewportRight = viewportLeft + this._viewportWidthRef.value / scale
-    const viewportBottom = viewportTop + this._viewportHeightRef.value / scale
+    const zoom = this._camera.zoomRef.value
+    const viewportLeft = -this._camera.panXRef.value / zoom
+    const viewportTop = -this._camera.panYRef.value / zoom
+    const viewportRight = viewportLeft + this._viewportWidthRef.value / zoom
+    const viewportBottom = viewportTop + this._viewportHeightRef.value / zoom
     
     return {
       left: viewportLeft,
@@ -2746,16 +2853,14 @@ export class PixiGraphRenderer {
   public setZoom(zoom: number, cursorX?: number, cursorY?: number): void {
     if (!this.ready) return
 
-    const newZoom = Math.max(0.1, Math.min(5.0, zoom))
-
-    if (cursorX !== undefined && cursorY !== undefined && newZoom !== this._zoomRef.value) {
-      this.zoomToPosition(newZoom, cursorX, cursorY)
-    } else {
-      this._zoomRef.value = newZoom
-      this._commitViewportCamera()
-
-      this._pixiRender()
+    if (cursorX !== undefined && cursorY !== undefined) {
+      this.zoomToPosition(zoom, cursorX, cursorY)
+      return
     }
+
+    this._camera.setZoom(zoom)
+    this._camera.commit()
+    this._pixiRender()
   }
 
   /**
@@ -2764,28 +2869,11 @@ export class PixiGraphRenderer {
   public zoomToPosition(zoom: number, cursorX: number, cursorY: number): void {
     if (!this.ready) return
 
-    const newZoom = Math.max(0.1, Math.min(5.0, zoom))
-
-    if (newZoom !== this._zoomRef.value) {
-      const mousePointTo = {
-        x: (cursorX - this._panXRef.value) / this._zoomRef.value,
-        y: (cursorY - this._panYRef.value) / this._zoomRef.value,
-      }
-
-      this._zoomRef.value = newZoom
-
-      const newPos = {
-        x: cursorX - mousePointTo.x * newZoom,
-        y: cursorY - mousePointTo.y * newZoom,
-      }
-
-      this._panXRef.value = newPos.x
-      this._panYRef.value = newPos.y
-      
-      this._commitViewportCamera()
-
-      this._pixiRender()
-    }
+    this._camera.setZoom(zoom)
+    this._camera.setPanX(cursorX - (cursorX - this._camera.prevPanXRef.value) * (zoom / this._camera.zoomRef.value))
+    this._camera.setPanY(cursorY - (cursorY - this._camera.prevPanYRef.value) * (zoom / this._camera.zoomRef.value))
+    this._camera.commit()
+    this._pixiRender()
   }
 
   /**
@@ -2794,10 +2882,9 @@ export class PixiGraphRenderer {
   public setPan(x: number, y: number): void {
     if (!this.ready) return
 
-    this._panXRef.value = x
-    this._panYRef.value = y
-    
-    this._commitViewportCamera()
+    this._camera.setPanX(x)
+    this._camera.setPanY(y)
+    this._camera.commit()
 
     this._pixiRender()
   }
@@ -2829,7 +2916,10 @@ export class PixiGraphRenderer {
     const stageCenterX = this._viewportWidthRef.value / 2
     const stageCenterY = this._viewportHeightRef.value / 2
 
-    this.setPan(stageCenterX - centerX * this._zoomRef.value, stageCenterY - centerY * this._zoomRef.value)
+    this.setPan(
+      stageCenterX - centerX * this._camera.zoomRef.value, 
+      stageCenterY - centerY * this._camera.zoomRef.value,
+    )
   }
 
   public panToDiagramNodeWithId(nodeId: string): boolean {
@@ -2848,8 +2938,8 @@ export class PixiGraphRenderer {
     const viewportCenterY = this._viewportHeightRef.value / 2
 
     this.setPan(
-      viewportCenterX - diagramNodeCenterWorldPosX * this._zoomRef.value, 
-      viewportCenterY - diagramNodeCenterWorldPosY * this._zoomRef.value
+      viewportCenterX - diagramNodeCenterWorldPosX * this._camera.zoomRef.value, 
+      viewportCenterY - diagramNodeCenterWorldPosY * this._camera.zoomRef.value,
     )
     return true
   }
@@ -2876,10 +2966,8 @@ export class PixiGraphRenderer {
   public resetView(): void {
     if (!this.ready) return
 
-    this._zoomRef.value = 1.0; 
-    this._panXRef.value = 0; 
-    this._panYRef.value = 0; 
-    this._commitViewportCamera()
+    this._camera.reset()
+    this._camera.commit()
     this._pixiRender()
   }
 
@@ -2928,7 +3016,7 @@ export class PixiGraphRenderer {
     let maxX = -Infinity
     let maxY = -Infinity
     for (const viewRootDiagramNode of this._resolveViewRootDiagramNodes()) {
-      const pixiDiagramNode = this._diagramNodeIdToPixiDiagramNodeMap.get(viewRootDiagramNode.id)
+      const pixiDiagramNode = this._diagramNodeIdToPixiDiagramRendererNodeMap.get(viewRootDiagramNode.id)
       if (!pixiDiagramNode) continue
 
       const viewRootDiagramNodePixiContainerBounds = pixiDiagramNode.pixiContainer.getBounds()
@@ -2945,23 +3033,8 @@ export class PixiGraphRenderer {
     return undefined
   }
 
-  public getViewportState(): { zoom: number, panX: number, panY: number } {
-    return {
-      zoom: this._zoomRef.value,
-      panX: this._panXRef.value,
-      panY: this._panYRef.value
-    }
-  }
-
-  public setViewportState(state: { zoom: number, panX: number, panY: number }): void {
-    if (!this.ready) return
-
-    this._zoomRef.value = Math.max(0.1, Math.min(5.0, state.zoom))
-    this._panXRef.value = state.panX
-    this._panYRef.value = state.panY
-
-    this._commitViewportCamera()
-    this._pixiRender()
+  public get camera(): Camera {
+    return this._camera
   }
 
   // #endregion
@@ -2970,7 +3043,7 @@ export class PixiGraphRenderer {
   public clientPosToWorldPos(clientX: number, clientY: number): { x: number; y: number } | null {
     const pointer = this._clientToCanvasPosition(clientX, clientY)
     if (!pointer) return null
-    return this._canvasToWorldPosition(pointer.x, pointer.y)
+    return this._canvasPosToWorldPosition(pointer.x, pointer.y)
   }
 
   public setCanvasCursor(cursor: string): void {
@@ -3010,6 +3083,10 @@ export class PixiGraphRenderer {
       await this._setupPixi()
       this._destroyedGuard()
 
+      for (const plugin of this._plugins) {
+        plugin.attach(this._pluginHost)
+      }
+
       this._initialized = true
 
       this._render()
@@ -3023,31 +3100,17 @@ export class PixiGraphRenderer {
         this._applyFitViewToScope()
       }
 
-      // if (this._simOverlayData !== undefined) {
-      //   this.applySimOverlay(this._simOverlayData)
-      // }
-
       this._setupEventHandlers()
       this._setupResizeObserver()
 
       this._viewportStateWatcherSub = watcher(
-        [this._viewportWidthRef, this._viewportHeightRef, this._viewportCommitIndexRef],
+        [this._viewportWidthRef, this._viewportHeightRef, this._camera.revRef],
         () => this._updateViewport(),
         true
       )
 
-      this._updateMountedPixiDiagramNodeBordersEffectSub = watcher(
-        [this._zoomRef, this._viewportMountedDiagramNodeIdsSetRef],
-        () => this._updateMountedPixiDiagramNodeBorders()
-      )
-
-      this._updateMountedPixiDiagramNodeSimsEffectSub = watcher(
-        [this._zoomRef],
-        () => this._updateMountedPixiDiagramNodeSims()
-      )
-
       this._updateWorldRenderEffectSub = watcher(
-        [this._zoomRef, this._panXRef, this._panYRef],
+        [this._camera.zoomRef, this._camera.panXRef, this._camera.panYRef],
         () => this._updateWorldRender(),
         true
       )
@@ -3062,7 +3125,7 @@ export class PixiGraphRenderer {
         true
       )
 
-      this._commitViewportCamera()
+      this._camera.commit()
       this._app.render()
     } catch (error) {
       console.error('Failed to initialize PixiGraphRenderer:', error)
@@ -3102,7 +3165,9 @@ export class PixiGraphRenderer {
     await ensureDiagramBitmapFont()
     this._destroyedGuard()
 
-    PixiDiagramNode.ensureStaticResources()
+    if (this._ensureStaticResources) {
+      await this._ensureStaticResources()
+    }
 
     this._app.canvas.style.display = 'block'
     // While WebGL reallocates on resize the bitmap is empty; CSS fill hides the blink.
@@ -3180,10 +3245,6 @@ export class PixiGraphRenderer {
   public destroy(): void {
     this._destroyed = true
 
-    this._updateMountedPixiDiagramNodeBordersEffectSub?.remove()
-    this._updateMountedPixiDiagramNodeBordersEffectSub = undefined
-    this._updateMountedPixiDiagramNodeSimsEffectSub?.remove()
-    this._updateMountedPixiDiagramNodeSimsEffectSub = undefined
     this._updateDebugOverlayRenderEffectSub?.remove()
     this._updateDebugOverlayRenderEffectSub = undefined
     this._updateWorldRenderEffectSub?.remove()
@@ -3196,13 +3257,17 @@ export class PixiGraphRenderer {
     this._dotGrid?.destroy()
     this._dotGrid = null
 
+    this._plugins.forEach((plugin) => {
+      plugin.detach()
+    })
+
     this._worldPixiContainer.destroy({ children: true })
     if (this._app) {
       // removeView only — do not pass `true` (that releases global TexturePool).
       this._app.destroy({ removeView: true }, { children: true })
     }
     
-    this._diagramNodeIdToPixiDiagramNodeMap.clear()
+    this._diagramNodeIdToPixiDiagramRendererNodeMap.clear()
     this._connectionKeyToConnectionPixiContainerMap.clear()
     this._virtualTiles.clear()
     this._mountedTileKeysSet.clear()
@@ -3334,7 +3399,7 @@ export class PixiGraphRenderer {
 
     if (!this.isDiagramNodeBelongToThisView(diagramNode)) return
 
-    if (this._diagramNodeIdToPixiDiagramNodeMap.has(diagramNode.id)) return
+    if (this._diagramNodeIdToPixiDiagramRendererNodeMap.has(diagramNode.id)) return
 
     const diagramNodePixiContainer = this._renderDiagramSubtree(
       diagramNode,
@@ -3354,14 +3419,14 @@ export class PixiGraphRenderer {
   }
 
   public removeNode(nodeId: string): void {
-    const pixiDiagramNode = this._diagramNodeIdToPixiDiagramNodeMap.get(nodeId)
+    const pixiDiagramNode = this._diagramNodeIdToPixiDiagramRendererNodeMap.get(nodeId)
     if (!pixiDiagramNode) return
 
     const renderNode = this.graphData?.allNodes.get(nodeId)
     if (renderNode) {
       walkSubtree(renderNode, (n) => {
         if (n.id === nodeId) return
-        this._diagramNodeIdToPixiDiagramNodeMap.delete(n.id)
+        this._diagramNodeIdToPixiDiagramRendererNodeMap.delete(n.id)
         this._oversizedDiagramNodeIdsSet.delete(n.id)
       })
     }
@@ -3375,7 +3440,7 @@ export class PixiGraphRenderer {
     }
 
     destroyPixiTree(pixiDiagramNode.pixiContainer)
-    this._diagramNodeIdToPixiDiagramNodeMap.delete(nodeId)
+    this._diagramNodeIdToPixiDiagramRendererNodeMap.delete(nodeId)
     this._oversizedDiagramNodeIdsSet.delete(nodeId)
 
     if (this._selectedNodeIdsSet.has(nodeId)) {
@@ -3415,7 +3480,7 @@ export class PixiGraphRenderer {
       const diagramNode = this.graphData.allNodes.get(nodeId)
       if (!diagramNode) continue
 
-      const pixiDiagramNode = this._diagramNodeIdToPixiDiagramNodeMap.get(nodeId)
+      const pixiDiagramNode = this._diagramNodeIdToPixiDiagramRendererNodeMap.get(nodeId)
       if (!pixiDiagramNode) continue
 
       const stored = this.getDiagramNodeSize(diagramNode)
@@ -3426,8 +3491,10 @@ export class PixiGraphRenderer {
       const contentChanged = contentChangedIds?.has(nodeId) ?? false
 
       if (posChanged) {
-        pixiDiagramNode.x = diagramNode.position.x
-        pixiDiagramNode.y = diagramNode.position.y
+        pixiDiagramNode.stage({
+          kind: PositionStageChangeKind,
+          position: { x: diagramNode.position.x, y: diagramNode.position.y },
+        })
         movedDiagramNodeIdsSet.add(nodeId)
         affectedDiagramNodeIdsSet.add(nodeId)
       }
@@ -3435,12 +3502,20 @@ export class PixiGraphRenderer {
       if (sizeChanged || contentChanged) {
         chromeDirtyDiagramNodeIdsSet.add(nodeId)
         affectedDiagramNodeIdsSet.add(nodeId)
-        pixiDiagramNode.width = stored.width
-        pixiDiagramNode.height = stored.height
+        pixiDiagramNode.stage({
+          kind: SizeStageChangeKind,
+          size: { width: stored.width, height: stored.height },
+        })
 
         if (contentChanged) {
-          pixiDiagramNode.bodyModel = presentNodeBody(diagramNode, this.graphData)
-          pixiDiagramNode.nodePinsDescs = buildNodePins(diagramNode, diagramNode.size, this.graphData)
+          pixiDiagramNode.stage({
+            kind: BodyStageChangeKind,
+            bodyModel: presentNodeBody(diagramNode, this.graphData),
+          })
+          pixiDiagramNode.stage({
+            kind: NodePinDescsStageChangeKind,
+            nodePinDescs: buildNodePins(diagramNode, diagramNode.size, this.graphData),
+          })
         }
       }
       
@@ -3675,10 +3750,6 @@ export class PixiGraphRenderer {
 
   public setOnNodeSelect(callback: (nodeIds: string[], primaryNodeId: string | null, event?: MouseEvent) => void): void {
     this._onNodeSelect = callback
-  }
-
-  public setOnOpenNodeScope(callback: (nodeId: string) => void): void {
-    this._onOpenNodeScope = callback
   }
 
   public setOnPinConnect(

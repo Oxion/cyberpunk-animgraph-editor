@@ -19,12 +19,21 @@ import { ellipsizeDiagramText } from "../graph/diagramTextMetrics"
 import type { BodyPaintModel } from "../graph/NodeBodyPresent"
 import { blenderVisualForNodeType, NodeChromeHints } from "../graph/NodeChromeTheme"
 import { NodePinDesc, NodePinShape, PinSide } from "../graph/NodePins"
-import { clearNodeRowsHost, paintNodeRows } from "../graph/NodeRowPainter"
+import { clearNodeRowsHost, paintNodeRows, PaintNodeRowsResult } from "../graph/NodeRowPainter"
 import { PIN_COLOR_FALLBACK } from "../graph/pinTyping"
 import { createDiagramText, DiagramText } from "../graph/pixiText"
 import { findCrossViewConnForPinPortal } from "../graph/portalTopology"
 import { isTypedDataBodyDiagramNode } from "../graph/typedDataBodyDiagramNodeTypes"
 import { SimNodeState } from "../sim"
+import { BodyStageChangeKind, IPixiDiagramRendererNodeBodyStageChange } from "./PixiDiagramRendererNodeBodyStageChange"
+import { IPixiDiagramRendererNodeSimStageChange, SimStageChangeKind } from "./PixiDiagramRendererNodeSimStageChange"
+import { IPixiDiagramRendererNodeSelectedStageChange, SelectedStageChangeKind } from "./PixiDiagramRendererNodeSelectedStageChange"
+import { IPixiDiagramRendererNode, type PixiDiagramRendererNodeCtx } from "./types"
+import { IPixiDiagramRendererNodePositionStageChange, PositionStageChangeKind } from "./PixiDiagramRendererNodePositionStageChange"
+import { IPixiDiagramRendererNodeSizeStageChange, SizeStageChangeKind } from "./PixiDiagramRendererNodeSizeStageChange"
+import { CameraStageChangeKind, IPixiDiagramRendererNodeCameraStageChange } from "./PixiDiagramRendererNodeCameraStageChange"
+import { IPixiDiagramRendererNodeVisualOptionsStageChange, VisualOptionsStageChangeKind } from "./PixiDiagramRendererNodeVisualOptionsStageChange"
+import { IPixiDiagramRendererNodeNodePinDescsStageChange, NodePinDescsStageChangeKind } from "./PixiDiagramRendererNodeNodePinDescsStageChange"
 
 export const ROOT_CONTAINER_LABEL = 'root-container'
 export const CONNECTIONS_CONTAINER_LABEL = 'connections-container'
@@ -82,45 +91,42 @@ export interface PixiDiagramNodeVisualOptions {
   subtitleFill?: string
 }
 
-export interface PixiDiagramNodeCtx {
-  worldLengthForScreenPx(screenPx: number): number
-  beginInputPinDrag(diagramNodeId: string, pos: { x: number, y: number }): void
-  beginOutputPinDrag(diagramNodeId: string, pos: { x: number, y: number }): void
+export interface IPixiDiagramNodeStageChangesMap {
+  position: IPixiDiagramRendererNodePositionStageChange
+  size: IPixiDiagramRendererNodeSizeStageChange
+  body: IPixiDiagramRendererNodeBodyStageChange
+  visualOptions: IPixiDiagramRendererNodeVisualOptionsStageChange
+  nodePinDescs: IPixiDiagramRendererNodeNodePinDescsStageChange
+  selected: IPixiDiagramRendererNodeSelectedStageChange
+  camera: IPixiDiagramRendererNodeCameraStageChange
+  sim: IPixiDiagramRendererNodeSimStageChange
 }
 
+export type PixiDiagramNodeCreateProps = {
+  ctx: PixiDiagramRendererNodeCtx,
+  diagramNodeId: string,
+  diagramNodeType: string,
+  changes: IPixiDiagramNodeStageChangesMap[keyof IPixiDiagramNodeStageChangesMap][],
+}
+
+
 export interface PixiDiagramNodeProps {
-  ctx: PixiDiagramNodeCtx,
+  ctx: PixiDiagramRendererNodeCtx,
   diagramNodeId: string,
   diagramNodeType: string,
   showOpenScopeBtn: boolean,
-  selected: boolean,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  visualOptions: PixiDiagramNodeVisualOptions,
-  nodePins: NodePinDesc[],
-  bodyModel: BodyPaintModel,
-  simNodeState?: SimNodeState,
+  onOpenScope?: (node: PixiDiagramNode) => void,
 }
 
-export class PixiDiagramNode {
+export class PixiDiagramNode implements IPixiDiagramRendererNode<IPixiDiagramNodeStageChangesMap> {
   private static _nodeBgTemplateTexture: Texture
   private static _nodeHeaderBgTemplateTexture: Texture
 
-  private readonly _ctx: PixiDiagramNodeCtx
+  private readonly _ctx: PixiDiagramRendererNodeCtx
   private readonly _diagramNodeId: string
   private readonly _diagramNodeType: string
   private _showOpenScopeBtn: boolean
-  private _selected: boolean
-  private _x: number
-  private _y: number
-  private _width: number
-  private _height: number
-  private _visualOptions: PixiDiagramNodeVisualOptions
-  private _nodePinsDescs: NodePinDesc[]
-  private _simNodeState?: SimNodeState
-  private _bodyModel: BodyPaintModel
+  private _onOpenScope?: (node: PixiDiagramNode) => void
 
   private readonly _pixiContainer: Container
   private readonly _bgNineSliceSprite: NineSliceSprite
@@ -131,26 +137,99 @@ export class PixiDiagramNode {
   private readonly _subtitleText: DiagramText
   private _openScopeBtnLabelText?: DiagramText
   private readonly _bodyPixiContainer: Container
+  private _bodyRowsPaintResult?: PaintNodeRowsResult
   private readonly _simContainer: Container
   private _simHighlightGraphics?: Graphics
   private _simValueBadgeText?: DiagramText
   private readonly _pinsPixiContainer: Container
   private readonly _pinStripsPixiContainer: Container
 
+  private _positionData: {
+    dirty: boolean,
+    position: { x: number, y: number },
+  } = {
+    dirty: true,
+    position: { x: 0, y: 0 },
+  }
+
+  private _sizeData: {
+    dirty: boolean,
+    size: { width: number, height: number },
+  } = {
+    dirty: true,
+    size: { width: 0, height: 0 },
+  }
+
+  private _bodyData: {
+    dirty: boolean,
+    bodyModel: BodyPaintModel,
+  } = {
+    dirty: true,
+    bodyModel: {
+      kind: 'empty',
+    },
+  }
+
+  private _visualOptionsData: {
+    dirty: boolean,
+    visualOptions: PixiDiagramNodeVisualOptions,
+  } = {
+    dirty: true,
+    visualOptions: {
+      titleText: '',
+      subtitleText: '',
+      hideTitleLine: false,
+      fill: DEFAULT_NODE_FILL_COLOR_HEX,
+    },
+  }
+
+  private _nodePinDescsData: {
+    dirty: boolean,
+    nodePinDescs: NodePinDesc[],
+  } = {
+    dirty: true,
+    nodePinDescs: [],
+  }
+
+  private _selectedData: {
+    dirty: boolean,
+    selected: boolean,
+  } = {
+    dirty: true,
+    selected: false,
+  }
+
+  private _cameraData: {
+    dirty: boolean,
+  } = {
+    dirty: true,
+  }
+
+  private _simData: {
+    dirty: boolean,
+    simNodeState?: SimNodeState,
+  } = {
+    dirty: true,
+    simNodeState: undefined,
+  }
+
+  private _confirmUpdate(): void {
+    this._positionData.dirty = false
+    this._sizeData.dirty = false
+    this._bodyData.dirty = false
+    this._visualOptionsData.dirty = false
+    this._nodePinDescsData.dirty = false
+    this._selectedData.dirty = false
+    this._cameraData.dirty = false
+    this._simData.dirty = false
+  }
+
   constructor(props: PixiDiagramNodeProps) {
     this._ctx = props.ctx
     this._diagramNodeId = props.diagramNodeId
     this._diagramNodeType = props.diagramNodeType
     this._showOpenScopeBtn = props.showOpenScopeBtn
-    this._selected = false
-    this._x = props.x
-    this._y = props.y
-    this._width = props.width
-    this._height = props.height
-    this._visualOptions = props.visualOptions
-    this._nodePinsDescs = props.nodePins
-    this._simNodeState = props.simNodeState
-    this._bodyModel = props.bodyModel
+    this._onOpenScope = props.onOpenScope
     
     this._pixiContainer = new Container()
     
@@ -180,14 +259,14 @@ export class PixiDiagramNode {
     this._connectionsPixiContainer = new Container()
 
     this._titlePixiText = createDiagramText({
-      text: props.visualOptions.titleText ?? '',
+      text: '',
       style: {
         fontSize: NODE_TITLE_TEXT_SIZE,
       },
     })
 
     this._subtitleText = createDiagramText({
-      text: props.visualOptions.subtitleText ?? '',
+      text: '',
       style: {
         fontSize: 10,
       },
@@ -236,62 +315,181 @@ export class PixiDiagramNode {
     this._pixiContainer.addChild(this._pinStripsPixiContainer)
   }
 
+  public stage(change: IPixiDiagramNodeStageChangesMap[keyof IPixiDiagramNodeStageChangesMap]): void {
+    switch (change.kind) {
+      case PositionStageChangeKind:
+        this._positionData = {
+          dirty: true,
+          position: change.position,
+        }
+        break
+      case SizeStageChangeKind:
+        this._sizeData = {
+          dirty: true,
+          size: change.size,
+        }
+        break
+      case BodyStageChangeKind:
+        this._bodyData = {
+          dirty: true,
+          bodyModel: change.bodyModel,
+        }
+        break
+      case VisualOptionsStageChangeKind:
+        this._visualOptionsData = {
+          dirty: true,
+          visualOptions: change.visualOptions,
+        }
+        break
+      case NodePinDescsStageChangeKind:
+        this._nodePinDescsData = {
+          dirty: true,
+          nodePinDescs: change.nodePinDescs,
+        }
+        break
+      case SelectedStageChangeKind:
+        this._selectedData = {
+          dirty: true,
+          selected: change.selected,
+        }
+        break
+      case CameraStageChangeKind:
+        this._cameraData = {
+          dirty: true,
+        }
+        break
+      case SimStageChangeKind:
+        this._simData = {
+          dirty: true,
+          simNodeState: change.simNodeState,
+        }
+        break
+      default:
+        break
+    }
+  }
+
   public update(): void {
     this.updateRoot()
 
-    this._bgNineSliceSprite.width = this._width
-    this._bgNineSliceSprite.height = this._height
-    this._bgNineSliceSprite.tint = this._visualOptions.fill ?? DEFAULT_NODE_FILL_COLOR_HEX
-    this._bgNineSliceSprite.alpha = this._visualOptions.fillAlpha ?? 1
-    this._bgNineSliceSprite.hitArea = new Rectangle(0, 0, this._width, this._height)
+    this.updateHeader()
 
-    this._headerBgNineSliceSprite.width = this._width
-    this._headerBgNineSliceSprite.height = Math.min(NODE_HEADER_HEIGHT, this._height - NODE_CORNER_RADIUS)
-    this._headerBgNineSliceSprite.tint = this._visualOptions.headerFill ?? DEFAULT_NODE_FILL_COLOR_HEX
-
-    const titleText = `▣ ${this._visualOptions.titleText ?? this.diagramNodeId}`
-    const titleTextMaxWidth = this._width - NODE_HORIZONTAL_PADDING * 2
-      - (this._showOpenScopeBtn ? OPEN_SCOPE_BTN_SIZE : 0)
-      - (this._simNodeState ? SIM_VALUE_BADGE_MAX_WIDTH : 0)
-
-    this._titlePixiText.text = ellipsizeDiagramText(titleText, titleTextMaxWidth, NODE_TITLE_TEXT_SIZE)
-    this._titlePixiText.tint = this._visualOptions.titleFill ?? DEFAULT_HEADER_TITLE_TEXT_COLOR_HEX
-    
-    this._subtitleText.text = this._visualOptions.subtitleText ?? this._diagramNodeType.slice(0, 50) + (this._diagramNodeType.length > 50 ? '...' : '')
-    this._subtitleText.tint = this._visualOptions.subtitleFill ?? DEFAULT_HEADER_SUBTITLE_TEXT_COLOR_HEX
-
-    this.updateOpenScopeBtn()
+    this.updateHeaderOpenScopeBtn()
 
     this.updateBody()
+    this.updateBodyLod()
 
     this.updateBorder()
 
     this.updateSim()
 
     this.updatePins()
+
+    this._confirmUpdate()
   }
 
   public updateRoot(): void {
-    this._pixiContainer.position.set(this._x, this._y)
+    if (
+      !this._positionData.dirty &&
+      !this._sizeData.dirty &&
+      !this._visualOptionsData.dirty
+    ) return
+
+    const position = this._positionData.position
+    const nodeSize = this._sizeData.size
+    const visualOptions = this._visualOptionsData.visualOptions
+
+    this._pixiContainer.position.set(position.x, position.y)
+
+    this._bgNineSliceSprite.width = nodeSize.width
+    this._bgNineSliceSprite.height = nodeSize.height
+    this._bgNineSliceSprite.tint = visualOptions.fill ?? DEFAULT_NODE_FILL_COLOR_HEX
+    this._bgNineSliceSprite.alpha = visualOptions.fillAlpha ?? 1
+    this._bgNineSliceSprite.hitArea = new Rectangle(0, 0, nodeSize.width, nodeSize.height)
+  }
+
+  public updateHeader(): void {
+    if (
+      !this._sizeData.dirty &&
+      !this._visualOptionsData.dirty &&
+      !this._simData.dirty
+    ) return
+
+    const nodeSize = this._sizeData.size
+    const visualOptions = this._visualOptionsData.visualOptions
+    const showOpenScopeBtn = this._showOpenScopeBtn
+    const simNodeState = this._simData.simNodeState
+
+    this._headerBgNineSliceSprite.width = nodeSize.width
+    this._headerBgNineSliceSprite.height = Math.min(NODE_HEADER_HEIGHT, nodeSize.height - NODE_CORNER_RADIUS)
+    this._headerBgNineSliceSprite.tint = visualOptions.headerFill ?? DEFAULT_NODE_FILL_COLOR_HEX
+
+    const titleText = `▣ ${visualOptions.titleText ?? this.diagramNodeId}`
+    const titleTextMaxWidth = nodeSize.width - NODE_HORIZONTAL_PADDING * 2
+      - (showOpenScopeBtn ? OPEN_SCOPE_BTN_SIZE : 0)
+      - (simNodeState ? SIM_VALUE_BADGE_MAX_WIDTH : 0)
+
+    this._titlePixiText.text = ellipsizeDiagramText(titleText, titleTextMaxWidth, NODE_TITLE_TEXT_SIZE)
+    this._titlePixiText.tint = visualOptions.titleFill ?? DEFAULT_HEADER_TITLE_TEXT_COLOR_HEX
+    
+    this._subtitleText.text = visualOptions.subtitleText ?? this._diagramNodeType.slice(0, 50) + (this._diagramNodeType.length > 50 ? '...' : '')
+    this._subtitleText.tint = visualOptions.subtitleFill ?? DEFAULT_HEADER_SUBTITLE_TEXT_COLOR_HEX
   }
 
   public updateBody(): void {
-    const model = this._bodyModel
+    if (
+      !this._sizeData.dirty &&
+      !this._bodyData.dirty
+    ) return
+    
+    const model = this._bodyData.bodyModel
     if (model.kind === 'empty') {
       clearNodeRowsHost(this._bodyPixiContainer)
       return
     }
-    paintNodeRows(this._bodyPixiContainer, model.layout, {
-      contentWidth: this._width,
+    this._bodyRowsPaintResult = paintNodeRows(this._bodyPixiContainer, model.layout, {
+      contentWidth: this._sizeData.size.width,
     })
   }
 
-  public updateBorder(): void {
-    PixiDiagramNode._drawNodeBorder(this._borderGraphics, this._width, this._height, this._ctx.worldLengthForScreenPx(SELECTION_OUTLINE_SCREEN_PX))
-    this._borderGraphics.tint = this._selected ? DEFAULT_SELECTED_BORDER_COLOR_HEX : '#333'
+  public updateBodyLod(): void {
+    if (
+      !this._sizeData.dirty &&
+      !this._cameraData
+    ) return
+
+    if (!this._bodyRowsPaintResult) return
+
+    const nodeSize = this._sizeData.size
+    const nodeNonScaledWorldWidth = this._ctx.worldLengthForScreenPx(nodeSize.width)
+    const nodeNonScaledWorldHeight = this._ctx.worldLengthForScreenPx(nodeSize.height)
+
+    for (const item of this._bodyRowsPaintResult.items) {
+      const rowPixiContainer = item.rowPixiContainer
+      const lodScale = item.frame.row.kind === 'sm-ring' ? 20 : 10
+      const shouldShowRow = nodeNonScaledWorldWidth <= nodeSize.width * lodScale &&
+        nodeNonScaledWorldHeight <= nodeSize.height * lodScale
+      rowPixiContainer.visible = shouldShowRow
+    }
   }
 
-  public updateOpenScopeBtn(): void {
+  public updateBorder(): void {
+    if (
+      !this._sizeData.dirty &&
+      !this._selectedData.dirty &&
+      !this._cameraData.dirty
+    ) return
+    
+    PixiDiagramNode._drawNodeBorder(
+      this._borderGraphics, 
+      this._sizeData.size.width, 
+      this._sizeData.size.height, 
+      this._ctx.worldLengthForScreenPx(SELECTION_OUTLINE_SCREEN_PX)
+    )
+    this._borderGraphics.tint = this._selectedData.selected ? DEFAULT_SELECTED_BORDER_COLOR_HEX : '#333'
+  }
+
+  public updateHeaderOpenScopeBtn(): void {
     if (!this._showOpenScopeBtn) {
       this._openScopeBtnLabelText?.destroy({ children: true })
       this._openScopeBtnLabelText = undefined
@@ -301,10 +499,20 @@ export class PixiDiagramNode {
     if (!this._openScopeBtnLabelText) {
       this._openScopeBtnLabelText = this._createOpenScopeBtnLabelText()
       this._pixiContainer.addChild(this._openScopeBtnLabelText)
+      if (this._onOpenScope) {
+        this._openScopeBtnLabelText.on('pointerdown', (e: FederatedPointerEvent) => {
+          if (e.button !== 0) return
+          e.stopPropagation()
+          this._onOpenScope?.(this)
+        })
+      }
     }
 
-    this._openScopeBtnLabelText.x = Math.max(4, this._width - OPEN_SCOPE_BTN_SIZE - NODE_HORIZONTAL_PADDING)
-    this._openScopeBtnLabelText.y = 8
+    if (!this._sizeData.dirty) {
+      const nodeSize = this._sizeData.size
+      this._openScopeBtnLabelText.x = Math.max(4, nodeSize.width - OPEN_SCOPE_BTN_SIZE - NODE_HORIZONTAL_PADDING)
+      this._openScopeBtnLabelText.y = 8
+    }
   }
 
   private _createOpenScopeBtnLabelText(): DiagramText {
@@ -330,7 +538,13 @@ export class PixiDiagramNode {
   }
 
   public updateSimHighlightGraphics(): void {
-    const simNodeState = this._simNodeState
+    if (
+      !this._sizeData.dirty &&
+      !this._simData.dirty &&
+      !this._cameraData.dirty
+    ) return
+
+    const simNodeState = this._simData.simNodeState
     if (!simNodeState || !simNodeState.active) {
       this._simHighlightGraphics?.destroy({ children: true })
       this._simHighlightGraphics = undefined
@@ -345,17 +559,23 @@ export class PixiDiagramNode {
       this._simContainer.addChild(simHighlightGraphics)
     }
 
+    const nodeSize = this._sizeData.size
     const inset = this._ctx.worldLengthForScreenPx(SIM_ACTIVE_INSET_SCREEN_PX)
     const strokeWidth = this._ctx.worldLengthForScreenPx(SIM_ACTIVE_OUTLINE_SCREEN_PX)
     simHighlightGraphics.clear()
-    const w = Math.max(1, this._width - inset * 2)
-    const h = Math.max(1, this._height - inset * 2)
+    const w = Math.max(1, nodeSize.width - inset * 2)
+    const h = Math.max(1, nodeSize.height - inset * 2)
     simHighlightGraphics.roundRect(inset, inset, w, h, Math.max(0, NODE_CORNER_RADIUS - inset))
     simHighlightGraphics.stroke({ width: strokeWidth, color: DEFAULT_SIM_ACTIVE_HIGHLIGHT_COLOR_HEX, alpha: 1 })
   }
 
   public updateSimValueBadge(): void {
-    const simNodeState = this._simNodeState
+    if (
+      !this._sizeData.dirty && 
+      !this._simData.dirty
+    ) return
+
+    const simNodeState = this._simData.simNodeState
     if (!simNodeState || !simNodeState.active) {
       this._simValueBadgeText?.destroy({ children: true })
       this._simValueBadgeText = undefined
@@ -370,6 +590,7 @@ export class PixiDiagramNode {
       return
     }
 
+    const nodeSize = this._sizeData.size
     const labelText = PixiDiagramNode.resolveSimValueBadgeLabelText(simNodeState)
     const textColorHex = PixiDiagramNode.resolveSimValueBadgeFillColorHex(simNodeState)
 
@@ -388,7 +609,7 @@ export class PixiDiagramNode {
 
     simValueBadgeText.text = labelText
     simValueBadgeText.tint = textColorHex
-    simValueBadgeText.x = this._width - 10
+    simValueBadgeText.x = nodeSize.width - 10
     simValueBadgeText.y = 5
   }
 
@@ -412,18 +633,25 @@ export class PixiDiagramNode {
   }
 
   public updatePins(): void {
-    this._pinsPixiContainer.removeChildren()
-    this._pinStripsPixiContainer.removeChildren()
-
-    if (!this._nodePinsDescs.length) {
+    if (
+      !this._sizeData.dirty &&
+      !this._nodePinDescsData.dirty
+    ) {
       return
     }
 
-    for (const nodePinDesc of this._nodePinsDescs) {
-      this._pinsPixiContainer.addChild(this._createNodePin(nodePinDesc))
+    const nodeSize = this._sizeData.size
+    const nodePinDescs = this._nodePinDescsData.nodePinDescs
+
+    this._pinsPixiContainer.removeChildren()
+    this._pinStripsPixiContainer.removeChildren()
+
+    const nodeWidth = nodeSize.width
+    for (const nodePinDesc of nodePinDescs) {
+      this._pinsPixiContainer.addChild(this._createNodePin(nodePinDesc, nodeWidth))
     }
 
-    const nodePinDescsSortedByY = this._nodePinsDescs
+    const nodePinDescsSortedByY = nodePinDescs
       .filter((desc) => desc.side === 'in')
       .sort((a, b) => a.localY - b.localY)
       
@@ -469,10 +697,11 @@ export class PixiDiagramNode {
 
   private _createNodePin(
     nodePinDesc: NodePinDesc,
+    nodeWidth: number,
   ): Container {
     const pinPixiContainer = new Container()
     pinPixiContainer.label = NODE_PIN_LABEL
-    pinPixiContainer.x = PixiDiagramNode.pinLocalX(nodePinDesc.side, this._width)
+    pinPixiContainer.x = PixiDiagramNode.pinLocalX(nodePinDesc.side, nodeWidth)
     pinPixiContainer.y = nodePinDesc.localY
     pinPixiContainer.eventMode = 'passive'
     
@@ -537,6 +766,10 @@ export class PixiDiagramNode {
     return this._diagramNodeId
   }
 
+  public get diagramNodeType(): string {
+    return this._diagramNodeType
+  }
+
   public get pixiContainer(): Container {
     return this._pixiContainer
   }
@@ -549,87 +782,47 @@ export class PixiDiagramNode {
     return this._showOpenScopeBtn
   }
 
-  public set showOpenScopeBtn(value: boolean) {
-    this._showOpenScopeBtn = value
-  }
-
   public get x(): number {
-    return this._x
-  }
-
-  public set x(value: number) {
-    this._x = value
+    return this._positionData.position.x
   }
 
   public get y(): number {
-    return this._y
-  }
-
-  public set y(value: number) {
-    this._y = value
+    return this._positionData.position.y
   }
 
   public get width(): number {
-    return this._width
-  }
-
-  public set width(value: number) {
-    this._width = value
+    return this._sizeData.size.width
   }
 
   public get height(): number {
-    return this._height
-  }
-
-  public set height(value: number) {
-    this._height = value
+    return this._sizeData.size.height
   }
 
   public get selected(): boolean {
-    return this._selected
+    return this._selectedData.selected
   }
   
-  public set selected(value: boolean) {
-    this._selected = value
-  }
-
-
   public get visualOptions(): PixiDiagramNodeVisualOptions {
-    return this._visualOptions
-  }
-
-  public set visualOptions(value: PixiDiagramNodeVisualOptions) {
-    this._visualOptions = value
+    return this._visualOptionsData.visualOptions
   }
 
   public get bodyModel(): BodyPaintModel {
-    return this._bodyModel
-  }
-
-  public set bodyModel(value: BodyPaintModel) {
-    this._bodyModel = value
+    return this._bodyData.bodyModel
   }
 
   public get nodePinsDescs(): NodePinDesc[] {
-    return this._nodePinsDescs
-  }
-
-  public set nodePinsDescs(value: NodePinDesc[]) {
-    this._nodePinsDescs = value
+    return this._nodePinDescsData.nodePinDescs
   }
 
   public get simNodeState(): SimNodeState | undefined {
-    return this._simNodeState
-  }
-
-  public set simNodeState(value: SimNodeState | undefined) {
-    this._simNodeState = value
+    return this._simData.simNodeState
   }
 
   public getPinPosition(pinId: string): { x: number, y: number } | undefined {
+    const nodePinDescs = this._nodePinDescsData.nodePinDescs
     const pinPixiContainers = this._pinsPixiContainer.children
-    for (let i = 0; i < this._nodePinsDescs.length; i++) {
-      const nodePinDesc = this._nodePinsDescs[i]
+    for (let i = 0; i < nodePinDescs.length; i++) {
+      const nodePinDesc = nodePinDescs[i]
       if (nodePinDesc.pinId === pinId) {
         return pinPixiContainers[i]?.position.clone()
       }

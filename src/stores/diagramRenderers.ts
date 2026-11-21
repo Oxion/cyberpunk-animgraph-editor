@@ -1,147 +1,87 @@
-import { nextTick, ref, shallowRef, watch } from 'vue'
+import { nextTick } from 'vue'
 import type { PixiGraphRenderer } from '../utils/PixiGraphRenderer'
-import { currentView } from './bodyViews'
-import { activeDiagramId } from './graphProject'
-import { windows } from './appWindows'
-import { getWindowStackTop, getWindowTopViewId } from './windowStacks'
-
-/** Stable id for the active Main Pixi canvas (legacy callers). */
-export const MAIN_RENDERER_ID = 'main'
-
-export type FocusedDiagramSurface =
-  | { kind: 'body' }
-  | { kind: 'window'; windowId: string }
-
-/** Which host currently has keyboard focus: body area or a window. */
-export const focusedDiagramSurface = ref<FocusedDiagramSurface | null>(null)
-
-/** Last diagram host that had focus — kept when chrome (menu, tools) steals keyboard focus. */
-const lastFocusedDiagramSurface = ref<FocusedDiagramSurface | null>(null)
-
-watch(focusedDiagramSurface, (surface) => {
-  if (surface) lastFocusedDiagramSurface.value = surface
-})
-
-function isStateLinksRootSurface(surface: FocusedDiagramSurface | null): boolean {
-  if (surface?.kind !== 'window') return false
-  const win = windows.value.find((w) => w.id === surface.windowId)
-  if (!win || win.minimized || win.type !== 'state-links') return false
-  return getWindowStackTop(surface.windowId)?.kind === 'state-links'
-}
-
-/**
- * State-links window on its root view: select + open children only (no move/resize/wires).
- */
-export function isStateLinksRootViewFocused(): boolean {
-  return isStateLinksRootSurface(focusedDiagramSurface.value)
-}
-
-/** Same as focused, but still true after focus leaves the window for the menubar / tools. */
-export function isStateLinksRootContext(): boolean {
-  return isStateLinksRootSurface(focusedDiagramSurface.value ?? lastFocusedDiagramSurface.value)
-}
+import { SequentialIdAllocator } from '../utils/SequentialIdAllocator'
+import type { SimSnapshot } from '../utils/sim'
+import { currentView } from './activeGraphView'
+import { focusedDiagramSurface } from './diagramFocus'
+import { markDiagramViewReady } from './diagramViewReady'
+import { getGraphView } from './graphViewRegistry'
+import { getWindowTopViewId } from './windowStacks'
 
 export type DiagramRendererApi = {
   fitView?: () => void
   presentDefault?: () => void
   getRenderer: () => PixiGraphRenderer | null
-  focusCanvas?: () => void
+  focusRenderer?: () => void
+  applySimOverlay?: (snapshot?: SimSnapshot) => void
 }
 
 const viewApis = new Map<string, DiagramRendererApi>()
 const readyWaiters = new Map<string, Array<(renderer: PixiGraphRenderer | null) => void>>()
+/** Ids handed out before mount registers into `viewApis`. */
+const reservedRendererIds = new Set<string>()
 
-/** One Main Pixi instance per project diagram — soft-switch suspends, does not destroy. */
-const mainRenderersByDiagram = new Map<string, PixiGraphRenderer>()
+const rendererIds = new SequentialIdAllocator(
+  'dr',
+  (id) => viewApis.has(id) || reservedRendererIds.has(id)
+)
 
-/** Active diagram's Main canvas Pixi instance — owned by App mount/destroy. */
-export const mainDiagramRenderer = shallowRef<PixiGraphRenderer | null>(null)
-
-export function getMainRendererForDiagram(diagramId: string): PixiGraphRenderer | null {
-  return mainRenderersByDiagram.get(diagramId) ?? null
+/** Reserve a unique `viewApis` key (`dr_N`). Store on GraphViewEntry.rendererId / window payload. */
+export function allocDiagramRendererId(preferred?: string | null): string {
+  const id = rendererIds.alloc(preferred)
+  reservedRendererIds.add(id)
+  return id
 }
 
-export function setMainRendererForDiagram(diagramId: string, renderer: PixiGraphRenderer | null) {
-  const prev = mainRenderersByDiagram.get(diagramId)
-  if (renderer) {
-    mainRenderersByDiagram.set(diagramId, renderer)
-  } else {
-    mainRenderersByDiagram.delete(diagramId)
-  }
-  if (activeDiagramId.value === diagramId || mainDiagramRenderer.value === prev) {
-    mainDiagramRenderer.value = renderer
-  }
+export function resetDiagramRendererIdAllocator() {
+  viewApis.clear()
+  reservedRendererIds.clear()
+  readyWaiters.clear()
+  rendererIds.reset()
 }
 
-/** Point the legacy mainDiagramRenderer ref at diagramId and suspend other mains. */
-export function activateMainRenderer(diagramId: string) {
-  for (const [id, renderer] of mainRenderersByDiagram) {
-    renderer.setSuspended(id !== diagramId)
-  }
-  mainDiagramRenderer.value = mainRenderersByDiagram.get(diagramId) ?? null
-}
-
-export function destroyAllMainDiagramRenderers() {
-  for (const renderer of mainRenderersByDiagram.values()) {
-    renderer.destroy()
-  }
-  mainRenderersByDiagram.clear()
-  mainDiagramRenderer.value = null
-}
-
-/** @deprecated Prefer setMainRendererForDiagram(activeId, …) */
-export function setMainDiagramRenderer(renderer: PixiGraphRenderer | null) {
-  const id = activeDiagramId.value
-  if (!id) {
-    mainDiagramRenderer.value = renderer
-    return
-  }
-  setMainRendererForDiagram(id, renderer)
-}
-
-export function registerDiagramView(id: string, api: DiagramRendererApi | null) {
+export function registerDiagramView(rendererId: string, api: DiagramRendererApi | null) {
   if (!api) {
-    viewApis.delete(id)
+    viewApis.delete(rendererId)
     return
   }
-  viewApis.set(id, api)
-}
-
-export function getDiagramViewApi(id: string): DiagramRendererApi | null {
-  if (id === MAIN_RENDERER_ID) {
-    const main = mainDiagramRenderer.value
-    if (!main) return null
-    return { getRenderer: () => mainDiagramRenderer.value }
+  if (!reservedRendererIds.has(rendererId) && !viewApis.has(rendererId)) {
+    throw new Error(`registerDiagramView: id was not allocated: ${rendererId}`)
   }
-  return viewApis.get(id) ?? null
+  rendererIds.note(rendererId)
+  viewApis.set(rendererId, api)
 }
 
-export function getDiagramViewRenderer(id: string): PixiGraphRenderer | null {
-  if (id === MAIN_RENDERER_ID) return mainDiagramRenderer.value
-  return viewApis.get(id)?.getRenderer() ?? null
+export function getDiagramViewApi(rendererId: string): DiagramRendererApi | null {
+  return viewApis.get(rendererId) ?? null
 }
 
-export function forEachDiagramViewApi(fn: (api: DiagramRendererApi, id: string) => void) {
-  if (mainDiagramRenderer.value) {
-    fn({ getRenderer: () => mainDiagramRenderer.value }, MAIN_RENDERER_ID)
-  }
+export function getDiagramViewRenderer(rendererId: string): PixiGraphRenderer | null {
+  return viewApis.get(rendererId)?.getRenderer() ?? null
+}
+
+/** Resolve Pixi via GraphViewEntry.rendererId. */
+export function getGraphViewRenderer(viewId: string): PixiGraphRenderer | null {
+  const entry = getGraphView(viewId)
+  return entry ? getDiagramViewRenderer(entry.rendererId) : null
+}
+
+export function getGraphViewApi(viewId: string): DiagramRendererApi | null {
+  const entry = getGraphView(viewId)
+  return entry ? getDiagramViewApi(entry.rendererId) : null
+}
+
+export function forEachDiagramViewApi(fn: (api: DiagramRendererApi, rendererId: string) => void) {
   viewApis.forEach((api, id) => fn(api, id))
 }
 
-export function forEachDiagramViewRenderer(fn: (renderer: PixiGraphRenderer, id: string) => void) {
+export function forEachDiagramViewRenderer(
+  fn: (renderer: PixiGraphRenderer, rendererId: string) => void
+) {
   forEachDiagramViewApi((api, id) => {
     const renderer = api.getRenderer()
     if (renderer) fn(renderer, id)
   })
-}
-
-/** All Main canvases (including soft-suspended diagrams). */
-export function forEachMainDiagramRenderer(
-  fn: (renderer: PixiGraphRenderer, diagramId: string) => void
-) {
-  for (const [diagramId, renderer] of mainRenderersByDiagram) {
-    fn(renderer, diagramId)
-  }
 }
 
 /** Active diagram renderer for the focused host (body stack top, or focused window). */
@@ -149,89 +89,47 @@ export function getActiveDiagramRenderer(): PixiGraphRenderer | null {
   const surface = focusedDiagramSurface.value
   if (surface?.kind === 'window') {
     const viewId = getWindowTopViewId(surface.windowId)
-    return viewId ? getDiagramViewRenderer(viewId) : null
+    return viewId ? getGraphViewRenderer(viewId) : null
   }
   const top = currentView.value
-  if (top.kind === 'graph-scope' || top.kind === 'state-links') {
-    return getDiagramViewRenderer(top.id)
-  }
-  if (top.kind === 'sm-ring') return null
-  return mainDiagramRenderer.value
+  if (!top) return null
+  return getDiagramViewRenderer(top.rendererId)
 }
 
-export function syncBodyRendererActivity() {
-  const top = currentView.value
-  const topId = top.kind === 'main' ? null : top.id
-  const stacked = top.kind !== 'main'
-
-  const activeDiagram = activeDiagramId.value
-  for (const [diagramId, renderer] of mainRenderersByDiagram) {
-    if (diagramId !== activeDiagram) {
-      renderer.setSuspended(true)
-    } else {
-      renderer.setSuspended(stacked)
-    }
-  }
-
-  viewApis.forEach((api, viewId) => {
-    const renderer = api.getRenderer()
-    if (!renderer) return
-    // Windows stay active for their host; body lenses only when they are the active top.
-    if (viewId.startsWith('win_')) return
-    renderer.setSuspended(viewId !== topId)
-  })
-}
-
-export function notifyDiagramViewReady(id: string) {
-  const renderer = getDiagramViewRenderer(id)
-  const waiters = readyWaiters.get(id)
+/** Mark graph-view ready (overlay gate) and resolve renderer waiters. */
+export function notifyDiagramViewReady(viewId: string) {
+  markDiagramViewReady(viewId)
+  const entry = getGraphView(viewId)
+  if (!entry) return
+  const renderer = getDiagramViewRenderer(entry.rendererId)
+  const waiters = readyWaiters.get(entry.rendererId)
   if (!waiters?.length) return
-  readyWaiters.delete(id)
+  readyWaiters.delete(entry.rendererId)
   waiters.forEach((resolve) => resolve(renderer))
 }
 
 export async function waitForDiagramViewRenderer(
-  id: string
+  rendererId: string
 ): Promise<PixiGraphRenderer | null> {
   await nextTick()
-  const existing = getDiagramViewRenderer(id)
+  const existing = getDiagramViewRenderer(rendererId)
   if (existing) {
     await existing._initPromise
-    return getDiagramViewRenderer(id)
+    return getDiagramViewRenderer(rendererId)
   }
 
   return new Promise((resolve) => {
-    const list = readyWaiters.get(id) ?? []
+    const list = readyWaiters.get(rendererId) ?? []
     list.push(resolve)
-    readyWaiters.set(id, list)
+    readyWaiters.set(rendererId, list)
     window.setTimeout(() => {
-      const waiters = readyWaiters.get(id)
+      const waiters = readyWaiters.get(rendererId)
       if (!waiters?.includes(resolve)) return
       readyWaiters.set(
-        id,
+        rendererId,
         waiters.filter((waiter) => waiter !== resolve)
       )
-      resolve(getDiagramViewRenderer(id))
+      resolve(getDiagramViewRenderer(rendererId))
     }, 8000)
   })
-}
-
-/** Vue ref callback helper for lens / window content components. */
-export function bindDiagramViewRef(id: string, el: unknown) {
-  if (el && typeof el === 'object' && el !== null && 'getRenderer' in el) {
-    registerDiagramView(id, el as DiagramRendererApi)
-    return
-  }
-  // SM ring (and similar) expose fitView only — no Pixi diagram renderer.
-  if (el && typeof el === 'object' && el !== null && 'fitView' in el) {
-    const exposed = el as Omit<DiagramRendererApi, 'getRenderer'>
-    registerDiagramView(id, {
-      fitView: exposed.fitView,
-      presentDefault: exposed.presentDefault,
-      focusCanvas: exposed.focusCanvas,
-      getRenderer: () => null,
-    })
-    return
-  }
-  registerDiagramView(id, null)
 }

@@ -1,4 +1,4 @@
-import { computed, nextTick, ref, type ComputedRef } from 'vue'
+import { computed, ref, type ComputedRef } from 'vue'
 import {
   closeQuickLensWindows,
   openLensWindow,
@@ -8,22 +8,22 @@ import {
 import {
   activeBodyView,
   activeBodyViewId,
-  bodyViewRoot,
   bodyViews,
+} from '../stores/bodyViews'
+import {
   currentView,
   graphViewStackRef,
-  isDiagramRootBody,
   jumpToIndex,
-  openParallelBody,
+  openParallelGraphBody,
   pushEntry,
   pushView,
+  resolveBodyViewTop,
   setViewSelection,
-} from '../stores/bodyViews'
-import { bodyViewTop } from '../types/DiagramBodyView'
+} from '../stores/activeGraphView'
+import { bodyContentRoot } from '../stores/bodyContent'
+import { registerGraphView } from '../stores/graphViewRegistry'
 import {
   getActiveDiagramRenderer,
-  mainDiagramRenderer as graphRenderer,
-  syncBodyRendererActivity,
   waitForDiagramViewRenderer,
 } from '../stores/diagramRenderers'
 import { activeDiagramId, getRenderData, requireActiveDiagramId } from '../stores/graphProject'
@@ -40,7 +40,6 @@ import {
 } from '../utils/graph/DiagramConversion'
 import type { RenderNode } from '../utils/graph/diagramTypes'
 import type { GraphViewEntry } from '../types/GraphView'
-import { PixiGraphRenderer } from '../utils/PixiGraphRenderer'
 import { createGraphScopeView } from '../utils/views/viewRegistry'
 import { collectCollapsedScopePath } from '../utils/views/viewScopePath'
 
@@ -177,7 +176,8 @@ export const openLensForNode = (
     hideScopeRoot,
     projectDiagramId: diagramId,
   })
-  pushView(entry)
+  registerGraphView(entry)
+  pushView(entry.id)
   return entry
 }
 
@@ -222,21 +222,14 @@ export const navigateToNode = async (
     const scopeNode = desiredPath[i]!
     const entry = openLensForNode(diagramId, scopeNode, 'body')
     if (!entry) return false
-    const renderer = await waitForDiagramViewRenderer(entry.id)
-    if (!renderer) return false
+    if (!(await waitForDiagramViewRenderer(entry.rendererId))) return false
   }
 
-  await nextTick()
-  syncBodyRendererActivity()
+  const top = currentView.value
+  if (!top) return false
 
-  let active = getActiveDiagramRenderer()
-  if (!active && currentView.value.kind !== 'main') {
-    active = await waitForDiagramViewRenderer(currentView.value.id)
-  }
-  if (!active && currentView.value.kind === 'main') {
-    active = (graphRenderer.value as PixiGraphRenderer | null) ?? null
-    if (active) await active._initPromise
-  }
+  const active =
+    getActiveDiagramRenderer() ?? (await waitForDiagramViewRenderer(top.rendererId))
   if (!active) return false
 
   if (typeof options?.zoom === 'number') {
@@ -247,17 +240,17 @@ export const navigateToNode = async (
   if (!panned) return false
 
   active.setSelectedNodes([nodeId], nodeId, true)
-  setViewSelection(currentView.value.id, { nodeIds: [nodeId], primaryNodeId: nodeId })
+  setViewSelection(top.id, { nodeIds: [nodeId], primaryNodeId: nodeId })
   return true
 }
 
 export const onBodyViewAction = (bodyId: string, actionId: string) => {
   const body = bodyViews.value.find((view) => view.id === bodyId)
   if (!body) return
-  const top = bodyViewTop(body)
+  const top = resolveBodyViewTop(body)
   if (
     actionId === 'open-sm-ring' &&
-    top.kind === 'graph-scope' &&
+    top?.kind === 'graph-scope' &&
     top.payload.stateMachineNodeId
   ) {
     openSmRingWindow(
@@ -335,8 +328,7 @@ export const handleMainGraphNodeSelect = (
   event?: MouseEvent
 ) => {
   const body = activeBodyView.value
-  const rootEntryId =
-    isDiagramRootBody(body) ? bodyViewRoot(body).id : 'main'
+  const rootEntryId = body ? (bodyContentRoot(body.id) ?? 'main') : 'main'
 
   if (primaryNodeId && event?.ctrlKey && event?.altKey) {
     openQuickLensWindow(requireActiveDiagramId(), primaryNodeId)
@@ -369,7 +361,8 @@ export const pushScopeIntoBody = (diagramId: string, bodyId: string, diagramNode
     hideScopeRoot,
     projectDiagramId: diagramId,
   })
-  pushEntry(entry, bodyId)
+  registerGraphView(entry)
+  pushEntry(entry.id, bodyId)
 }
 
 export const openParallelScopeBody = (diagramId: string, diagramNodeId: string) => {
@@ -385,7 +378,8 @@ export const openParallelScopeBody = (diagramId: string, diagramNodeId: string) 
     hideScopeRoot,
     projectDiagramId: diagramId,
   })
-  openParallelBody(entry, { preview: true })
+  registerGraphView(entry)
+  openParallelGraphBody([entry.id], { preview: true })
 }
 
 void openParallelScopeBody
@@ -396,7 +390,7 @@ export const handleWindowLensNodeSelect = (diagramId: string, nodeIds: string[],
 
 export const handleNodeSelect = (nodeId: string | null, allNodeIds?: string[]) => {
   const ids = allNodeIds ?? (nodeId ? [nodeId] : [])
-  setViewSelection(currentView.value.id, { nodeIds: ids, primaryNodeId: nodeId })
+  setViewSelection(currentView.value?.id ?? 'main', { nodeIds: ids, primaryNodeId: nodeId })
 }
 
 export function bindGraphNavigation(next: GraphNavigationHost = {}) {

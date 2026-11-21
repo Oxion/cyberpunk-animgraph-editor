@@ -14,7 +14,7 @@ import {
 } from '@/stores/graphHistory'
 import { getRenderData, requireActiveDiagramId } from '@/stores/graphProject'
 import { nodePositionRef, selectedNodeIdsRef, selectedNodeRef } from '@/stores/graphSession'
-import { mainDiagramRenderer as graphRenderer } from '@/stores/diagramRenderers'
+import { getActiveDiagramRenderer } from '@/stores/diagramRenderers'
 import {
   autoResizeParents,
   moveInputs,
@@ -186,7 +186,7 @@ function applyNudgeStep(diagramId: string, deltaX: number, deltaY: number): void
       }
     }
   }
-  if (graphRenderer.value && movedNodeIds.size > 0) {
+  if (getActiveDiagramRenderer() && movedNodeIds.size > 0) {
     updateActiveNodes(Array.from(movedNodeIds))
   }
   if (selectedNodeRef.value) {

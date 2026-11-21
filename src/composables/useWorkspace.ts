@@ -1,9 +1,8 @@
 import { watch } from 'vue'
+import { bodyBelongsToDiagram, resolveBodyViewRoot } from '../stores/activeGraphView'
 import {
   activateBodyView,
   activeBodyViewId,
-  bodyBelongsToDiagram,
-  bodyViewRoot,
   bodyViews,
 } from '../stores/bodyViews'
 import {
@@ -31,7 +30,7 @@ export function useWorkspace() {
   watch(activeBodyViewId, (bodyId) => {
     const body = bodyViews.value.find((v) => v.id === bodyId)
     if (!body) return
-    const diagramId = bodyViewRoot(body).projectDiagramId
+    const diagramId = resolveBodyViewRoot(body)?.projectDiagramId
     if (!diagramId || !hasDiagramId(diagramId)) return
     if (activeDiagramId.value === diagramId) return
     setActiveDiagramId(diagramId)

@@ -136,7 +136,7 @@ function paintTextRow(
     fontSize?: number
     breakWords?: boolean
   }
-): void {
+): Container {
   const leftPad = options.leftPad ?? ROW_TEXT_HORIZONTAL_PAD
   const rightPad = options.rightPad ?? ROW_TEXT_HORIZONTAL_PAD
   const wordWrap = options.wordWrap ?? false
@@ -177,6 +177,16 @@ function paintTextRow(
     text.x = leftPad
   }
   host.addChild(text)
+  return text
+}
+
+export type PaintNodeRowsResultItem = {
+  frame: NodeRowFrame,
+  rowPixiContainer: Container,
+}
+
+export type PaintNodeRowsResult = {
+  items: PaintNodeRowsResultItem[],
 }
 
 /**
@@ -190,14 +200,16 @@ export function paintNodeRows(
     leftPad?: number
     rowFill?: string
     contentWidth?: number
-  }
-): void {
+  },
+): PaintNodeRowsResult {
   const leftPad = options?.leftPad ?? ROW_TEXT_HORIZONTAL_PAD
   const rowFill = options?.rowFill ?? DEFAULT_ROW_FILL
   const contentWidth = Math.max(options?.contentWidth ?? 0, layout.width)
   
   const nodeRowsPixiContainer = ensureNodeRowsPixiContainer(hostPixiContainer)
   destroyChildren(nodeRowsPixiContainer)
+
+const resultItems: PaintNodeRowsResultItem[] = []
 
   for (const frame of layout.frames) {
     const row = frame.row
@@ -229,12 +241,18 @@ export function paintNodeRows(
 
       smRingPixiContainer.addChild(smRingBgGraphics, smRingContentPixiContainer)
       nodeRowsPixiContainer.addChild(smRingPixiContainer)
+      resultItems.push({
+        frame,
+        rowPixiContainer: smRingPixiContainer,
+      })
       continue
     }
 
     if (row.kind === 'note') {
       if (!row.label) continue
-      paintTextRow(nodeRowsPixiContainer, frame, row.label, NOTE_ROW_FILL, {
+
+
+      const rowPixiContainer = paintTextRow(nodeRowsPixiContainer, frame, row.label, NOTE_ROW_FILL, {
         leftPad: NOTE_FOOTER_PAD_X,
         wordWrap: true,
         wrapWidth: Math.max(40, contentWidth - NOTE_FOOTER_PAD_X * 2),
@@ -243,41 +261,65 @@ export function paintNodeRows(
         fontSize: NOTE_ROW_FONT_SIZE,
         breakWords: true,
       })
+      resultItems.push({
+        frame,
+        rowPixiContainer,
+      })
       continue
     }
 
     if (row.kind === 'multiline') {
-      paintTextRow(nodeRowsPixiContainer, frame, row.label, MULTILINE_FILL, {
+      const rowPixiContainer = paintTextRow(nodeRowsPixiContainer, frame, row.label, MULTILINE_FILL, {
         leftPad: 5,
         wordWrap: true,
         wrapWidth: Math.max(40, contentWidth - 10),
         lineHeight: SM_INPUT_CHAIN_OVERVIEW_BODY_LINE_HEIGHT,
         contentWidth,
       })
+      resultItems.push({
+        frame,
+        rowPixiContainer,
+      })
       continue
     }
 
     if (row.kind === 'output') {
-      paintTextRow(nodeRowsPixiContainer, frame, row.label, rowFill, {
+      const rowPixiContainer = paintTextRow(nodeRowsPixiContainer, frame, row.label, rowFill, {
         alignRight: true,
         layoutWidth: contentWidth,
         contentWidth,
         rightPad: leftPad,
       })
+      resultItems.push({
+        frame,
+        rowPixiContainer,
+      })
       continue
     }
 
     if (row.kind === 'input' || row.kind === 'portal') {
-      paintTextRow(nodeRowsPixiContainer, frame, row.label, rowFill, { leftPad, contentWidth })
+      const rowPixiContainer = paintTextRow(nodeRowsPixiContainer, frame, row.label, rowFill, { leftPad, contentWidth })
+      resultItems.push({
+        frame,
+        rowPixiContainer,
+      })
       continue
     }
 
     if (row.kind === 'field') {
-      paintTextRow(nodeRowsPixiContainer, frame, row.label, rowFill, {
+      const rowPixiContainer = paintTextRow(nodeRowsPixiContainer, frame, row.label, rowFill, {
         leftPad,
         contentWidth,
       })
+      resultItems.push({
+        frame,
+        rowPixiContainer,
+      })
     }
+  }
+
+  return {
+    items: resultItems,
   }
 }
 
@@ -291,60 +333,4 @@ export function clearNodeRowsHost(nodeGroup: Container): void {
   } catch {
     /* ignore */
   }
-}
-
-/**
- * In-place width update for an already-painted body (resize gesture).
- * Moves right-aligned labels, stretches SM-ring bg, centers ring content.
- * Returns false if rows host is missing — caller should `paintNodeRows`.
- */
-export function syncNodeRowsToContentWidth(
-  hostPixiContainer: Container,
-  contentWidth: number
-): boolean {
-  const nodeRowsPixiContainer = hostPixiContainer.getChildByLabel(NODE_ROWS_HOST)
-  if (!nodeRowsPixiContainer) return false
-
-  for (const child of nodeRowsPixiContainer.children) {
-    switch (child.label) {
-      case NODE_ROW_TEXT:
-        if (!isDiagramText(child)) continue
-        
-        const meta = (child as DiagramText & { rowMeta?: RowTextMeta }).rowMeta
-        if (!meta) continue
-
-        const leftPad = meta.leftPad ?? ROW_TEXT_HORIZONTAL_PAD
-        const rightPad = meta.rightPad ?? ROW_TEXT_HORIZONTAL_PAD
-        if (meta.alignRight) {
-          child.x = contentWidth - rightPad
-        }
-        if (meta.wordWrap) {
-          child.style.wordWrapWidth = Math.max(40, contentWidth - 10)
-        } else if (meta.originalLabel) {
-          child.text = ellipsizeDiagramText(
-            meta.originalLabel,
-            rowLabelMaxTextWidth(contentWidth, leftPad, rightPad)
-          )
-        }
-
-        break
-      case NODE_ROW_SM_RING:
-        const smRingContainerMeta = getSmRingContainerMeta(child)
-        
-        const smRingBgGraphics = child.getChildByLabel(NODE_ROW_SM_RING_BG)
-        if (smRingBgGraphics instanceof Graphics && smRingContainerMeta.rowHeight > 0) {
-          paintSmRingBackground(smRingBgGraphics, contentWidth, smRingContainerMeta.rowHeight)
-        }
-
-        const smRingContentPixiContainer = child.getChildByLabel(NODE_ROW_RING_CONTENT)
-        if (smRingContentPixiContainer && smRingContainerMeta.panelWidth > 0) {
-          smRingContentPixiContainer.x = ringContentOffsetX(contentWidth, smRingContainerMeta.panelWidth)
-        }
-        break
-      default:
-        break
-    }
-  }
-
-  return true
 }

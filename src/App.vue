@@ -105,19 +105,11 @@
             @focus="onBodyHostFocus"
             @blur="onBodyHostBlur"
           >
-            <div
-              v-for="diagramId in listDiagramIds"
-              :key="diagramId"
-              :ref="(el) => bindDiagramCanvasEl(diagramId, el)"
-              class="graph-canvas"
-              v-show="activeDiagramIdRef === diagramId"
-            />
-
             <DiagramLoadingOverlay v-if="hasProject && !diagramViewReadyRef" />
 
             <template v-for="body in bodyViews" :key="body.id">
               <GraphViewLayer
-                v-for="entry in bodyOverlayEntries(body)"
+                v-for="entry in resolveBodyViewEntries(body)"
                 :key="`${body.id}:${entry.id}`"
                 v-show="isBodyStackTop(body, entry)"
                 :view="entry"
@@ -130,9 +122,20 @@
                 @action="(actionId) => onBodyViewAction(body.id, actionId)"
                 @jump="(index) => jumpToIndex(index, body.id)"
               >
+                <MainDiagramViewContent
+                  v-if="entry.kind === 'main' && getRenderData(entry.projectDiagramId)"
+                  :ref="createGraphViewEntryMainDiagramViewContentComponentRefCb(entry)"
+                  :graph-data="getRenderData(entry.projectDiagramId)!"
+                  :active="isBodyStackTop(body, entry)"
+                  @node-select="(ids, primary) => handleMainGraphNodeSelect(ids, primary)"
+                  @open-scope="(nodeId) => pushScopeIntoBody(entry.projectDiagramId, body.id, nodeId)"
+                  @pin-connect="(payload) => onViewPinConnect(entry.projectDiagramId, payload)"
+                  @pin-rewire="(payload) => onViewPinRewire(entry.projectDiagramId, payload)"
+                  @ready="() => onDiagramViewReady(entry.id)"
+                />
                 <LensWindowContent
-                  v-if="entry.kind === 'graph-scope' && entry.payload.scopeRootId && getRenderData(entry.projectDiagramId)"
-                  :ref="(el) => bindDiagramViewRef(entry.id, el)"
+                  v-else-if="entry.kind === 'graph-scope' && entry.payload.scopeRootId && getRenderData(entry.projectDiagramId)"
+                  :ref="createGraphViewEntryLensWindowContentComponentRefCb(entry)"
                   :graph-data="getRenderData(entry.projectDiagramId)!"
                   :root-node-id="entry.payload.scopeRootId"
                   :hide-scope-root="Boolean(entry.payload.hideScopeRoot)"
@@ -147,7 +150,7 @@
                 />
                 <StateLinksViewContent
                   v-else-if="entry.kind === 'state-links' && entry.payload.stateNodeId && getRenderData(entry.projectDiagramId)"
-                  :ref="(el) => bindDiagramViewRef(entry.id, el)"
+                  :ref="createGraphViewEntryStateLinksViewContentComponentRefCb(entry)"
                   :graph-data="getRenderData(entry.projectDiagramId)!"
                   :state-node-id="entry.payload.stateNodeId"
                   :active="isBodyStackTop(body, entry)"
@@ -321,12 +324,12 @@
           v-else-if="win.type === 'lens' && windowRenderData(win.id)"
           class="app-window-stack-host"
         >
-          <template v-for="entry in getWindowStack(win.id)" :key="entry.id">
+          <template v-for="entry in resolveWindowStackEntries(win.id)" :key="entry.id">
             <LensWindowContent
               v-if="entry.kind === 'graph-scope' && entry.payload.scopeRootId"
               v-show="isWindowStackTop(win.id, entry)"
               class="app-window-stack-layer"
-              :ref="(el) => bindWindowDiagramRef(entry.id, el)"
+              :ref="createGraphViewEntryLensWindowContentComponentRefCb(entry)"
               :graph-data="windowRenderData(win.id)!"
               :root-node-id="entry.payload.scopeRootId"
               :hide-scope-root="Boolean(entry.payload.hideScopeRoot)"
@@ -349,12 +352,12 @@
           v-else-if="win.type === 'state-links' && windowRenderData(win.id)"
           class="app-window-stack-host"
         >
-          <template v-for="entry in getWindowStack(win.id)" :key="entry.id">
+          <template v-for="entry in resolveWindowStackEntries(win.id)" :key="entry.id">
             <StateLinksViewContent
               v-if="entry.kind === 'state-links' && entry.payload.stateNodeId"
               v-show="isWindowStackTop(win.id, entry)"
               class="app-window-stack-layer"
-              :ref="(el) => bindWindowDiagramRef(entry.id, el)"
+              :ref="createGraphViewEntryStateLinksViewContentComponentRefCb(entry)"
               :graph-data="windowRenderData(win.id)!"
               :state-node-id="entry.payload.stateNodeId"
               :active="isWindowStackTop(win.id, entry)"
@@ -368,7 +371,7 @@
               v-else-if="entry.kind === 'graph-scope' && entry.payload.scopeRootId"
               v-show="isWindowStackTop(win.id, entry)"
               class="app-window-stack-layer"
-              :ref="(el) => bindWindowDiagramRef(entry.id, el)"
+              :ref="createGraphViewEntryLensWindowContentComponentRefCb(entry)"
               :graph-data="windowRenderData(win.id)!"
               :root-node-id="entry.payload.scopeRootId"
               :hide-scope-root="Boolean(entry.payload.hideScopeRoot)"
@@ -388,8 +391,8 @@
           />
         </div>
         <StateMachineRingWindowContent
-          v-else-if="win.type === 'sm-ring' && windowRenderData(win.id)"
-          :ref="(el) => bindWindowDiagramRef(win.id, el)"
+          v-else-if="win.type === 'sm-ring' && windowRenderData(win.id) && windowStackRendererId(win.id)"
+          :ref="createStateMachineRingWindowContentComponentRefCb(windowStackRendererId(win.id)!)"
           :graph-data="windowRenderData(win.id)!"
           :state-machine-node-id="win.payload.stateMachineNodeId"
           :sim-highlight="simRingHighlightFor(win.payload.stateMachineNodeId)"
@@ -519,7 +522,11 @@ import GraphInfoPanel from './components/GraphInfoPanel.vue'
 import GraphViewChromeCard from './components/GraphViewChromeCard.vue'
 import GraphViewBreadcrumb from './components/GraphViewBreadcrumb.vue'
 import GraphViewLayer from './components/GraphViewLayer.vue'
-import LensWindowContent from './components/LensWindowContent.vue'
+import LensWindowContent, { ILensWindowContentExposeRef, isLensWindowContentExposeRef } from './components/LensWindowContent.vue'
+import MainDiagramViewContent, {
+  isMainDiagramViewContentExposeRef,
+  type IMainDiagramViewContentExposeRef,
+} from './components/MainDiagramViewContent.vue'
 import NodeDetailsPanel from './components/NodeDetailsPanel.vue'
 import RenderStatsWindowContent from './components/RenderStatsWindowContent.vue'
 import SimSkeletonWindowContent from './components/SimSkeletonWindowContent.vue'
@@ -527,8 +534,8 @@ import SimStatusWindowContent from './components/SimStatusWindowContent.vue'
 import SettingsWindowContent from './components/SettingsWindowContent.vue'
 import SidebarPanel from './components/SidebarPanel.vue'
 import SimPanel from './components/SimPanel.vue'
-import StateLinksViewContent from './components/StateLinksViewContent.vue'
-import StateMachineRingWindowContent from './components/StateMachineRingWindowContent.vue'
+import StateLinksViewContent, { isStateLinksViewContentExposeRef, IStateLinksViewContentExposeRef } from './components/StateLinksViewContent.vue'
+import StateMachineRingWindowContent, { isStateMachineRingWindowContentExposeRef } from './components/StateMachineRingWindowContent.vue'
 import ToolsPanel from './components/ToolsPanel.vue'
 import {
   sim,
@@ -568,7 +575,6 @@ import {
   openWelcomePanel,
   openAddAnimgraphDialog,
   openProjectDialog,
-  bindDiagramCanvasEl,
   showSaveAsDialog,
   showAddAnimgraphDialog,
   showExportDialog,
@@ -583,7 +589,6 @@ import {
   handleWindowLensNodeSelect,
   navigateToNode,
   onBodyViewAction,
-  openLensForNode,
   openLensFromSelection,
   openLensWindowFromSelection,
   openSmRingFromSelection,
@@ -612,34 +617,45 @@ import {
   activeBodyViewId,
   activateBodyView,
   closeBodyView,
-  currentView,
-  graphViewStackRef,
   isDiagramRootBody,
   isDiagramRootBodyId,
-  jumpToIndex,
-  MAIN_BODY_ID,
   parallelBodyViews,
   pinBodyView,
-  popEntry,
   toggleBodyView,
-  bodyViewRoot,
   activeBodyView,
   bodyViews,
 } from './stores/bodyViews'
 import {
-  bindDiagramViewRef,
+  bodyViewBreadcrumbs,
+  currentView,
+  graphViewStackRef,
+  jumpToIndex,
+  popEntry,
+  resolveBodyViewEntries,
+  resolveBodyViewRoot,
+  resolveBodyViewTop,
+} from './stores/activeGraphView'
+import {
+  getGraphView,
+  graphViews,
+  registerGraphView,
+  resolveGraphViews,
+} from './stores/graphViewRegistry'
+import {
+  focusedDiagramSurface,
+  isStateLinksRootViewFocused,
+} from './stores/diagramFocus'
+import {
   forEachDiagramViewRenderer,
-  forEachMainDiagramRenderer,
   getActiveDiagramRenderer,
   getDiagramViewApi,
   getDiagramViewRenderer,
-  focusedDiagramSurface,
-  isStateLinksRootViewFocused,
-  MAIN_RENDERER_ID,
-  mainDiagramRenderer as graphRenderer,
+  getGraphViewApi,
+  getGraphViewRenderer,
   notifyDiagramViewReady,
-  syncBodyRendererActivity,
+  registerDiagramView,
 } from './stores/diagramRenderers'
+import { clearDiagramViewReady } from './stores/diagramViewReady'
 import {
   applyGraphSelection,
   nodeDescriptionRef,
@@ -656,10 +672,10 @@ import {
   getRenderData,
   hasDiagramId,
   hasProject,
-  listDiagramIds,
   requireActiveDiagramId,
   setActiveDiagramId,
 } from './stores/graphProject'
+import { MAIN_DIAGRAM_ID } from './utils/graph/diagramTypes'
 import { presentActiveDiagram } from './stores/projectViewSession'
 import {
   canRedo,
@@ -703,7 +719,8 @@ import {
   moveActiveSelectedSmStateByDelta,
   moveSmStateToIndex,
 } from './stores/graphMutations'
-import { bodyOverlayEntries, bodyViewBreadcrumbs, bodyViewTop, type DiagramBodyView } from './types/DiagramBodyView'
+import type { DiagramBodyView } from './types/DiagramBodyView'
+import { bodyContentTop } from './stores/bodyContent'
 import {
   getWindowStack,
   getWindowStackTop,
@@ -719,10 +736,6 @@ import {
   registerAppTools,
   toggleTool,
 } from './app/tools'
-import {
-  notifyConnectionDragBegin,
-  notifyConnectionDragEnd,
-} from './app/tools/connectionDragBridge'
 import { moveSessionState } from './app/tools/handlers/move'
 import { resizeSessionState } from './app/tools/handlers/resize'
 import type { AppWindowState, RenderStatsWindowPayload } from './types/AppWindow'
@@ -783,7 +796,7 @@ useWorkspace()
 const bodyViewBreadcrumbItems = (body: DiagramBodyView) => bodyViewBreadcrumbs(body)
 
 const isBodyStackTop = (body: DiagramBodyView, entry: GraphViewEntry) =>
-  activeBodyViewId.value === body.id && !body.minimized && bodyViewTop(body).id === entry.id
+  activeBodyViewId.value === body.id && !body.minimized && bodyContentTop(body.id) === entry.id
 
 const onBodyLayerClose = (body: DiagramBodyView) => {
   if (body.closable) closeBodyView(body.id)
@@ -793,11 +806,14 @@ const onBodyLayerClose = (body: DiagramBodyView) => {
 // Touch revision so window stack template updates.
 void windowStackRevision
 
+const resolveWindowStackEntries = (windowId: string) =>
+  resolveGraphViews(getWindowStack(windowId))
+
 const isWindowStackTop = (windowId: string, entry: GraphViewEntry) =>
-  getWindowStackTop(windowId)?.id === entry.id
+  getWindowStackTop(windowId) === entry.id
 
 const windowStackBreadcrumbItems = (windowId: string) =>
-  getWindowStack(windowId).map((entry, index) => ({
+  resolveWindowStackEntries(windowId).map((entry, index) => ({
     index,
     id: entry.id,
     crumb: entry.crumb,
@@ -806,20 +822,24 @@ const windowStackBreadcrumbItems = (windowId: string) =>
 
 const resolveMainDiagramId = () => {
   const body = activeBodyView.value
-  if (isDiagramRootBody(body)) {
-    return bodyViewRoot(body).projectDiagramId
+  if (body && isDiagramRootBody(body)) {
+    return resolveBodyViewRoot(body)?.projectDiagramId ?? activeDiagramIdRef.value ?? MAIN_DIAGRAM_ID
   }
-  return activeDiagramIdRef.value ?? MAIN_BODY_ID
+  return activeDiagramIdRef.value ?? MAIN_DIAGRAM_ID
 }
 
 const visibleWindows = computed(() =>
   windows.value.filter((w) => isWindowForActiveDiagram(w, activeDiagramIdRef.value))
 )
 
-const windowDiagramId = (windowId: string) =>
-  getWindowStackTop(windowId)?.projectDiagramId ??
-  activeDiagramIdRef.value ??
-  MAIN_BODY_ID
+const windowDiagramId = (windowId: string) => {
+  const topId = getWindowStackTop(windowId)
+  return (
+    (topId ? getGraphView(topId)?.projectDiagramId : undefined) ??
+    activeDiagramIdRef.value ??
+    MAIN_DIAGRAM_ID
+  )
+}
 
 const windowRenderData = (windowId: string): RenderData | null =>
   getRenderData(windowDiagramId(windowId))
@@ -864,20 +884,6 @@ const onWindowKeyBlur = (windowId: string) => {
   updateGraphInteractionGate()
 }
 
-const diagramIdForViewId = (viewId: string): string => {
-  for (const body of bodyViews.value) {
-    for (const entry of bodyOverlayEntries(body)) {
-      if (entry.id === viewId) return entry.projectDiagramId
-    }
-  }
-  for (const win of windows.value) {
-    for (const entry of getWindowStack(win.id)) {
-      if (entry.id === viewId) return entry.projectDiagramId
-    }
-  }
-  return resolveMainDiagramId()
-}
-
 const pushScopeIntoWindow = (windowId: string, diagramNodeId: string) => {
   const diagramId = windowDiagramId(windowId)
   const diagramNode = getRenderData(diagramId)?.allNodes.get(diagramNodeId)
@@ -890,7 +896,8 @@ const pushScopeIntoWindow = (windowId: string, diagramNodeId: string) => {
     hideScopeRoot,
     projectDiagramId: diagramId,
   })
-  pushWindowStack(windowId, entry)
+  registerGraphView(entry)
+  pushWindowStack(windowId, entry.id)
 }
 
 const openStateLinksRootChild = (windowId: string, nodeId: string) => {
@@ -1007,17 +1014,12 @@ const onTaskbarSelect = (id: string) => {
 }
 
 const onDiagramViewReady = (viewId: string) => {
-  syncBodyRendererActivity()
   updateGraphInteractionGate()
-  const renderer = getDiagramViewRenderer(viewId)
-  const diagramId = diagramIdForViewId(viewId)
-  renderer?.setOnPinConnect((payload) => handlePinConnect(diagramId, payload))
-  renderer?.setOnPinRewire((payload) => handlePinRewire(diagramId, payload))
-  renderer?.setOnConnectionDragBegin(notifyConnectionDragBegin)
-  renderer?.setOnConnectionDragEnd(notifyConnectionDragEnd)
+  const entry = getGraphView(viewId)
+  const renderer = entry ? getDiagramViewRenderer(entry.rendererId) : null
   notifyDiagramViewReady(viewId)
   applyConnectionSettingsToRenderer(renderer)
-  applySimOverlayToAllRenderers()
+  applySimOverlayToView(viewId)
 }
 
 const canvasFocusTitle = computed(() =>
@@ -1060,15 +1062,16 @@ const onBodyHostPointerDown = () => {
 const emptyGraphSelection: GraphViewSelection = { nodeIds: [], primaryNodeId: null }
 
 /** Persisted selection of the active body stack top. */
-const activeGraphSelection = computed(() => currentView.value.selection ?? emptyGraphSelection)
+const activeGraphSelection = computed(() => currentView.value?.selection ?? emptyGraphSelection)
 
 watch(
   [
     () => activeGraphSelection.value.primaryNodeId,
     () => activeGraphSelection.value.nodeIds.join('\0'),
-    () => currentView.value.projectDiagramId,
+    () => currentView.value?.projectDiagramId,
   ],
   ([primaryNodeId, idsJoined, diagramId]) => {
+    if (!diagramId) return
     applyGraphSelection(
       diagramId,
       primaryNodeId,
@@ -1084,24 +1087,26 @@ const restoreGraphSelection = () => {
 
 watch(
   [
-    () => currentView.value.id,
-    () => currentView.value.kind,
+    () => currentView.value?.id,
+    () => currentView.value?.kind,
     () => activeBodyViewId.value,
     () => graphViewStackRef.value.map((e) => e.id).join('|'),
     () => parallelBodyViews.value.map((s) => s.id).join('|'),
   ],
   () => {
-    syncBodyRendererActivity()
     restoreGraphSelection()
     updateGraphInteractionGate()
   }
 )
 
+const windowStackRendererId = (windowId: string): string | undefined => {
+  const viewId = getWindowTopViewId(windowId)
+  return viewId ? getGraphView(viewId)?.rendererId : undefined
+}
+
 const fitAppWindow = (windowId: string) => {
-  // Stacked hosts (lens / state-links) register under the stack-top view id.
-  // Non-stacked hosts (sm-ring) register under the window id itself.
-  const viewId = getWindowTopViewId(windowId) ?? windowId
-  getDiagramViewApi(viewId)?.fitView?.()
+  const viewId = getWindowTopViewId(windowId)
+  if (viewId) getGraphViewApi(viewId)?.fitView?.()
 }
 
 const debugTiles = ref(false)
@@ -1122,12 +1127,17 @@ const resolveActiveRenderStatsTarget = (): RenderStatsWindowPayload | null => {
   }
 
   const top = currentView.value
+  if (!top) {
+    return hasProject.value
+      ? { source: 'main' as const, sourceId: 'main', label: 'Main' }
+      : null
+  }
   if (top.kind === 'graph-scope' || top.kind === 'state-links') {
     return { source: 'body', sourceId: top.id, label: top.title }
   }
 
-  if (graphRenderer.value || hasProject.value) {
-    return { source: 'main', sourceId: 'main', label: 'Main' }
+  if (top.kind === 'main' || hasProject.value) {
+    return { source: 'main', sourceId: top.id, label: top.title || 'Main' }
   }
   return null
 }
@@ -1136,13 +1146,17 @@ const getRenderStatsForWindow = (win: AppWindowState) => {
   if (win.type !== 'render-stats') return null
   const { source, sourceId } = win.payload
   if (source === 'main') {
-    return getDiagramViewRenderer(MAIN_RENDERER_ID)?.getRenderStats() ?? null
+    return (
+      getGraphViewRenderer(sourceId)?.getRenderStats() ??
+      getActiveDiagramRenderer()?.getRenderStats() ??
+      null
+    )
   }
   if (source === 'window') {
-    const viewId = getWindowTopViewId(sourceId) ?? sourceId
-    return getDiagramViewRenderer(viewId)?.getRenderStats() ?? null
+    const viewId = getWindowTopViewId(sourceId)
+    return viewId ? getGraphViewRenderer(viewId)?.getRenderStats() ?? null : null
   }
-  return getDiagramViewRenderer(sourceId)?.getRenderStats() ?? null
+  return getGraphViewRenderer(sourceId)?.getRenderStats() ?? null
 }
 
 const openRenderStatsForActive = () => {
@@ -1207,25 +1221,77 @@ const simOverlaySnapForDiagram = (diagramId: string) => {
   return snapshot
 }
 
-const applySimOverlayToAllRenderers = () => {
+const applySimOverlayToView = (viewId: string) => {
+  const entry = getGraphView(viewId)
+  if (!entry) return
+  const api = getDiagramViewApi(entry.rendererId)
+  if (!api?.applySimOverlay) return
+  // ready ⇒ plugins attached; skip mid-init siblings during broadcast.
+  if (!api.getRenderer()?.ready) return
   const live = sim.active.value
+  api.applySimOverlay(live ? simOverlaySnapForDiagram(entry.projectDiagramId) : undefined)
+}
 
-  // Soft-suspended Main canvases keep their own diagram snapshot.
-  forEachMainDiagramRenderer((renderer, diagramId) => {
-    renderer.applySimOverlay(live ? simOverlaySnapForDiagram(diagramId) : undefined)
-  })
+const applySimOverlayToAllRenderers = () => {
+  for (const entry of Object.values(graphViews.value)) {
+    applySimOverlayToView(entry.id)
+  }
+}
 
-  forEachDiagramViewRenderer((renderer, viewId) => {
-    // Active Main already painted above via forEachMainDiagramRenderer.
-    if (viewId === MAIN_RENDERER_ID) return
-    const diagramId = diagramIdForViewId(viewId)
-    renderer.applySimOverlay(live ? simOverlaySnapForDiagram(diagramId) : undefined)
+const onBodyViewGraphViewEntryComponentRef = (
+  entry: GraphViewEntry,
+  ref:
+    | IMainDiagramViewContentExposeRef
+    | ILensWindowContentExposeRef
+    | IStateLinksViewContentExposeRef
+    | null
+) => {
+  if (!ref) {
+    registerDiagramView(entry.rendererId, null)
+    clearDiagramViewReady(entry.id)
+    return
+  }
+
+  registerDiagramView(entry.rendererId, {
+    fitView: () => ref.fitView(),
+    presentDefault: () => ref.presentDefault(),
+    getRenderer: () => ref.getRenderer?.() ?? ref.getDiagramRenderer(),
+    focusRenderer: () => ref.focusRenderer?.() ?? ref.focusDiagramRenderer(),
+    applySimOverlay: (snap) => ref.applySimOverlay?.(snap),
   })
 }
 
-const bindWindowDiagramRef = (viewId: string, el: unknown) => {
-  bindDiagramViewRef(viewId, el)
-  if (el) applySimOverlayToAllRenderers()
+const createGraphViewEntryMainDiagramViewContentComponentRefCb = (entry: GraphViewEntry) => {
+  return (ref: any) => {
+    onBodyViewGraphViewEntryComponentRef(entry, isMainDiagramViewContentExposeRef(ref) ? ref : null)
+  }
+}
+
+const createGraphViewEntryLensWindowContentComponentRefCb = (entry: GraphViewEntry) => {
+  return (ref: any) => {
+    onBodyViewGraphViewEntryComponentRef(entry, isLensWindowContentExposeRef(ref) ? ref : null)
+  }
+}
+
+const createGraphViewEntryStateLinksViewContentComponentRefCb = (entry: GraphViewEntry) => {
+  return (ref: any) => {
+    onBodyViewGraphViewEntryComponentRef(entry, isStateLinksViewContentExposeRef(ref) ? ref : null)
+  }
+}
+
+const createStateMachineRingWindowContentComponentRefCb = (rendererId: string) => {
+  return (ref: any) => {
+    if (!ref) {
+      registerDiagramView(rendererId, null)
+      return
+    }
+    if (!isStateMachineRingWindowContentExposeRef(ref)) return
+
+    registerDiagramView(rendererId, {
+      fitView: () => ref.fitView(),
+      getRenderer: () => null,
+    })
+  }
 }
 
 watch(
@@ -1283,7 +1349,7 @@ const {
     tools: hasProject.value && panelTool.value != null,
     details: hasProject.value,
   }),
-  chromeBarVisible: () => currentView.value.kind !== 'main',
+  chromeBarVisible: () => currentView.value?.kind !== 'main',
   fillSinglePanel: () => selectedNodeRef.value != null,
 })
 const PRESENT_SIDEBAR_GAP = 12
@@ -1311,7 +1377,7 @@ const nodeDetailsTitle = computed(() => {
 const sidebarGraphViewChrome = computed(() => {
   const body = activeBodyView.value
   const top = currentView.value
-  if (top.kind === 'main') return null
+  if (!body || !top || top.kind === 'main') return null
   return {
     bodyId: body.id,
     closable: body.closable,
@@ -1351,14 +1417,10 @@ const updateGraphInteractionGate = () => {
     }
     return true
   }
-  graphRenderer.value?.setInteractionGate(gate)
   const active = getActiveDiagramRenderer()
   const allowPinDrag = !isStateLinksRootViewFocused()
-  graphRenderer.value?.setAllowPinDrag(allowPinDrag)
-  if (active && active !== graphRenderer.value) {
-    active.setInteractionGate(gate)
-    active.setAllowPinDrag(allowPinDrag)
-  }
+  active?.setInteractionGate(gate)
+  active?.setAllowPinDrag(allowPinDrag)
 }
 
 watch(diagramHotkeyFocus, () => {
@@ -1786,11 +1848,6 @@ const applyNodePosition = () => {
   moveSelectedNodeByDelta(requireActiveDiagramId(), positionDelta.x, positionDelta.y)
 }
 
-// Setup canvas controls (zoom, pan)
-const setupCanvasControls = (_canvas: HTMLDivElement, _renderer: PixiGraphRenderer) => {
-  // PixiGraphRenderer handles pan, zoom, and node selection on its canvas
-}
-
 bindMoveResizeSession({
   graphCanvas,
   updateGraphInteractionGate,
@@ -1824,9 +1881,9 @@ setSelectionClearedHandler(() => {
 const closeParallelBodiesScopedToDeleted = (deletedIds: ReadonlySet<string>) => {
   const toClose = parallelBodyViews.value
     .filter((body) => {
-      const top = bodyViewTop(body)
+      const top = resolveBodyViewTop(body)
       const scopeRootId =
-        top.kind === 'graph-scope' ? top.payload.scopeRootId : undefined
+        top?.kind === 'graph-scope' ? top.payload.scopeRootId : undefined
       return typeof scopeRootId === 'string' && deletedIds.has(scopeRootId)
     })
     .map((body) => body.id)
@@ -1900,18 +1957,6 @@ setupNodeDetailsContext({
 
 bindGraphDocument({
   directChildrenLayoutMode,
-  updateGraphInteractionGate,
-  setupCanvasControls,
-  updateDebugSettings,
-  updateConnectionSettings,
-  handleMainGraphNodeSelect,
-  openLensForNode: (node, host) => openLensForNode(resolveMainDiagramId(), node, host),
-  handlePinConnect: (payload) => handlePinConnect(resolveMainDiagramId(), payload),
-  handlePinRewire: (payload) => handlePinRewire(resolveMainDiagramId(), payload),
-  handleConnectionDragBegin: notifyConnectionDragBegin,
-  handleConnectionDragEnd: notifyConnectionDragEnd,
-  simReset: sim.reset,
-  simRebind: sim.rebind,
   getCachedClipPoseCompactText: sim.getCachedClipPoseCompactText,
   getProjectSimResources: simGetProjectSimResources,
   applyProjectSimResources: simApplyProjectSimResources,

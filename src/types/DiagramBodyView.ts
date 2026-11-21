@@ -1,21 +1,18 @@
-import type { DiagramStack, GraphViewEntry, GraphViewKind } from './GraphView'
+import type { GraphViewKind } from './GraphView'
 
 /**
- * Body surface shapes. Extend this map to add surface variants.
- * Placement is implied: these always live in the main body / taskbar.
+ * Body surface chrome only. Hosted content ids live in bodyContent (parallel map).
  */
 export interface DiagramBodySurfaceMap {
   stackable: {
     closable: boolean
     preview: boolean
     minimized: boolean
-    stack: DiagramStack
   }
   flat: {
     closable: boolean
     preview: boolean
     minimized: boolean
-    view: GraphViewEntry
   }
 }
 
@@ -34,6 +31,7 @@ export type FlatBodyView = Extract<DiagramBodyView, { surface: 'flat' }>
 
 export type OpenParallelBodyOptions = {
   preview?: boolean
+  surface: DiagramBodySurface
 }
 
 /** View kinds that should open as a stackable body surface. */
@@ -53,33 +51,4 @@ export function isStackableBodyView(view: DiagramBodyView): view is StackableBod
 
 export function isFlatBodyView(view: DiagramBodyView): view is FlatBodyView {
   return view.surface === 'flat'
-}
-
-export function bodyViewRoot(view: DiagramBodyView): GraphViewEntry {
-  return isStackableBodyView(view) ? view.stack.entries[0]! : view.view
-}
-
-export function bodyViewTop(view: DiagramBodyView): GraphViewEntry {
-  if (isStackableBodyView(view)) {
-    return view.stack.entries[view.stack.entries.length - 1]!
-  }
-  return view.view
-}
-
-export function bodyViewEntries(view: DiagramBodyView): GraphViewEntry[] {
-  return isStackableBodyView(view) ? view.stack.entries : [view.view]
-}
-
-/** Stack layers above `main` (lenses / state-links / sm-ring). */
-export function bodyOverlayEntries(view: DiagramBodyView): GraphViewEntry[] {
-  return bodyViewEntries(view).filter((entry) => entry.kind !== 'main')
-}
-
-export function bodyViewBreadcrumbs(view: DiagramBodyView) {
-  return bodyViewEntries(view).map((entry, index) => ({
-    index,
-    id: entry.id,
-    crumb: entry.crumb,
-    kind: entry.kind,
-  }))
 }

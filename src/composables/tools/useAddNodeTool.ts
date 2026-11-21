@@ -5,7 +5,7 @@ import {
   formatAddNodeDenial,
   formatDiagramAddPlace,
 } from '../../components/tools/addNodeCopy'
-import { getActiveGraphView } from '../../stores/activeGraphView'
+import { currentView } from '../../stores/activeGraphView'
 import { getActiveRenderData } from '../../stores/graphProject'
 import { selectedNodeRef } from '../../stores/graphSession'
 import { addNodeToolCache } from '../../stores/tools'
@@ -22,7 +22,7 @@ export function useAddNodeTool() {
       handlesRegistry: (gd?.handlesRegistry ?? new Map()) as Map<string, AnimgraphNode>,
       allNodes: gd?.allNodes,
     }
-    const activeView = getActiveGraphView() as DiagramAddActiveView | null
+    const activeView = currentView.value as DiagramAddActiveView | null
     const listed = listAddableTypesForSelection(
       selectedNodeRef.value,
       ctx,

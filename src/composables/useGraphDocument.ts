@@ -1,6 +1,7 @@
 /**
- * Graph document façade: load/save/export IO + main diagram mount bind.
+ * Graph document façade: load/save/export IO.
  * IO implementation lives in stores/graphDocumentIo.
+ * Pixi surfaces are owned by body/window view content components.
  */
 import {
   bindGraphDocumentIo,
@@ -28,17 +29,7 @@ import {
   showWelcomeOpen,
   type GraphDocumentIoHost,
 } from '../stores/graphDocumentIo'
-import {
-  bindMainDiagramMount,
-  bindDiagramCanvasEl,
-  getDiagramCanvasEl,
-  diagramViewReadyRef,
-  remountProject,
-  softActivateDiagram,
-  syncDiagramReadyFromCanvas,
-  teardownProjectView,
-  type MainDiagramMountHost,
-} from './useMainDiagramMount'
+import { diagramViewReadyRef } from '../stores/diagramViewReady'
 import {
   presentActiveDiagram,
   presentAddedDiagram,
@@ -92,23 +83,16 @@ export {
 
 export {
   diagramViewReadyRef,
-  remountProject,
-  softActivateDiagram,
-  teardownProjectView,
-  bindDiagramCanvasEl,
-  getDiagramCanvasEl,
-  syncDiagramReadyFromCanvas,
   presentActiveDiagram,
   presentAddedDiagram,
   presentClosedProject,
   presentReplacedProject,
 }
 
-export type GraphDocumentHost = MainDiagramMountHost & GraphDocumentIoHost
+export type GraphDocumentHost = GraphDocumentIoHost
 
 export function bindGraphDocument(next: GraphDocumentHost) {
   bindGraphDocumentIo(next)
-  bindMainDiagramMount(next)
 }
 
 export function useGraphDocument() {
@@ -117,10 +101,7 @@ export function useGraphDocument() {
     diagramViewReadyRef,
     fileSize,
     processFile,
-    remountProject,
-    softActivateDiagram,
     presentActiveDiagram,
-    bindDiagramCanvasEl,
     loadSampleData,
     exportGraph,
     exportProject,
@@ -140,6 +121,5 @@ export function useGraphDocument() {
     formatFileSize,
     saveCurrentGraph,
     handleSaveAs,
-    syncDiagramReadyFromCanvas,
   }
 }
