@@ -1,6 +1,7 @@
 import type { AnimgraphNode } from '../animgraphTypes'
 import type { RenderData } from '../diagramTypes'
 import { NodeDefinitionRegistry } from '../../NodeDefinition'
+import { getProjectedInputHandler } from '../../projection'
 import { resolveHandle } from '../../sim/simDataUtils'
 import {
   getExecutionPreferredSinkType,
@@ -22,7 +23,7 @@ function forEachLinkedInput(
   const t = handleType(node)
   if (!t) return
   for (const pinName of NodeDefinitionRegistry.getInputFields(t)) {
-    const handler = NodeDefinitionRegistry.getNodeInputHandler(t, pinName)
+    const handler = getProjectedInputHandler(t, pinName)
     const count = handler.count(node)
     for (let i = 0; i < count; i++) {
       visit(resolveHandle(handles, handler.get(node, i)))

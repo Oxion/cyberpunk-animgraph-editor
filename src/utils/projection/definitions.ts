@@ -72,7 +72,7 @@ export const PROJECTION_DEFINITIONS: Record<string, ProjectionDef> = {
   animAdditionalTransformEntry: EMBEDDED,
 
   animAnimNode_AimConstraint: {
-    fields: { 
+    fields: {
       upTransform: 'embed',
       targetTransforms: 'pin',
     },

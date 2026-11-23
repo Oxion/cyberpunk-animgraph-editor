@@ -3,7 +3,7 @@ import { getConnectionKey } from '../diagramModel'
 import { DIAGRAM_CONNECTION_TYPE_INPUT } from '../diagramConnectionTypes'
 import { bridgePortalHostId, collectPortalChainForCrossView, invalidateCrossViewPortalPinIndex, isPortalHopConnection } from '../portalTopology'
 import { ensureCrossViewPortalChain, findStateMachineDiagramRootAncestor, isDiagramPortalNode } from '../DiagramConversion'
-import { runContainMemberPromote } from '../animgraphContainOwner'
+import { findDiagramBoxForHandle } from '../animgraphContainOwner'
 import {
   clearHandleRef,
   deleteHandles,
@@ -52,7 +52,8 @@ function clearPin(
   ownerHandleId: string,
   _ownerType: string,
   inputName: string,
-  index: number
+  index: number,
+  result?: PinWireApplyResult
 ): { lengthChanged: boolean; linkCleared: boolean } {
   const cleared = clearHandleRef(
     mutationCtxFromRenderData(renderData),
@@ -60,6 +61,10 @@ function clearPin(
     inputName,
     index
   )
+  if (result && cleared.containOwnerId) {
+    const box = findDiagramBoxForHandle(renderData, cleared.containOwnerId)
+    markFootprintDirty(result, box?.id ?? cleared.containOwnerId)
+  }
   return {
     lengthChanged: cleared.lengthChanged,
     linkCleared: cleared.linkCleared,
@@ -79,15 +84,20 @@ function wireHandleRef(
   _ownerType: string,
   inputName: string,
   index: number,
-  fromHandleId: string
+  fromHandleId: string,
+  result: PinWireApplyResult
 ): void {
-  setHandleRef(
+  const { containOwnerId } = setHandleRef(
     mutationCtxFromRenderData(renderData),
     ownerHandleId,
     inputName,
     index,
     fromHandleId
   )
+  if (containOwnerId) {
+    const box = findDiagramBoxForHandle(renderData, containOwnerId)
+    markFootprintDirty(result, box?.id ?? containOwnerId)
+  }
 }
 
 function wireInlineEmbed(
@@ -128,17 +138,13 @@ function wireInlineEmbed(
 }
 
 /**
- * After a shared/exclusive wire:
- * - contain membership (State.nodes / …) — diagram ancestry, always
- * - floating mark — clear on attach (outbound pin / contain); no reachability gate
+ * After a shared/exclusive wire: clear floating mark on source.
+ * Contain membership is animgraph side-effect of setHandleRef.
  */
 function afterSharedExclusiveWire(
   renderData: RenderData,
-  fromHandleId: string,
-  result: PinWireApplyResult
+  fromHandleId: string
 ): void {
-  const ownerDiagramId = runContainMemberPromote(renderData, fromHandleId)
-  markFootprintDirty(result, ownerDiagramId)
   promoteFloatingHandle(renderData, fromHandleId)
 }
 
@@ -229,7 +235,8 @@ export function applyDisconnectPlan(
       ownerHandleId,
       ownerType,
       inputName,
-      inputIndex
+      inputIndex,
+      result
     )
     if (pinClear.lengthChanged || pinClear.linkCleared) {
       markFootprintDirty(result, logicalTo?.id)
@@ -468,7 +475,8 @@ export function applyConnectPlan(
       ownerType,
       inputName,
       index,
-      fromHandleId
+      fromHandleId,
+      result
     )
   }
 
@@ -482,7 +490,7 @@ export function applyConnectPlan(
   pushConnection(renderData, newConnection)
 
   if (wireKind === 'sharedRef' || wireKind === 'exclusiveRef') {
-    afterSharedExclusiveWire(renderData, fromHandleId, result)
+    afterSharedExclusiveWire(renderData, fromHandleId)
   }
 
   if (wasAppend) {

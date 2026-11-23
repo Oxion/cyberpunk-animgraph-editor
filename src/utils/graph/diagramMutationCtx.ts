@@ -4,6 +4,7 @@
  */
 
 import type { AnimgraphMutationCtx } from './animgraphMutation'
+import { resolveContainOwnerForMember } from './animgraphContainOwner'
 import type { RenderData } from './diagramTypes'
 
 export function mutationCtxFromRenderData(
@@ -12,5 +13,9 @@ export function mutationCtxFromRenderData(
   return {
     handlesRegistry: renderData.handlesRegistry,
     animgraph: renderData.originalAnimgraph,
+    resolveContainOwner: (memberId) => {
+      const o = resolveContainOwnerForMember(renderData, memberId)
+      return o ? { ownerId: o.ownerHandleId, slot: o.slotName } : null
+    },
   }
 }

@@ -1,17 +1,23 @@
 /**
  * Animgraph HandleRef CRUD + topology consistency.
- * Projection/handlers choose write shape at call sites; this layer does not.
+ * Gated contain/pin writes; pin storage addressing is internal.
+ * Projection NodeInputHandler adapters call into these APIs.
  */
 
 import { NodeDefinitionRegistry } from '../../NodeDefinition'
+import { isAnimType } from '../../animTypes'
 import type { AnimgraphNode, AnimgraphObject } from '../animgraphTypes'
 import type { AnimgraphMutationCtx } from './ctx'
 import { afterHandleRefRemoved } from './consistency'
+import { hasMembershipSlot } from './containPromote'
 import { applyOwnerFieldEffects } from './fieldEffects'
+import { resolvePinStorage } from './pinStorage'
+import { isExecutionInitAnchor } from '../executionCore/resolve'
 import {
   asHandleRef,
   collectHandleDataRefs,
   collectHandleFieldRefs,
+  countInboundPinHandleRefs,
   handleRefIdOf,
   isHandleRef,
   rewriteHandleRefIds,
@@ -103,11 +109,111 @@ export type AddHandleRefsResult = {
   added: string[]
 }
 
+function assertContainField(
+  owner: AnimgraphNode,
+  field: string
+): { ok: true; parentType: string } | { ok: false; message: string } {
+  const parentType = ownerTypeOf(owner)
+  if (!parentType) {
+    return { ok: false, message: 'Owner handle has no $type' }
+  }
+  if (!NodeDefinitionRegistry.isChildField(parentType, field)) {
+    return {
+      ok: false,
+      message: `${parentType}.${field} is not a contain field`,
+    }
+  }
+  return { ok: true, parentType }
+}
+
+function assertMemberTypesAllowed(
+  parentType: string,
+  field: string,
+  memberIds: readonly string[],
+  ctx: AnimgraphMutationCtx
+): { ok: true } | { ok: false; message: string } {
+  const slot = NodeDefinitionRegistry.getChildSlot(
+    NodeDefinitionRegistry.getNodeDefinition(parentType),
+    field,
+    parentType
+  )
+  if (!slot?.allowedTypes?.length) return { ok: true }
+  for (const memberId of memberIds) {
+    const member = ctx.handlesRegistry.get(memberId)
+    const memberType = String(member?.Data?.$type ?? '')
+    if (!memberType) {
+      return { ok: false, message: `Member '${memberId}' has no $type` }
+    }
+    if (!slot.allowedTypes.some((base) => isAnimType(memberType, base))) {
+      return {
+        ok: false,
+        message: `${memberType} not allowed in ${parentType}.${field}`,
+      }
+    }
+  }
+  return { ok: true }
+}
+
 /**
- * Batch-add HandleRefs on owner.Data[field] (array push / scalar set).
+ * Resolve contain owner → addContainRefs.
+ * @returns owner handle id, or null if no resolver / no owner / gate fail.
+ */
+export function promoteContainMembership(
+  ctx: AnimgraphMutationCtx,
+  memberId: string
+): string | null {
+  const resolve = ctx.resolveContainOwner
+  if (!resolve) return null
+
+  const owner = resolve(memberId)
+  if (!owner) return null
+
+  const ownerHandle = ctx.handlesRegistry.get(owner.ownerId)
+  const parentType = String(ownerHandle?.Data?.$type ?? '')
+  if (!parentType || !hasMembershipSlot(parentType, owner.slot)) return null
+
+  const result = addContainRefs(ctx, owner.ownerId, owner.slot, [memberId])
+  return result.ok ? owner.ownerId : null
+}
+
+/**
+ * If member has no remaining pin inbound uses, remove membership contain.
+ * Skips execution init anchors (e.g. State Output that must stay in nodes).
+ * @returns owner handle id when membership was removed.
+ */
+export function demoteContainMembership(
+  ctx: AnimgraphMutationCtx,
+  memberId: string
+): string | null {
+  if (!memberId) return null
+  const member = ctx.handlesRegistry.get(memberId)
+  const memberType = String(member?.Data?.$type ?? '')
+  if (memberType && isExecutionInitAnchor(memberType)) return null
+  if (countInboundPinHandleRefs(ctx, memberId) > 0) return null
+
+  const resolve = ctx.resolveContainOwner
+  if (!resolve) return null
+  const owner = resolve(memberId)
+  if (!owner) return null
+
+  const ownerHandle = ctx.handlesRegistry.get(owner.ownerId)
+  const parentType = String(ownerHandle?.Data?.$type ?? '')
+  if (!parentType || !hasMembershipSlot(parentType, owner.slot)) return null
+
+  const { removed } = removeContainRefs(
+    ctx,
+    owner.ownerId,
+    owner.slot,
+    [memberId]
+  )
+  return removed.length > 0 ? owner.ownerId : null
+}
+
+/**
+ * Batch-add HandleRefs on a contain field (array push / scalar set).
  * Floating clear is diagram-layer (caller).
  */
-export function addHandleRefs(
+export function addContainRefs(
   ctx: AnimgraphMutationCtx,
   ownerId: string,
   field: string,
@@ -117,6 +223,12 @@ export function addHandleRefs(
   if (!owner?.Data) {
     return { ok: false, message: 'Owner handle has no Data', added: [] }
   }
+  const gate = assertContainField(owner, field)
+  if (!gate.ok) return { ok: false, message: gate.message, added: [] }
+
+  const typesOk = assertMemberTypesAllowed(gate.parentType, field, memberIds, ctx)
+  if (!typesOk.ok) return { ok: false, message: typesOk.message, added: [] }
+
   const kind = resolveArrayOrScalar(owner, field)
   const added: string[] = []
 
@@ -168,16 +280,19 @@ export function addHandleRefs(
   return { ok: true, added }
 }
 
+/** @deprecated Use addContainRefs */
+export const addHandleRefs = addContainRefs
+
 export type RemoveHandleRefsResult = {
   removed: string[]
   orphaned: string[]
 }
 
 /**
- * Batch-remove HandleRefs from owner.Data[field].
+ * Batch-remove HandleRefs from a contain field.
  * Orphaned = removed members with zero outbound / not contained / not root.
  */
-export function removeHandleRefs(
+export function removeContainRefs(
   ctx: AnimgraphMutationCtx,
   ownerId: string,
   field: string,
@@ -185,6 +300,8 @@ export function removeHandleRefs(
 ): RemoveHandleRefsResult {
   const owner = ctx.handlesRegistry.get(ownerId)
   if (!owner?.Data) return { removed: [], orphaned: [] }
+  if (!assertContainField(owner, field).ok) return { removed: [], orphaned: [] }
+
   const want = new Set(memberIds)
   if (want.size === 0) return { removed: [], orphaned: [] }
 
@@ -224,7 +341,10 @@ export function removeHandleRefs(
   return { removed, orphaned }
 }
 
-function extractRefFromHandlerValue(value: unknown): string | null {
+/** @deprecated Use removeContainRefs */
+export const removeHandleRefs = removeContainRefs
+
+function extractRefFromStorageValue(value: unknown): string | null {
   if (value == null) return null
   if (typeof value === 'object' && value && 'node' in value) {
     return handleRefIdOf((value as { node: unknown }).node)
@@ -232,13 +352,17 @@ function extractRefFromHandlerValue(value: unknown): string | null {
   return handleRefIdOf(value)
 }
 
-function pinHandler(owner: AnimgraphNode, field: string) {
+function pinStorageFor(
+  owner: AnimgraphNode,
+  field: string
+): ReturnType<typeof resolvePinStorage> {
   const ownerType = ownerTypeOf(owner)
   if (!ownerType) return null
-  return NodeDefinitionRegistry.getNodeInputHandler(ownerType, field)
+  if (!NodeDefinitionRegistry.isInputField(ownerType, field)) return null
+  return resolvePinStorage(ownerType, field)
 }
 
-/** Read pin-array / nested-slot length (handler stays inside the facade). */
+/** Read pin-array / nested-slot length. */
 export function countPinSlots(
   ctx: AnimgraphMutationCtx,
   ownerId: string,
@@ -246,9 +370,9 @@ export function countPinSlots(
 ): number {
   const owner = ctx.handlesRegistry.get(ownerId)
   if (!owner?.Data) return 0
-  const handler = pinHandler(owner, field)
-  if (!handler) return 0
-  return handler.count(owner)
+  const storage = pinStorageFor(owner, field)
+  if (!storage) return 0
+  return storage.count(owner)
 }
 
 /** Read one pin slot value (HandleRef / link / inline). */
@@ -260,14 +384,14 @@ export function getPinSlot(
 ): unknown {
   const owner = ctx.handlesRegistry.get(ownerId)
   if (!owner?.Data) return null
-  const handler = pinHandler(owner, field)
-  if (!handler) return null
-  return handler.get(owner, index)
+  const storage = pinStorageFor(owner, field)
+  if (!storage) return null
+  return storage.get(owner, index)
 }
 
 /**
- * Write arbitrary pin-slot value via input handler (inline embed Data, etc.).
- * Reconciles HandleRefs when previous/next values are refs.
+ * Write pin-slot value (HandleRef or inline embed Data).
+ * Reconciles refs; when value is a HandleRef, promoteContainMembership(nextId).
  */
 export function setPinSlot(
   ctx: AnimgraphMutationCtx,
@@ -275,23 +399,28 @@ export function setPinSlot(
   field: string,
   index: number,
   value: unknown
-): { previousId: string | null } {
+): { previousId: string | null; containOwnerId: string | null } {
   const owner = ctx.handlesRegistry.get(ownerId)
-  if (!owner?.Data) return { previousId: null }
-  const handler = pinHandler(owner, field)
-  if (!handler) return { previousId: null }
+  if (!owner?.Data) return { previousId: null, containOwnerId: null }
+  const storage = pinStorageFor(owner, field)
+  if (!storage) return { previousId: null, containOwnerId: null }
 
-  const previousId = extractRefFromHandlerValue(handler.get(owner, index))
-  handler.set(owner, value, index)
-  const nextId = extractRefFromHandlerValue(value)
+  const previousId = extractRefFromStorageValue(storage.get(owner, index))
+  storage.set(owner, value, index)
+  const nextId = extractRefFromStorageValue(value)
 
-  if (previousId && previousId !== nextId) afterHandleRefRemoved(ctx, previousId)
+  let demotedOwnerId: string | null = null
+  if (previousId && previousId !== nextId) {
+    afterHandleRefRemoved(ctx, previousId)
+    demotedOwnerId = demoteContainMembership(ctx, previousId)
+  }
   applyOwnerFieldEffects(ctx, ownerId, [field])
-  return { previousId }
+  const promotedOwnerId = nextId ? promoteContainMembership(ctx, nextId) : null
+  return { previousId, containOwnerId: promotedOwnerId ?? demotedOwnerId }
 }
 
 /**
- * Indexed / scalar pin-shaped HandleRef write via input handler slot shape.
+ * Indexed / scalar pin HandleRef write — delegates to setPinSlot.
  */
 export function setHandleRef(
   ctx: AnimgraphMutationCtx,
@@ -299,20 +428,8 @@ export function setHandleRef(
   field: string,
   index: number,
   targetId: string
-): { previousId: string | null } {
-  const owner = ctx.handlesRegistry.get(ownerId)
-  if (!owner?.Data) return { previousId: null }
-  const handler = pinHandler(owner, field)
-  if (!handler) return { previousId: null }
-
-  const previousId = extractRefFromHandlerValue(handler.get(owner, index))
-  handler.set(owner, { HandleRefId: targetId }, index)
-
-  if (previousId && previousId !== targetId) {
-    afterHandleRefRemoved(ctx, previousId)
-  }
-  applyOwnerFieldEffects(ctx, ownerId, [field])
-  return { previousId }
+): { previousId: string | null; containOwnerId: string | null } {
+  return setPinSlot(ctx, ownerId, field, index, { HandleRefId: targetId })
 }
 
 /**
@@ -323,38 +440,57 @@ export function clearHandleRef(
   ownerId: string,
   field: string,
   index: number
-): { previousId: string | null; lengthChanged: boolean; linkCleared: boolean } {
+): {
+  previousId: string | null
+  lengthChanged: boolean
+  linkCleared: boolean
+  containOwnerId: string | null
+} {
   const ownerAnimgraphNode = ctx.handlesRegistry.get(ownerId)
   if (!ownerAnimgraphNode?.Data) {
-    return { previousId: null, lengthChanged: false, linkCleared: false }
+    return {
+      previousId: null,
+      lengthChanged: false,
+      linkCleared: false,
+      containOwnerId: null,
+    }
   }
 
-  const handler = pinHandler(ownerAnimgraphNode, field)
-  if (!handler) {
-    return { previousId: null, lengthChanged: false, linkCleared: false }
+  const storage = pinStorageFor(ownerAnimgraphNode, field)
+  if (!storage) {
+    return {
+      previousId: null,
+      lengthChanged: false,
+      linkCleared: false,
+      containOwnerId: null,
+    }
   }
-  const previousId = extractRefFromHandlerValue(
-    handler.get(ownerAnimgraphNode, index)
+  const previousId = extractRefFromStorageValue(
+    storage.get(ownerAnimgraphNode, index)
   )
-  // Nested pins live under projection paths — never assume Data[field] is the array.
-  const beforeLen = handler.count(ownerAnimgraphNode)
+  const beforeLen = storage.count(ownerAnimgraphNode)
 
   let linkCleared = false
-  if (handler.clearLink) {
-    linkCleared = handler.clearLink(ownerAnimgraphNode, index)
+  if (storage.clearLink) {
+    linkCleared = storage.clearLink(ownerAnimgraphNode, index)
   } else {
-    handler.delete(ownerAnimgraphNode, index)
+    storage.delete(ownerAnimgraphNode, index)
   }
 
-  const afterLen = handler.count(ownerAnimgraphNode)
+  const afterLen = storage.count(ownerAnimgraphNode)
 
-  if (previousId) afterHandleRefRemoved(ctx, previousId)
+  let containOwnerId: string | null = null
+  if (previousId) {
+    afterHandleRefRemoved(ctx, previousId)
+    containOwnerId = demoteContainMembership(ctx, previousId)
+  }
   applyOwnerFieldEffects(ctx, ownerId, [field])
 
   return {
     previousId,
     lengthChanged: beforeLen !== afterLen,
     linkCleared,
+    containOwnerId,
   }
 }
 
@@ -401,7 +537,7 @@ export function renameHandle(
 /**
  * In-place Data mutation under known root keys.
  * Diffs outbound HandleRefs in those fields, then runs field effects.
- * Prefer typed topology APIs (setHandleRef / addHandleRefs / …) when writing refs by shape.
+ * Prefer typed topology APIs (setHandleRef / addContainRefs / …) when writing refs by shape.
  */
 export function mutateHandleData(
   ctx: AnimgraphMutationCtx,

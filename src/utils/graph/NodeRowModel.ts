@@ -6,6 +6,7 @@
 import type { AnimgraphNode } from './animgraphTypes'
 import type { RenderData, RenderNode } from './diagramTypes'
 import { NodeDefinitionRegistry } from '../NodeDefinition'
+import { getProjectedInputHandler } from '../projection'
 import { getInputPinColor, resolvePinColorFromType } from './pinTyping/resolvePinColor'
 import {
   PROPERTY_ROW_BODY_TOP,
@@ -356,7 +357,7 @@ function getInputSlotCount(
 ): number {
   if (!handle) return 1
   const type = handle.Data?.$type ?? nodeType
-  const handler = NodeDefinitionRegistry.getNodeInputHandler(type, inputName)
+  const handler = getProjectedInputHandler(type, inputName)
   try {
     return Math.max(handler.count(handle), 1)
   } catch {

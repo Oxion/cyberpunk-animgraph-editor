@@ -26,12 +26,6 @@ export function isHandleReachableFromRoot(
   )
 }
 
-/** @deprecated Use collectHandlesReachableFromRoot */
-export const collectReachableHandleIds = collectHandlesReachableFromRoot
-
-/** @deprecated Use isHandleReachableFromRoot */
-export const isHandleReachableFromNodesToInit = isHandleReachableFromRoot
-
 /** After wiring: is consumer on the root tree (inline embed graduate)? */
 export function isConsumerReachable(
   renderData: RenderData,

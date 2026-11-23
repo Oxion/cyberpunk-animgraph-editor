@@ -8,10 +8,15 @@ import {
   isRefFieldType,
   isWrefFieldType,
 } from './animFieldSchema'
-import type { FieldConstraint, NodeChildHandler, NodeInputHandler } from './animNodes'
+import type { FieldConstraint, NodeChildHandler } from './animNodes'
 import { childHandlerForOrder } from './animNodes'
-import { getProjectedContainFieldNames, getProjectedInputHandler, getProjectedPinNames, isProjectedEmbedded, isProjectedInitNode } from './projection'
 import { NODE_DEFINITION_ENTRIES } from './animNodes/catalog'
+import {
+  getProjectedContainFieldNames,
+  getProjectedPinNames,
+  isProjectedEmbedded,
+  isProjectedInitNode,
+} from './projection'
 
 export type {
   AnimFieldDef,
@@ -42,16 +47,16 @@ export {
   generateArrayElementValue,
 } from './animFieldSchema'
 
-export type { FieldConstraint, NodeChildHandler, NodeInputHandler } from './animNodes'
+export type { FieldConstraint, NodeChildHandler } from './animNodes'
 
 /**
  * Node-layer catalog extras: constraints, templates, parent-slot rules.
- * Pin vs contain lives in projection.
+ * Pin vs contain field lists: projection (animNodes has no pin concept).
  */
 export interface NodeDefinition {
   /**
    * Per-field catalog rules: contain invariants and inspector editor overlays.
-   * Not the child-slot list — slots come from projection contain.
+   * Not the child-slot list — slots come from projection contain role.
    */
   fieldConstraints?: Record<string, FieldConstraint>
   /**
@@ -196,14 +201,14 @@ export class NodeDefinitionRegistry {
   }
 
   /**
-   * Diagram contain fields: projection role `contain` (default: type `ref`).
+   * Contain fields: projection role `contain` (default: type `ref`).
    */
   static getChildFields(nodeType: string): string[] {
     return getProjectedContainFieldNames(nodeType)
   }
 
   /**
-   * Diagram pin names: projection role `pin` + extraPins (default: link / wref).
+   * Pin names: projection role `pin` + extraPins (default: link / wref).
    */
   static getInputFields(nodeType: string): string[] {
     return getProjectedPinNames(nodeType)
@@ -246,10 +251,6 @@ export class NodeDefinitionRegistry {
    */
   static addNodeDefinition(nodeType: string, definition: NodeDefinition): void {
     this.nodeDefinitions.set(nodeType, definition)
-  }
-
-  static getNodeInputHandler(nodeType: string, inputName: string): NodeInputHandler {
-    return getProjectedInputHandler(nodeType, inputName)
   }
 
   static getHandleTypeChildrenHandler(nodeType: string, childrenPropName: string): NodeChildHandler | undefined {

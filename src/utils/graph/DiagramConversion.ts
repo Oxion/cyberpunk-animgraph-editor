@@ -1,7 +1,10 @@
 import { isArrayFieldType } from '../animFieldSchema'
 import { NodeDefinitionRegistry, resolveAnimFields } from '../NodeDefinition'
-import type { NestedPinSpec } from '../projection'
-import { getProjectionDef } from '../projection'
+import {
+  getProjectedInputHandler,
+  listExtraPins,
+  type NestedPinSpec,
+} from '../projection'
 import type { AnimgraphNode } from './animgraphTypes'
 import { ANIM_NODE_STATE_TYPE_SET } from './animNodeStateTypes'
 import {
@@ -632,7 +635,7 @@ export function getTypedDataPropertyRows(
 }
 
 function nestedExtraPinsUnderField(typeName: string, fieldKey: string): readonly NestedPinSpec[] {
-  return (getProjectionDef(typeName)?.extraPins ?? []).filter((p) => p.path[0] === fieldKey)
+  return listExtraPins(typeName).filter((p) => p.path[0] === fieldKey)
 }
 
 /** Property rows for an extraPin: intermediate path segments as headers, leaf as pin. */
@@ -657,7 +660,7 @@ function nestedExtraPinPropertyRows(
   const leafIndent = '  '.repeat(leafDepth)
   const leafLabel = path[path.length - 1] ?? spec.name
 
-  const handler = NodeDefinitionRegistry.getNodeInputHandler(ownerType, spec.name)
+  const handler = getProjectedInputHandler(ownerType, spec.name)
   let count = 1
   let linked: unknown = null
   if (handle) {

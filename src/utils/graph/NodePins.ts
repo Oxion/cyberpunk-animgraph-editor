@@ -3,6 +3,7 @@ import type { RenderData, RenderNode } from './diagramTypes'
 import { mutateHandleData } from './animgraphMutation'
 import { mutationCtxFromRenderData } from './diagramMutationCtx'
 import { NodeDefinitionRegistry } from '../NodeDefinition'
+import { getProjectedInputHandler } from '../projection'
 import { createBlankInputArraySlot } from './pinArrayTemplates'
 import {
   isDiagramOverviewLeaf,
@@ -91,7 +92,7 @@ function getInputSlotCount(
 ): number {
   if (!handle) return 1
   const type = handle.Data?.$type ?? nodeType
-  const handler = NodeDefinitionRegistry.getNodeInputHandler(type, inputName)
+  const handler = getProjectedInputHandler(type, inputName)
   try {
     // At least one pin so empty inputs stay wireable; handler.count drives real slots
     // (critical for MathExpression* where sockets live under expressionData).

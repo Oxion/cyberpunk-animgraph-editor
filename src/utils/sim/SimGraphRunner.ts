@@ -5,6 +5,7 @@ import { ANIM_NODE_TYPE_STATE_MACHINE } from '../graph/animNodeTypes'
 import type { RenderData } from '../graph/diagramTypes'
 import { InstanceStore } from '../InstanceStore'
 import { NodeDefinitionRegistry } from '../NodeDefinition'
+import { getProjectedInputHandler } from '../projection'
 import { TypedStore } from '../TypedStore'
 import {
   readAnimDatabaseDepotPath,
@@ -843,7 +844,7 @@ function forEachLinkedInput(
   const t = handleType(node)
   if (!t) return
   for (const pinName of NodeDefinitionRegistry.getInputFields(t)) {
-    const handler = NodeDefinitionRegistry.getNodeInputHandler(t, pinName)
+    const handler = getProjectedInputHandler(t, pinName)
     const n = handler.count(node)
     for (let i = 0; i < n; i++) {
       visit(resolveHandle(handles, handler.get(node, i)))

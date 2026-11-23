@@ -2,7 +2,7 @@
  * Pin-array + handle field history ops (Details panel).
  * UI wiring stays in useNodeDetailsContext.
  */
-import { getProjectionDef } from '../utils/projection/resolve'
+import { getExtraPinByName } from '../utils/projection'
 import type { AnimgraphMutationCtx } from '../utils/graph/animgraphMutation'
 import {
   clearHandleRef,
@@ -84,7 +84,7 @@ export function removePinArraySlot(diagramId: string, inputName: string, index: 
   const handle = handleId ? gd.handlesRegistry.get(handleId) : undefined
   if (!handle?.Data) return
   const ownerType = String(handle.Data.$type ?? owner.type)
-  const nested = getProjectionDef(ownerType)?.extraPins?.find((p: { name: string }) => p.name === inputName)
+  const nested = getExtraPinByName(ownerType, inputName)
   const undoKey = nested?.path[0] ?? inputName
   const before = cloneHandleFieldValue(handle.Data[undoKey])
   if (!handleId) return
@@ -100,7 +100,7 @@ export function getPinInputArray(
   ownerType: string,
   inputName: string
 ): unknown[] | null {
-  const nested = getProjectionDef(ownerType)?.extraPins?.find((p: { name: string }) => p.name === inputName)
+  const nested = getExtraPinByName(ownerType, inputName)
   if (nested) {
     let cur: unknown = handle.Data
     for (const key of nested.path) {
@@ -164,7 +164,7 @@ export function reorderPinArraySlot(
   const arr = getPinInputArray(handle, ownerType, inputName)
   if (!arr || other >= arr.length) return
 
-  const nested = getProjectionDef(ownerType)?.extraPins?.find((p: { name: string }) => p.name === inputName)
+  const nested = getExtraPinByName(ownerType, inputName)
   const undoKey = nested?.path[0] ?? inputName
   const before = cloneHandleFieldValue(handle.Data[undoKey])
 

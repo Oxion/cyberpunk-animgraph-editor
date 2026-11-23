@@ -1,3 +1,9 @@
+/**
+ * Projection resolve — canvas roles, extraPins, wrap, NodeInputHandler adapters.
+ * AnimNodes has no pin concept; pin/extraPins live here.
+ * Handler writes should go through animgraphMutation (setPinSlot / clearHandleRef).
+ */
+
 import {
   getAnimTypeFields,
   isLinkFieldType,
@@ -7,10 +13,16 @@ import {
   inferLinkFieldNames,
 } from '../animTypes'
 import type { AnimFieldDef, AnimFieldType } from '../animTypes'
-import { DefaultNodeInputsHandler } from '../extractors/DefaultNodeInputsHandler'
 import type { NodeInputHandler } from '../animNodes/handlers'
+import type { AnimgraphMutationCtx } from '../graph/animgraphMutation'
+import {
+  clearHandleRef,
+  countPinSlots,
+  getPinSlot,
+  setPinSlot,
+} from '../graph/animgraphMutation'
+import { resolvePinStorage } from '../graph/animgraphMutation/pinStorage'
 import { PROJECTION_DEFINITIONS } from './definitions'
-import { nestedLinkArrayHandler, nestedLinkScalarHandler } from './nestedLinkHandler'
 import type { FieldRole, NestedPinSpec, ProjectionDef } from './types'
 
 export { isLinkFieldType }
@@ -32,11 +44,20 @@ export function inferFieldRole(type: AnimFieldType): FieldRole | null {
   return null
 }
 
-export function getFieldRole(animFieldDef: AnimFieldDef, projectionDef?: ProjectionDef): FieldRole | null {
+export function getFieldRole(
+  animFieldDef: AnimFieldDef,
+  projectionDef?: ProjectionDef | null
+): FieldRole | null {
   const override = projectionDef?.fields?.[animFieldDef.key]
   if (override) return override
-
   return inferFieldRole(animFieldDef.type)
+}
+
+export function getFieldRoleForType(
+  ownerType: string,
+  animFieldDef: AnimFieldDef
+): FieldRole | null {
+  return getFieldRole(animFieldDef, getProjectionDef(ownerType))
 }
 
 /** Diagram-native wrapper type for this $type, if any. */
@@ -79,25 +100,64 @@ export function getProjectedContainFieldNames(typeName: string): string[] {
   return getProjectedFieldNames(typeName, 'contain')
 }
 
-function extraPinByName(typeName: string, pinName: string): NestedPinSpec | undefined {
-  return getProjectionDef(typeName)?.extraPins?.find((p) => p.name === pinName)
+export function listExtraPins(typeName: string): readonly NestedPinSpec[] {
+  return getProjectionDef(typeName)?.extraPins ?? []
 }
 
+export function getExtraPinByName(
+  typeName: string,
+  pinName: string
+): NestedPinSpec | undefined {
+  return listExtraPins(typeName).find((p) => p.name === pinName)
+}
+
+/**
+ * Read-oriented pin adapter (get/count). Prefer bindProjectedInputHandler for writes.
+ */
 export function getProjectedInputHandler(
   typeName: string,
   pinName: string
 ): NodeInputHandler {
-  const nested = extraPinByName(typeName, pinName)
-  if (nested) {
-    return nested.elementType
-      ? nestedLinkArrayHandler(nested)
-      : nestedLinkScalarHandler(nested)
+  const storage = resolvePinStorage(typeName, pinName)
+  if (!storage) {
+    return {
+      count: () => 0,
+      get: () => null,
+      set: () => {},
+      delete: () => {},
+    }
   }
   return {
-    count: (node) => DefaultNodeInputsHandler.count(pinName, node),
-    get: (node, index) => DefaultNodeInputsHandler.get(pinName, node, index),
-    set: (node, data, index) =>
-      DefaultNodeInputsHandler.set(pinName, node, data, index),
-    delete: (node, index) => DefaultNodeInputsHandler.delete(pinName, node, index),
+    count: (node) => storage.count(node),
+    get: (node, index) => storage.get(node, index),
+    set: (node, data, index) => storage.set(node, data, index),
+    delete: (node, index) => storage.delete(node, index),
+    clearLink: storage.clearLink
+      ? (node, index) => storage.clearLink!(node, index)
+      : undefined,
   }
 }
+
+/** Projection pin adapter bound to animgraphMutation ctx — writes go through crud. */
+export function bindProjectedInputHandler(
+  typeName: string,
+  pinName: string,
+  ctx: AnimgraphMutationCtx
+): NodeInputHandler {
+  return {
+    count: (node) => countPinSlots(ctx, node.HandleId, pinName),
+    get: (node, index) => getPinSlot(ctx, node.HandleId, pinName, index ?? 0),
+    set: (node, data, index) => {
+      setPinSlot(ctx, node.HandleId, pinName, index ?? 0, data)
+    },
+    delete: (node, index) => {
+      clearHandleRef(ctx, node.HandleId, pinName, index ?? 0)
+    },
+    clearLink: (node, index) => {
+      const result = clearHandleRef(ctx, node.HandleId, pinName, index ?? 0)
+      return result.linkCleared
+    },
+  }
+}
+
+export type { NestedPinSpec }

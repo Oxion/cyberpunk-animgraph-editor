@@ -16,9 +16,9 @@ export type NestedPinSpec = {
 export type ProjectionAppearance = 'node' | 'aux' | 'embedded' | 'wrapper'
 
 /**
- * How a parent field appears on the canvas.
- * pin — socket / wire (pin-DAG nests into the owner's contain PG; wrap reparents those inputs)
- * contain — PropertyGroup of owned handles / inline values
+ * How a parent field appears on the canvas / wire surface.
+ * pin — socket / wire
+ * contain — PropertyGroup of owned handles
  * embed — no box, inspector payload
  * hide — skip on the diagram
  */
@@ -34,14 +34,13 @@ export type ProjectionDef = {
   /**
    * How this $type appears on the canvas.
    * node — diagram box + nodesToInit (default)
-   * aux — diagram box, not an engine AnimNode (conditions, sync, interpolators)
+   * aux — diagram box, not an engine AnimNode
    * embedded — registry payload only, no diagram box
    * wrapper — unused for engine types; diagram-native wrap lives in `wrap`
    */
   appearance?: ProjectionAppearance
   /**
    * Diagram-native wrapper around this $type's box.
-   * Contain assignment is unchanged; pin inputs of this node are reparented into the wrapper.
    */
   wrap?: string
 }

@@ -25,6 +25,7 @@ import {
   getFieldRole,
   getProjectedContainFieldNames,
   getProjectedFieldNames,
+  getProjectedInputHandler,
   getProjectionDef,
   getProjectedWrap,
   inferFieldRole,
@@ -136,7 +137,7 @@ function pinInputValues(node: AnimgraphNode): unknown[] {
   const values: unknown[] = []
   const typeName = node.Data.$type
   for (const inputName of NodeDefinitionRegistry.getInputFields(typeName)) {
-    const inputHandler = NodeDefinitionRegistry.getNodeInputHandler(typeName, inputName)
+    const inputHandler = getProjectedInputHandler(typeName, inputName)
     const count = inputHandler.count(node)
     for (let i = 0; i < count; i++) {
       const value = inputHandler.get(node, i)
@@ -333,7 +334,7 @@ function collectPinConnections(
     if (!handle) continue
 
     for (const inputName of NodeDefinitionRegistry.getInputFields(handle.Data.$type)) {
-      const inputHandler = NodeDefinitionRegistry.getNodeInputHandler(handle.Data.$type, inputName)
+      const inputHandler = getProjectedInputHandler(handle.Data.$type, inputName)
       const count = inputHandler.count(handle)
       for (let i = 0; i < count; i++) {
         const handleLike = inputHandler.get(handle, i)

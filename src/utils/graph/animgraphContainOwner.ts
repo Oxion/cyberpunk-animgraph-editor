@@ -1,53 +1,25 @@
 /**
- * Diagram bridge: find contain owner for a member via PropertyGroup ancestry,
- * then call animgraph add/removeHandleRefs for membership fields (e.g. State.nodes).
+ * Diagram reverse-index for contain membership: PropertyGroup ancestry → owner/slot.
+ * Animgraph writes: promote/demoteContainMembership via ctx.resolveContainOwner.
  */
 
-import {
-  ANIM_NODE_TYPE_ROOT,
-  ANIM_NODE_TYPE_STATE,
-  ANIM_NODE_TYPE_STATE_FROZEN,
-} from './animNodeTypes'
 import type { AnimgraphNode } from './animgraphTypes'
 import type { RenderData, RenderNode } from './diagramTypes'
-import { addHandleRefs, removeHandleRefs } from './animgraphMutation'
+import {
+  countInboundHandleRefs,
+  demoteContainMembership,
+  hasMembershipSlot,
+} from './animgraphMutation'
 import { mutationCtxFromRenderData } from './diagramMutationCtx'
 import {
   getPropertyGroupSlotName,
   isPropertyGroupNode,
 } from './diagramAddPolicy'
-import { ensureFloatingHandleIds, promoteFloatingHandle } from './floatingHandles'
+import { ensureFloatingHandleIds } from './floatingHandles'
 
-/** Diagram membership slots that sync via add/removeHandleRefs (not projection roles). */
-const MEMBERSHIP_SLOT_REGS: readonly {
-  slot: string
-  parentTypes: readonly string[]
-}[] = [
-  {
-    slot: 'nodes',
-    parentTypes: [
-      ANIM_NODE_TYPE_STATE,
-      ANIM_NODE_TYPE_STATE_FROZEN,
-      ANIM_NODE_TYPE_ROOT,
-    ],
-  },
-]
+export { hasMembershipSlot }
 
-export function hasMembershipSlot(parentType: string, slotName: string): boolean {
-  return MEMBERSHIP_SLOT_REGS.some(
-    (r) => r.slot === slotName && r.parentTypes.includes(parentType)
-  )
-}
-
-/** @deprecated Use hasMembershipSlot */
-export function hasContainMemberLifecycle(
-  parentType: string,
-  slotName: string
-): boolean {
-  return hasMembershipSlot(parentType, slotName)
-}
-
-export type ContainOwnerRef = {
+export type DiagramContainOwnerRef = {
   ownerHandle: AnimgraphNode
   ownerHandleId: string
   /** Diagram box for the owner (State / Root / …) — for overview refresh. */
@@ -55,6 +27,9 @@ export type ContainOwnerRef = {
   slotName: string
   parentType: string
 }
+
+/** @deprecated Prefer DiagramContainOwnerRef */
+export type ContainOwnerRef = DiagramContainOwnerRef
 
 export function findDiagramBoxForHandle(
   renderData: RenderData,
@@ -76,7 +51,7 @@ export function findDiagramBoxForHandle(
 export function resolveContainOwnerForMember(
   renderData: RenderData,
   memberHandleId: string
-): ContainOwnerRef | null {
+): DiagramContainOwnerRef | null {
   const box = findDiagramBoxForHandle(renderData, memberHandleId)
   if (!box) return null
 
@@ -110,43 +85,30 @@ export function resolveContainOwnerForMember(
 }
 
 /**
- * Diagram → resolve owner → addHandleRefs.
- * @returns owner diagram id for overview refresh.
- */
-export function runContainMemberPromote(
-  renderData: RenderData,
-  memberHandleId: string
-): string | null {
-  const owner = resolveContainOwnerForMember(renderData, memberHandleId)
-  if (!owner) return null
-  addHandleRefs(
-    mutationCtxFromRenderData(renderData),
-    owner.ownerHandleId,
-    owner.slotName,
-    [memberHandleId]
-  )
-  promoteFloatingHandle(renderData, memberHandleId)
-  return owner.ownerDiagramId
-}
-
-/**
- * Diagram → resolve owner → removeHandleRefs.
- * @returns owner diagram id + orphaned handle ids (unattached after remove).
+ * Diagram bridge → demoteContainMembership; mark orphaned as floating.
+ * Prefer clearHandleRef path (owns demote); this remains for explicit callers.
  */
 export function runContainMemberDemote(
   renderData: RenderData,
   memberHandleId: string
 ): { ownerDiagramId: string | null; removed: string[]; orphaned: string[] } {
-  const owner = resolveContainOwnerForMember(renderData, memberHandleId)
-  if (!owner) return { ownerDiagramId: null, removed: [], orphaned: [] }
-  const { removed, orphaned } = removeHandleRefs(
-    mutationCtxFromRenderData(renderData),
-    owner.ownerHandleId,
-    owner.slotName,
-    [memberHandleId]
-  )
-  for (const id of orphaned) {
-    ensureFloatingHandleIds(renderData).add(id)
+  const before = resolveContainOwnerForMember(renderData, memberHandleId)
+  const ctx = mutationCtxFromRenderData(renderData)
+  const ownerHandleId = demoteContainMembership(ctx, memberHandleId)
+  if (!ownerHandleId || !before) {
+    return { ownerDiagramId: null, removed: [], orphaned: [] }
   }
-  return { ownerDiagramId: owner.ownerDiagramId, removed, orphaned }
+  const orphaned: string[] = []
+  if (
+    renderData.handlesRegistry.has(memberHandleId) &&
+    countInboundHandleRefs(ctx, memberHandleId) === 0
+  ) {
+    ensureFloatingHandleIds(renderData).add(memberHandleId)
+    orphaned.push(memberHandleId)
+  }
+  return {
+    ownerDiagramId: before.ownerDiagramId,
+    removed: [memberHandleId],
+    orphaned,
+  }
 }

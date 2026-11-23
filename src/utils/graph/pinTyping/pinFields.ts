@@ -16,6 +16,7 @@ import {
   getFieldRole,
   getProjectionDef,
   inferFieldRole,
+  listExtraPins as listProjectionExtraPins,
   type NestedPinSpec,
 } from '../../projection'
 
@@ -65,5 +66,5 @@ export function listPinFields(
 }
 
 export function listExtraPins(ownerType: string): readonly NestedPinSpec[] {
-  return getProjectionDef(ownerType)?.extraPins ?? []
+  return listProjectionExtraPins(ownerType)
 }

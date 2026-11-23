@@ -1,7 +1,20 @@
-import type { AnimgraphNode, AnimgraphNodeLike } from '../graph/animgraphTypes'
-import type { NodeInputHandler } from '../animNodes/handlers'
-import { generateDataTemplate } from '../animFieldSchema'
-import type { NestedPinSpec } from './types'
+/**
+ * Animgraph pin storage — raw Data addressing for top-level and nested pins.
+ * Public writes go through setPinSlot / clearHandleRef (gates + effects).
+ */
+
+import { generateDataTemplate } from '../../animFieldSchema'
+import { isAnimgraphLinkObject } from '../../extractors/NodeReferenceUtils'
+import { PROJECTION_DEFINITIONS } from '../../projection/definitions'
+import type { NestedPinSpec } from '../../projection/types'
+import type { AnimgraphNode, AnimgraphNodeLike } from '../animgraphTypes'
+
+function getExtraPinByName(
+  ownerType: string,
+  pinName: string
+): NestedPinSpec | undefined {
+  return PROJECTION_DEFINITIONS[ownerType]?.extraPins?.find((p) => p.name === pinName)
+}
 
 function getAtPath(root: Record<string, unknown>, path: readonly string[]): unknown {
   let cur: unknown = root
@@ -60,20 +73,85 @@ function ensureScalarLinkAtPath(
   return link as Record<string, unknown>
 }
 
-export function nestedLinkArrayHandler(spec: NestedPinSpec): NodeInputHandler {
+export type PinStorageOps = {
+  count: (node: AnimgraphNode) => number
+  get: (node: AnimgraphNode, index?: number) => unknown
+  set: (node: AnimgraphNode, data: unknown, index?: number) => void
+  delete: (node: AnimgraphNode, index?: number) => void
+  clearLink?: (node: AnimgraphNode, index?: number) => boolean
+}
+
+function topLevelOps(pinName: string): PinStorageOps {
+  return {
+    count(node) {
+      const value = node.Data[pinName]
+      return Array.isArray(value) ? value.length : 1
+    },
+    get(node, index) {
+      const inputValue = node.Data[pinName]
+      const value = Array.isArray(inputValue)
+        ? inputValue[index ?? 0]
+        : inputValue
+      if (isAnimgraphLinkObject(value)) {
+        return value.node
+      }
+      return value
+    },
+    set(node, data, index) {
+      const inputValue = node.Data[pinName]
+      if (Array.isArray(inputValue)) {
+        const idx = index ?? 0
+        const slot = inputValue[idx]
+        if (slot != null && isAnimgraphLinkObject(slot)) {
+          slot.node = data as AnimgraphNodeLike | null
+        } else {
+          inputValue[idx] = data
+        }
+        return
+      }
+      if (inputValue == null) {
+        if (index != null && index >= 0) {
+          const arr: unknown[] = []
+          arr[index] = data
+          node.Data[pinName] = arr
+          return
+        }
+        if (data != null) {
+          node.Data[pinName] = data
+        }
+        return
+      }
+      if (isAnimgraphLinkObject(inputValue)) {
+        inputValue.node = data as AnimgraphNodeLike | null
+      } else {
+        node.Data[pinName] = data
+      }
+    },
+    delete(node, index) {
+      const inputValue = node.Data[pinName]
+      if (Array.isArray(inputValue)) {
+        if (index !== undefined && index >= 0 && index < inputValue.length) {
+          inputValue.splice(index, 1)
+        }
+      } else {
+        this.set(node, null, index)
+      }
+    },
+  }
+}
+
+function nestedArrayOps(spec: NestedPinSpec): PinStorageOps {
   const linkKey = spec.linkKey ?? 'link'
   const elementType = spec.elementType
   if (!elementType) {
-    throw new Error(`nestedLinkArrayHandler requires elementType for pin "${spec.name}"`)
+    throw new Error(`nested pin "${spec.name}" requires elementType`)
   }
-
   return {
-    count(node: AnimgraphNode): number {
+    count(node) {
       const arr = getAtPath(node.Data as Record<string, unknown>, spec.path)
       return Array.isArray(arr) ? arr.length : 0
     },
-
-    get(node: AnimgraphNode, index?: number): AnimgraphNodeLike | null {
+    get(node, index) {
       if (index === undefined) throw new Error('Index is required')
       const arr = getAtPath(node.Data as Record<string, unknown>, spec.path)
       if (!Array.isArray(arr)) return null
@@ -85,8 +163,7 @@ export function nestedLinkArrayHandler(spec: NestedPinSpec): NodeInputHandler {
       }
       return null
     },
-
-    set(node: AnimgraphNode, data: AnimgraphNodeLike, index?: number): void {
+    set(node, data, index) {
       if (index === undefined) throw new Error('Index is required')
       const arr = ensureArrayAtPath(node.Data as Record<string, unknown>, spec)
       let el = arr[index] as Record<string, unknown> | undefined
@@ -97,21 +174,21 @@ export function nestedLinkArrayHandler(spec: NestedPinSpec): NodeInputHandler {
       }
       let link = el[linkKey] as Record<string, unknown> | undefined
       if (!link || typeof link !== 'object') {
-        link = spec.linkType ? { $type: spec.linkType, node: data } : { node: data }
+        link = spec.linkType
+          ? { $type: spec.linkType, node: data }
+          : { node: data }
         el[linkKey] = link
       } else {
         link.node = data
       }
     },
-
-    delete(node: AnimgraphNode, index?: number): void {
+    delete(node, index) {
       if (index === undefined) throw new Error('Index is required')
       const arr = getAtPath(node.Data as Record<string, unknown>, spec.path)
       if (!Array.isArray(arr)) return
       if (index >= 0 && index < arr.length) arr.splice(index, 1)
     },
-
-    clearLink(node: AnimgraphNode, index?: number): boolean {
+    clearLink(node, index) {
       if (index === undefined) throw new Error('Index is required')
       const arr = getAtPath(node.Data as Record<string, unknown>, spec.path)
       if (!Array.isArray(arr)) return false
@@ -126,34 +203,29 @@ export function nestedLinkArrayHandler(spec: NestedPinSpec): NodeInputHandler {
   }
 }
 
-/** Scalar nested link at `path` (e.g. Data.particlesContainer.externalForceWsLink.node). */
-export function nestedLinkScalarHandler(spec: NestedPinSpec): NodeInputHandler {
+function nestedScalarOps(spec: NestedPinSpec): PinStorageOps {
   return {
-    count(_node: AnimgraphNode): number {
+    count() {
       return 1
     },
-
-    get(node: AnimgraphNode, _index?: number): AnimgraphNodeLike | null {
+    get(node) {
       const link = getAtPath(node.Data as Record<string, unknown>, spec.path)
       if (link && typeof link === 'object' && 'node' in link) {
         return (link as { node: AnimgraphNodeLike | null }).node
       }
       return null
     },
-
-    set(node: AnimgraphNode, data: AnimgraphNodeLike, _index?: number): void {
+    set(node, data) {
       const link = ensureScalarLinkAtPath(node.Data as Record<string, unknown>, spec)
       link.node = data
     },
-
-    delete(node: AnimgraphNode, _index?: number): void {
+    delete(node) {
       const link = getAtPath(node.Data as Record<string, unknown>, spec.path)
       if (link && typeof link === 'object' && 'node' in link) {
         ;(link as { node: unknown }).node = null
       }
     },
-
-    clearLink(node: AnimgraphNode, _index?: number): boolean {
+    clearLink(node) {
       const link = getAtPath(node.Data as Record<string, unknown>, spec.path)
       if (!link || typeof link !== 'object' || !('node' in link)) return false
       if ((link as { node: unknown }).node == null) return false
@@ -161,4 +233,17 @@ export function nestedLinkScalarHandler(spec: NestedPinSpec): NodeInputHandler {
       return true
     },
   }
+}
+
+/** Resolve storage ops for a pin name on ownerType (top-level or nested extraPin). */
+export function resolvePinStorage(
+  ownerType: string,
+  pinName: string
+): PinStorageOps | null {
+  if (!ownerType || !pinName) return null
+  const nested = getExtraPinByName(ownerType, pinName)
+  if (nested) {
+    return nested.elementType ? nestedArrayOps(nested) : nestedScalarOps(nested)
+  }
+  return topLevelOps(pinName)
 }

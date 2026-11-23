@@ -1,10 +1,18 @@
-export type { AnimgraphMutationCtx } from './ctx'
+export type { AnimgraphMutationCtx, ContainOwnerRef } from './ctx'
+
+export { hasMembershipSlot } from './containPromote'
+export { resolvePinStorage } from './pinStorage'
+export type { PinStorageOps } from './pinStorage'
 
 export {
   createHandle,
   deleteHandles,
+  addContainRefs,
+  removeContainRefs,
   addHandleRefs,
   removeHandleRefs,
+  promoteContainMembership,
+  demoteContainMembership,
   setHandleRef,
   clearHandleRef,
   setRootNode,
@@ -30,6 +38,7 @@ export {
 
 export {
   countInboundHandleRefs,
+  countInboundPinHandleRefs,
   handleRefIdOf,
   stripInboundHandleRefs,
 } from './refWalk'

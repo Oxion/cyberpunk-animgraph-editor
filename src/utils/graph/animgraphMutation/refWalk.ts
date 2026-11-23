@@ -118,6 +118,40 @@ export function countInboundHandleRefs(
   return count
 }
 
+/** Visit HandleRef ids under pin/input fields only (not contain/child). */
+export function walkHandlePinRefs(
+  handle: AnimgraphNode,
+  visit: (id: string) => void
+): void {
+  if (!handle.Data) return
+  const typeName = String(handle.Data.$type ?? '')
+  if (!typeName) return
+  walkHandleFieldRefs(
+    handle,
+    NodeDefinitionRegistry.getInputFields(typeName),
+    visit
+  )
+}
+
+/**
+ * Count pin/input HandleRefs pointing at target.
+ * Does not count contain/child fields or document rootNode.
+ */
+export function countInboundPinHandleRefs(
+  ctx: AnimgraphMutationCtx,
+  targetId: string
+): number {
+  let count = 0
+  const visit = (id: string) => {
+    if (id === targetId) count++
+  }
+  for (const [ownerId, handle] of ctx.handlesRegistry) {
+    if (ownerId === targetId) continue
+    walkHandlePinRefs(handle, visit)
+  }
+  return count
+}
+
 export type StripInboundFieldChange = {
   ownerId: string
   field: string
