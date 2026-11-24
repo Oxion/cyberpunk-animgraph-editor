@@ -591,6 +591,7 @@ export class PixiGraphRenderer {
   } | null = null
 
   
+  private _initialPresentSub?: WatcherSub
   private _updateWorldRenderEffectSub?: WatcherSub
   private _updateDebugOverlayRenderEffectSub?: WatcherSub
   private _viewportStateWatcherSub?: WatcherSub
@@ -2762,7 +2763,7 @@ export class PixiGraphRenderer {
     if (rect.width < 1 || rect.height < 1) return
 
     const padding = options.padding ?? 20
-    const availW = Math.max(1, this._viewportWidthRef.value - padding * 2)
+    const availW = Math.max(1, this._viewportWidthRef.value - padding * 2 - (options.rightInset ?? 0))
     const availH = Math.max(1, this._viewportHeightRef.value - padding * 2)
     const fit = options.fit ?? 'contain'
     const align = options.align ?? 'center'
@@ -2783,7 +2784,8 @@ export class PixiGraphRenderer {
       this._camera.setPanX(this._viewportWidthRef.value - trailing - (rect.x + rect.width) * nextZoom)
       this._camera.setPanY(padding - rect.y * nextZoom)
     } else {
-      this._camera.setPanX(this._viewportWidthRef.value / 2 - (rect.x + rect.width / 2) * nextZoom)
+      const trailing = options.rightInset ?? padding
+      this._camera.setPanX((this._viewportWidthRef.value - trailing) / 2 - (rect.x + rect.width / 2) * nextZoom)
       this._camera.setPanY(this._viewportHeightRef.value / 2 - (rect.y + rect.height / 2) * nextZoom)
     }
     this._camera.setZoom(nextZoom)
@@ -2978,6 +2980,19 @@ export class PixiGraphRenderer {
     return true
   }
 
+  public presentDiagramNodeWithId(
+    nodeId: string,
+    options: PresentWorldRectOptions = {}
+  ): boolean {
+    if (!this.ready) return false
+
+    const rect = this.resolveDiagramNodeWithIdWorldRect(nodeId)
+    if (!rect) return false
+
+    this._applyPresentWorldRect(rect, options)
+    return true
+  }
+
   /**
    * Frame a world-space rect in the viewport (lens stage / layout world coords).
    * Used by view present-ops (e.g. focus one State-links column).
@@ -3016,14 +3031,10 @@ export class PixiGraphRenderer {
     let maxX = -Infinity
     let maxY = -Infinity
     for (const viewRootDiagramNode of this._resolveViewRootDiagramNodes()) {
-      const pixiDiagramNode = this._diagramNodeIdToPixiDiagramRendererNodeMap.get(viewRootDiagramNode.id)
-      if (!pixiDiagramNode) continue
-
-      const viewRootDiagramNodePixiContainerBounds = pixiDiagramNode.pixiContainer.getBounds()
-      minX = Math.min(minX, viewRootDiagramNodePixiContainerBounds.x)
-      minY = Math.min(minY, viewRootDiagramNodePixiContainerBounds.y)
-      maxX = Math.max(maxX, viewRootDiagramNodePixiContainerBounds.x + viewRootDiagramNodePixiContainerBounds.width)
-      maxY = Math.max(maxY, viewRootDiagramNodePixiContainerBounds.y + viewRootDiagramNodePixiContainerBounds.height)
+      minX = Math.min(minX, viewRootDiagramNode.position.x)
+      minY = Math.min(minY, viewRootDiagramNode.position.y)
+      maxX = Math.max(maxX, viewRootDiagramNode.position.x + viewRootDiagramNode.size.width)
+      maxY = Math.max(maxY, viewRootDiagramNode.position.y + viewRootDiagramNode.size.height)
     }
 
     if (Number.isFinite(minX) && maxX > minX && maxY > minY) {
@@ -3091,17 +3102,29 @@ export class PixiGraphRenderer {
 
       this._render()
 
-      if (this.initialPresent) {
-        this._applyPresentWorldRect(this.initialPresent.rect, this.initialPresent.options ?? {})
-      } else if (this.initialPresentNodeId) {
-        const rect = this.resolveDiagramNodeWithIdWorldRect(this.initialPresentNodeId)
-        if (rect) this._applyPresentWorldRect(rect, this.initialPresentOptions ?? {})
-      } else if (!this.skipInitialFit) {
-        this._applyFitViewToScope()
-      }
-
       this._setupEventHandlers()
       this._setupResizeObserver()
+
+      this._initialPresentSub = watcher(
+        [this._viewportWidthRef, this._viewportHeightRef],
+        (viewportWidth, viewportHeight) => {
+          // container is not displayed yet
+          if (this.container.clientWidth <= 0) return
+          if (viewportWidth <= 0 || viewportHeight <= 0) return
+
+          if (this.initialPresent) {
+            this._applyPresentWorldRect(this.initialPresent.rect, this.initialPresent.options ?? {})
+          } else if (this.initialPresentNodeId) {
+            const rect = this.resolveDiagramNodeWithIdWorldRect(this.initialPresentNodeId)
+            if (rect) this._applyPresentWorldRect(rect, this.initialPresentOptions ?? {})
+          } else if (!this.skipInitialFit) {
+            this._applyFitViewToScope()
+          }
+          this._initialPresentSub?.remove()
+          this._initialPresentSub = undefined
+        },
+        true
+      )
 
       this._viewportStateWatcherSub = watcher(
         [this._viewportWidthRef, this._viewportHeightRef, this._camera.revRef],
@@ -3245,6 +3268,8 @@ export class PixiGraphRenderer {
   public destroy(): void {
     this._destroyed = true
 
+    this._initialPresentSub?.remove()
+    this._initialPresentSub = undefined
     this._updateDebugOverlayRenderEffectSub?.remove()
     this._updateDebugOverlayRenderEffectSub = undefined
     this._updateWorldRenderEffectSub?.remove()

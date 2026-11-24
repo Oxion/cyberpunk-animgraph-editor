@@ -13,9 +13,8 @@ import PixiDiagramViewContent, {
 import type { DiagramConnection, RenderData } from '../utils/graph/diagramTypes'
 import type { CameraPresentOp } from '../types/WindowPresent'
 import {
-  applyCameraPresentOp,
   cameraOpToRectOptions,
-  resolvePresentNodeId,
+  resolveOpPresentNodeId,
 } from '../utils/windows/presentOps'
 import type { PixiGraphRenderer } from '../utils/PixiGraphRenderer'
 
@@ -56,10 +55,11 @@ const hostRef = ref<IPixiDiagramViewContentExposeRef | null>(null)
 
 const skipFit = computed(() => Boolean(props.presentOp && props.presentOp.id !== 'fit-scope'))
 
-const focusNodeId = computed(() => {
+const initialPresentNodeId = computed(() => {
   const op = props.presentOp
-  if (!op || op.id === 'fit-scope') return undefined
-  return resolvePresentNodeId(op, {
+  if (!op) return undefined
+  
+  return resolveOpPresentNodeId(op, {
     graphData: props.graphData,
     scopeRootId: props.rootNodeId,
   })
@@ -67,21 +67,16 @@ const focusNodeId = computed(() => {
 
 const initialPresentOptions = computed(() => {
   const op = props.presentOp
-  if (!op || op.id === 'fit-scope') return undefined
+  if (!op) return undefined
   return cameraOpToRectOptions(op, { rightInset: props.rightInset })
 })
 
 const presentDefaultFn = (renderer: PixiGraphRenderer) => {
-  const op = props.presentOp
-  if (!op || op.id === 'fit-scope') {
+  if (!initialPresentNodeId.value) {
     renderer.fitViewToScope()
     return
   }
-  applyCameraPresentOp(renderer, op, {
-    graphData: props.graphData,
-    scopeRootId: props.rootNodeId,
-    rightInset: props.rightInset,
-  })
+  renderer.presentDiagramNodeWithId(initialPresentNodeId.value, initialPresentOptions.value)
 }
 
 defineExpose({
@@ -104,7 +99,7 @@ defineExpose({
     :scope-root-id="rootNodeId"
     :hide-scope-root="hideScopeRoot"
     :skip-initial-fit="skipFit"
-    :initial-present-node-id="focusNodeId"
+    :initial-present-node-id="initialPresentNodeId"
     :initial-present-options="initialPresentOptions"
     :present-default-fn="presentDefaultFn"
     :remount-key="rootNodeId"

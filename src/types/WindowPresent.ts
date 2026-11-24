@@ -3,7 +3,6 @@ export type WindowPlacementPreset = 'left-stretch' | 'left-content' | 'dialog'
 
 export type CameraPresentAlign = 'center' | 'top-start' | 'top-end'
 export type CameraPresentFit = 'contain' | 'width' | 'none'
-export type CameraPresentResolveId = 'sm-states-group'
 
 type CameraFocusFields = {
   align: CameraPresentAlign
@@ -19,7 +18,7 @@ type CameraFocusFields = {
 export type CameraPresentOp =
   | { id: 'fit-scope' }
   | ({ id: 'focus-section'; sectionId: string } & CameraFocusFields)
-  | ({ id: 'focus-resolve'; resolve: CameraPresentResolveId } & CameraFocusFields)
+  | ({ id: 'focus-node'; nodeId: string } & CameraFocusFields)
 
 export type HostPresentOp = { id: 'size-to-content' }
 

@@ -185,7 +185,6 @@ const mountRenderer = async () => {
     if (rendererRef.value === renderer) {
       viewReadyRef.value = true
       applyActiveState()
-      presentDefault()
       emit('ready')
     }
   }

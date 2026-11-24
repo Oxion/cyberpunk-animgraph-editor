@@ -1,10 +1,11 @@
+import type { AppWindowType } from '../../types/AppWindow'
 import type { GraphViewEntry } from '../../types/GraphView'
 import type { CameraPresentOp, WindowPresentOps } from '../../types/WindowPresent'
-import type { AppWindowType } from '../../types/AppWindow'
-import type { RenderData } from '../graph/diagramTypes'
-import { getSmPropertyGroup } from '../graph/StateMachineDetailLayout'
 import { isStateMachineDiagramRoot } from '../graph/DiagramConversion'
-import type { PixiGraphRenderer, PresentWorldRectOptions } from '../PixiGraphRenderer'
+import type { RenderData } from '../graph/diagramTypes'
+import { DEFAULT_CHILD_SLOT } from '../graph/nodeChildSlots'
+import { getSmPropertyGroup } from '../graph/StateMachineDetailLayout'
+import type { PresentWorldRectOptions } from '../PixiGraphRenderer'
 
 const OPS: Record<AppWindowType, WindowPresentOps> = {
   lens: {
@@ -61,34 +62,66 @@ export function getWindowPresentOps(type: AppWindowType): WindowPresentOps {
   return OPS[type]
 }
 
-const SM_CHILDREN_PRESENT: CameraPresentOp = {
-  id: 'focus-resolve',
-  resolve: 'sm-states-group',
-  align: 'top-end',
-  fit: 'none',
-  zoom: 1,
-  minZoom: 1,
-  maxZoom: 1,
-  padding: 16,
-}
-
 /** Body stack / window graph-scope camera policy. Undefined → renderer default (fit-scope). */
 export function getGraphViewPresentOps(
   entry: GraphViewEntry,
-  graphData?: RenderData | null
+  diagramData?: RenderData | null
 ): CameraPresentOp | undefined {
-  if (entry.kind !== 'graph-scope' || !entry.payload.hideScopeRoot || !entry.payload.scopeRootId) {
+  if (entry.kind !== 'graph-scope' || !entry.payload.scopeRootId) {
     return undefined
   }
-  const root = graphData?.allNodes.get(entry.payload.scopeRootId)
-  if (!root || !isStateMachineDiagramRoot(root)) return undefined
-  return SM_CHILDREN_PRESENT
+
+  const scopeRootNode = diagramData?.allNodes.get(entry.payload.scopeRootId)
+  if (!scopeRootNode) return undefined
+
+  if (isStateMachineDiagramRoot(scopeRootNode)) {
+    if (entry.payload.hideScopeRoot && diagramData) {
+      const statesGroupNodeId = getSmPropertyGroup(scopeRootNode, 'states', diagramData.allNodes)?.id
+      if (!statesGroupNodeId) return undefined
+      
+      return {
+        id: 'focus-node',
+        nodeId: statesGroupNodeId,
+        align: 'top-end',
+        fit: 'none',
+        minZoom: 0.05,
+        maxZoom: 1,
+        padding: 16,
+      }
+    }
+  }
+
+  if (entry.payload.hideScopeRoot) {
+    const firstChildNodeId = scopeRootNode.childSlots?.[DEFAULT_CHILD_SLOT]?.[0]?.id
+    if (firstChildNodeId) {
+      return {
+        id: 'focus-node',
+        nodeId: firstChildNodeId,
+        align: 'center',
+        fit: 'contain',
+        minZoom: 0.05,
+        maxZoom: 1,
+        padding: 16,
+      }
+    }
+  }
+
+  return {
+    id: 'focus-node',
+    nodeId: scopeRootNode.id,
+    align: 'center',
+    fit: 'contain',
+    minZoom: 0.05,
+    maxZoom: 1,
+    padding: 16,
+  }
 }
 
 export function cameraOpToRectOptions(
-  op: Exclude<CameraPresentOp, { id: 'fit-scope' }>,
+  op: CameraPresentOp,
   extra: Pick<PresentWorldRectOptions, 'rightInset'> = {}
-): PresentWorldRectOptions {
+): PresentWorldRectOptions | undefined {
+  if (op.id === 'fit-scope') return undefined
   return {
     align: op.align,
     fit: op.fit,
@@ -100,62 +133,18 @@ export function cameraOpToRectOptions(
   }
 }
 
-export function resolvePresentNodeId(
+export function resolveOpPresentNodeId(
   op: CameraPresentOp,
   ctx: { graphData?: RenderData | null; scopeRootId?: string }
 ): string | undefined {
-  if (op.id !== 'focus-resolve' || op.resolve !== 'sm-states-group') return undefined
-  const rootId = ctx.scopeRootId
-  if (!rootId || !ctx.graphData) return undefined
-  const sm = ctx.graphData.allNodes.get(rootId)
-  if (!sm) return undefined
-  return getSmPropertyGroup(sm, 'states', ctx.graphData.allNodes)?.id
-}
-
-export function applyCameraPresentOp(
-  renderer: PixiGraphRenderer,
-  op: CameraPresentOp,
-  ctx: {
-    bounds?: { x: number; y: number; width: number; height: number } | null
-    graphData?: RenderData | null
-    scopeRootId?: string
-    rightInset?: number
-  } = {}
-): void {
-  if (op.id === 'fit-scope') {
-    if (ctx.bounds && ctx.bounds.width > 0 && ctx.bounds.height > 0) {
-      renderer.presentWorldRect(ctx.bounds, {
-        align: 'center',
-        fit: 'contain',
-        padding: 20,
-        minZoom: 0.05,
-        maxZoom: 3,
-      })
-    } else {
-      renderer.fitViewToScope()
-    }
-    return
+  switch (op.id) {
+    case 'fit-scope':
+      return undefined
+    case 'focus-section':
+      return undefined
+    case 'focus-node':
+      return op.nodeId
+    default:
+      return undefined
   }
-  const options = cameraOpToRectOptions(op, { rightInset: ctx.rightInset })
-  if (op.id === 'focus-section') {
-    if (ctx.bounds && ctx.bounds.width > 0 && ctx.bounds.height > 0) {
-      renderer.presentWorldRect(ctx.bounds, {
-        align: 'center',
-        fit: 'contain',
-        padding: 20,
-        minZoom: 0.05,
-        maxZoom: 3,
-      })
-    } else {
-      renderer.fitViewToScope()
-    }
-    return
-  }
-  const nodeId = resolvePresentNodeId(op, ctx)
-  const rect = nodeId ? renderer.resolveDiagramNodeWithIdWorldRect(nodeId) : null
-  if (!rect) {
-    renderer.fitViewToScope()
-    return
-  }
-  renderer.presentWorldRect(rect, options)
 }
